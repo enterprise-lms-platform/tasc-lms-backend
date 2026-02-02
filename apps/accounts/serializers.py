@@ -78,7 +78,7 @@ class UserMeSerializer(serializers.ModelSerializer):
             "is_superuser",
         ]
 
-    def get_name(self, obj):
+    def get_name(self, obj) -> str:
         full = (obj.get_full_name() or "").strip()
         if full:
             return full

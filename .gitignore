@@ -26,3 +26,6 @@ staticfiles/
 node_modules/
 dist/
 build/
+
+venv/
+.venv/

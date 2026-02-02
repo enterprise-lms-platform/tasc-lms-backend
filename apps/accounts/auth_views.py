@@ -1,6 +1,6 @@
 # apps/accounts/auth_views.py
 
-from drf_spectacular.utils import extend_schema, OpenApiExample
+from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParameter
 from django.conf import settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -8,7 +8,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
@@ -197,23 +197,30 @@ class RegisterView(APIView):
         )
 
 
+class VerifyEmailResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
+
+class VerifyEmailErrorSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
 @extend_schema(
     tags=["Accounts"],
     summary="Verify email",
     description="Verify a user's email using the uid and token from the verification link.",
-    examples=[
-        OpenApiExample(
-            "Verified",
-            value={"message": "Email verified successfully."},
-            response_only=True,
-        ),
-        OpenApiExample(
-            "Invalid/Expired",
-            value={"detail": "Verification link expired or invalid."},
-            response_only=True,
-            status_codes=["400"],
-        ),
+    parameters=[
+        OpenApiParameter(name="uidb64", type=str, location=OpenApiParameter.PATH),
+        OpenApiParameter(name="token", type=str, location=OpenApiParameter.PATH),
     ],
+    responses={
+        200: VerifyEmailResponseSerializer,
+        400: VerifyEmailErrorSerializer,
+    },
+    examples=[
+        OpenApiExample("Verified", value={"message": "Email verified successfully."}, response_only=True),
+        OpenApiExample("Invalid/Expired", value={"detail": "Verification link expired or invalid."}, response_only=True),
+    ],
+    
 )
 @api_view(["GET"])
 @permission_classes([AllowAny])
