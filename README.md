@@ -2,15 +2,6 @@
 
 This repository contains the backend for the **TASC Learning Management System (LMS)**, built using **Django**, **Django REST Framework**, and **JWT authentication**. The goal of this backend is to provide a **secure, scalable, and well-documented API** that supports individual learners, organization-based learners, and internal TASC operations.
 
----
-
-## 🎯 Current Status
-
-**Milestone 1 & 2 – Core Infrastructure & Features: ✅ COMPLETE**
-
-The backend is now **100% ready for frontend integration**. All core models, serializers, and API views have been implemented across the four main modules: Accounts, Catalogue, Learning, and Payments.
-
----
 
 ## 🔐 Authentication & User Management
 
@@ -55,7 +46,7 @@ The project is organized into modular apps to ensure clear separation of concern
 
 ---
 
-## 📚 Feature Highlights
+## 📚 Feature Highlights(Team refinement required)
 
 ### 1. Course Catalogue
 - **Hierarchical Categories**: Organize courses into parent and child categories.
