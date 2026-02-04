@@ -2,6 +2,7 @@
 
 This repository contains the backend for the **TASC Learning Management System (LMS)**, built using **Django**, **Django REST Framework**, and **JWT authentication**. The goal of this backend is to provide a **secure, scalable, and well-documented API** that supports individual learners, organization-based learners, and internal TASC operations.
 
+Added Google OAuth and Swagger Documentation see below.
 
 ## 🔐 Authentication & User Management
 
