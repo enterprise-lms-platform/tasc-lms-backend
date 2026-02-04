@@ -10,6 +10,7 @@ from .auth_views import (
     password_reset_confirm,
     resend_verification_email,
     change_password,
+    logout,
 )
 
 urlpatterns = [
@@ -26,4 +27,5 @@ urlpatterns = [
     ),
     path("resend-verification/", resend_verification_email, name="resend-verification"),
     path("change-password/", change_password, name="change-password"),
+    path("logout/", logout, name="logout"),
 ]

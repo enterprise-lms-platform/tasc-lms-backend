@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .serializers import (
     RegisterSerializer,
@@ -29,6 +30,7 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
+    LogoutSerializer
 )
 
 from .tokens import email_verification_token
@@ -522,3 +524,39 @@ def change_password(request):
     return Response(
         {"detail": "Password updated successfully."}, status=status.HTTP_200_OK
     )
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Logout (blacklist refresh token)",
+    description=(
+        "Logs out the current user by blacklisting the provided refresh token.\n\n"
+        "After this, the refresh token can no longer be used to get new access tokens."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "refresh": {"type": "string", "example": "your.refresh.token.here"}
+            },
+            "required": ["refresh"],
+        }
+    },
+    responses={
+        200: {"type": "object", "properties": {"detail": {"type": "string", "example": "Logged out successfully."}}},
+        400: {"description": "Invalid refresh token"},
+        401: {"description": "Unauthorized"},
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def logout(request):
+    serializer = LogoutSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    try:
+        token = RefreshToken(serializer.validated_data["refresh"])
+        token.blacklist()
+    except Exception:
+        return Response({"refresh": ["Invalid or expired refresh token."]}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({"detail": "Logged out successfully."}, status=status.HTTP_200_OK)

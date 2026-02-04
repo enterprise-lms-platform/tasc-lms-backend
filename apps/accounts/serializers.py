@@ -226,3 +226,7 @@ class ChangePasswordSerializer(serializers.Serializer):
         validate_password(attrs["new_password"])
 
         return attrs
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
