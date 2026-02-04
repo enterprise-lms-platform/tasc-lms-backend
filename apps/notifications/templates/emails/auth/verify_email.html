@@ -1,0 +1,29 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+  <h2 style="margin:0 0 12px;color:#111;">Verify your email</h2>
+  <p style="margin:0 0 16px;color:#333;line-height:1.7;">
+    Hi {{ user.first_name|default:"there" }},<br>
+    Please verify your email to activate your TASC LMS account.
+  </p>
+
+  <a href="{{ verify_url }}"
+   style="
+     display:inline-block;
+     background:#ff8a1f;
+     color:#ffffff;
+     text-decoration:none;
+     padding:12px 16px;
+     border-radius:12px;
+     font-weight:800;
+     box-shadow:0 10px 18px rgba(255, 138, 31, 0.25);
+   ">
+  Verify Email
+</a>
+
+
+  <p style="margin:16px 0 0;color:#666;font-size:12px;line-height:1.6;">
+    If the button doesn’t work, copy and paste this link into your browser:<br>
+    <span style="word-break:break-all;">{{ verify_url }}</span>
+  </p>
+{% endblock %}

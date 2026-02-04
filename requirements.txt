@@ -62,3 +62,4 @@ Pillow==11.1.0
 requests==2.32.3
 
 cryptography==42.0.8
+sendgrid==6.12.5

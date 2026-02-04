@@ -33,7 +33,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.sites",
-
     # Third-party
     "rest_framework",
     "drf_spectacular",
@@ -45,6 +44,7 @@ INSTALLED_APPS = [
     "apps.catalogue",
     "apps.learning",
     "apps.payments",
+    "apps.notifications",
 ]
 
 # ----------------------------------------
@@ -59,7 +59,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    ]
+]
 
 ROOT_URLCONF = "config.urls"
 
@@ -83,17 +83,6 @@ WSGI_APPLICATION = "config.wsgi.application"
 # ----------------------------------------
 # Database (PostgreSQL)
 # ----------------------------------------
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.postgresql",
-#         "NAME": env("DB_NAME"),
-#         "USER": env("DB_USER"),
-#         "PASSWORD": env("DB_PASSWORD"),
-#         "HOST": env("DB_HOST"),
-#         "PORT": env("DB_PORT"),
-#     }
-# }
-
 
 DB_ENGINE = env("DB_ENGINE", default="django.db.backends.sqlite3")
 
@@ -116,6 +105,18 @@ else:
         }
     }
 
+
+# Email settings
+
+DJANGO_EMAIL_ENABLED = env.bool("DJANGO_EMAIL_ENABLED", default=True)
+
+SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")  # keep empty in dev
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="support@tasclms.com")
+
+EMAIL_SUBJECT_PREFIX = env("EMAIL_SUBJECT_PREFIX", default="[TASC LMS] ")
+DEFAULT_FROM_EMAIL = env(
+    "DEFAULT_FROM_EMAIL", default="TASC LMS <no-reply@tasclms.com>"
+)
 
 
 # ----------------------------------------
@@ -150,7 +151,9 @@ SOCIALACCOUNT_PROVIDERS = {
 # Password validation
 # ----------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
@@ -160,7 +163,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # ----------------------------------------
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+TIME_ZONE = "Africa/Kampala"
 USE_I18N = True
 USE_TZ = True
 
