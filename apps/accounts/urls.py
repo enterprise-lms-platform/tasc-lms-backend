@@ -1,12 +1,16 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import me, verify_email
-from .auth_views import LoginView, RefreshView, RegisterView, verify_email
-from .google_auth_views import (
-    google_oauth_login,
-    google_oauth_link,
-    google_oauth_unlink,
-    google_oauth_status
+from .auth_views import (
+    LoginView,
+    RefreshView,
+    RegisterView,
+    verify_email,
+    password_reset_request,
+    password_reset_confirm,
+    resend_verification_email,
+    change_password,
+    logout,
 )
 
 urlpatterns = [
@@ -15,9 +19,13 @@ urlpatterns = [
     path("login/", LoginView.as_view(), name="token_obtain_pair"),
     path("refresh/", RefreshView.as_view(), name="token_refresh"),
     path("me/", me, name="me"),
-    # Google OAuth endpoints
-    path("google/login/", google_oauth_login, name="google_oauth_login"),
-    path("google/link/", google_oauth_link, name="google_oauth_link"),
-    path("google/unlink/", google_oauth_unlink, name="google_oauth_unlink"),
-    path("google/status/", google_oauth_status, name="google_oauth_status"),
+    path("password-reset/", password_reset_request, name="password-reset"),
+    path(
+        "password-reset-confirm/<uidb64>/<token>/",
+        password_reset_confirm,
+        name="password-reset-confirm",
+    ),
+    path("resend-verification/", resend_verification_email, name="resend-verification"),
+    path("change-password/", change_password, name="change-password"),
+    path("logout/", logout, name="logout"),
 ]

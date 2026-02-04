@@ -1,8 +1,13 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_str
 from django.utils import timezone as dj_timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+
 
 User = get_user_model()
 
@@ -102,7 +107,9 @@ class RegisterSerializer(serializers.Serializer):
     # Step 2
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
-    phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    phone_number = serializers.CharField(
+        max_length=32, required=False, allow_blank=True
+    )
     country = serializers.CharField(max_length=80, required=False, allow_blank=True)
     timezone = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
@@ -158,89 +165,68 @@ class RegisterSerializer(serializers.Serializer):
         user.save()
         return user
 
-# Organization and Membership Serializers
 
-from .models import Organization, Membership
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
 
-
-class OrganizationSerializer(serializers.ModelSerializer):
-    """Serializer for Organization model."""
-    member_count = serializers.SerializerMethodField()
-    active_enrollments = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = Organization
-        fields = [
-            'id', 'name', 'slug', 'description', 'logo', 'website',
-            'contact_email', 'contact_phone', 'address', 'city', 'country',
-            'is_active', 'max_seats',
-            'billing_email', 'billing_address', 'tax_id',
-            'member_count', 'active_enrollments',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
-    def get_member_count(self, obj):
-        return obj.memberships.filter(is_active=True).count()
-    
-    def get_active_enrollments(self, obj):
-        return obj.enrollments.filter(status='active').count()
+    def validate_email(self, value):
+        # Don’t reveal whether the email exists (security best practice)
+        return value
 
 
-class OrganizationCreateUpdateSerializer(serializers.ModelSerializer):
-    """Serializer for creating and updating organizations."""
-    
-    class Meta:
-        model = Organization
-        fields = [
-            'name', 'slug', 'description', 'logo', 'website',
-            'contact_email', 'contact_phone', 'address', 'city', 'country',
-            'is_active', 'max_seats',
-            'billing_email', 'billing_address', 'tax_id'
-        ]
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Validate strength using Django validators
+        validate_password(attrs["new_password"])
+
+        # Resolve user
+        try:
+            uid = force_str(urlsafe_base64_decode(attrs["uidb64"]))
+            user = User.objects.get(pk=uid)
+        except Exception:
+            raise serializers.ValidationError({"uidb64": "Invalid user identifier."})
+
+        if not default_token_generator.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Invalid or expired token."})
+
+        attrs["user"] = user
+        return attrs
 
 
-class MembershipSerializer(serializers.ModelSerializer):
-    """Serializer for Membership model."""
-    user_name = serializers.SerializerMethodField()
-    user_email = serializers.SerializerMethodField()
-    user_avatar = serializers.SerializerMethodField()
-    organization_name = serializers.SerializerMethodField()
-    organization_logo = serializers.SerializerMethodField()
-    role_display = serializers.CharField(source='get_role_display', read_only=True)
-    
-    class Meta:
-        model = Membership
-        fields = [
-            'id', 'user', 'user_name', 'user_email', 'user_avatar',
-            'organization', 'organization_name', 'organization_logo',
-            'role', 'role_display', 'is_active', 'joined_at',
-            'job_title', 'department', 'manager'
-        ]
-        read_only_fields = ['id', 'joined_at']
-    
-    def get_user_name(self, obj):
-        return obj.user.get_full_name() or obj.user.email
-    
-    def get_user_email(self, obj):
-        return obj.user.email
-    
-    def get_user_avatar(self, obj):
-        return obj.user.avatar
-    
-    def get_organization_name(self, obj):
-        return obj.organization.name
-    
-    def get_organization_logo(self, obj):
-        return obj.organization.logo
+class ResendVerificationEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        # Don't reveal whether email exists (avoid account enumeration)
+        return value
 
 
-class MembershipCreateUpdateSerializer(serializers.ModelSerializer):
-    """Serializer for creating and updating memberships."""
-    
-    class Meta:
-        model = Membership
-        fields = [
-            'user', 'organization', 'role', 'is_active',
-            'job_title', 'department', 'manager'
-        ]
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Django's built-in password strength validators
+        validate_password(attrs["new_password"])
+
+        return attrs
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
