@@ -1,0 +1,40 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+  <h2 style="margin:0 0 12px;color:#111;font-size:20px;">
+    Your verification code
+  </h2>
+
+  <p style="margin:0 0 14px;color:#333;line-height:1.7;">
+    Hi {{ user.first_name|default:"there" }},
+    <br>
+    Use the code below to complete your sign-in to TASC LMS.
+  </p>
+
+  <div style="
+    margin:18px 0 12px;
+    padding:16px 16px;
+    background:#fff7f0;
+    border:1px solid #f1e6dc;
+    border-radius:14px;
+    text-align:center;
+  ">
+    <div style="font-size:12px;color:#777;margin-bottom:6px;">
+      Verification code
+    </div>
+    <div style="
+      font-size:26px;
+      letter-spacing:6px;
+      font-weight:900;
+      color:#111;
+      font-family: 'Courier New', Courier, monospace;
+    ">
+      {{ otp }}
+    </div>
+  </div>
+
+  <p style="margin:0;color:#666;font-size:13px;line-height:1.6;">
+    This code expires shortly. If you didn’t attempt to sign in, please reset your password immediately
+    and contact support.
+  </p>
+{% endblock %}

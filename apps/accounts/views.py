@@ -13,6 +13,8 @@ from rest_framework import status
 
 from .tokens import email_verification_token
 
+from apps.notifications.services import send_tasc_email
+
 User = get_user_model()
 
 

@@ -6,7 +6,7 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
-from django.core.mail import send_mail
+#from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
@@ -34,6 +34,8 @@ from .serializers import (
 )
 
 from .tokens import email_verification_token
+
+from apps.notifications.services import send_tasc_email
 
 
 User = get_user_model()
@@ -202,13 +204,16 @@ class RegisterView(APIView):
         )
         verify_url = request.build_absolute_uri(verify_path)
 
-        send_mail(
+        send_tasc_email(
             subject="Verify your TASC LMS account",
-            message=f"Click the link to verify your email: {verify_url}",
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-            recipient_list=[user.email],
-            fail_silently=False,
+            to=[user.email],
+            template="emails/auth/verify_email.html",
+            context={
+                "user": user,
+                "verify_url": verify_url,
+            },
         )
+
 
         return Response(
             {
@@ -335,15 +340,26 @@ def password_reset_request(request):
         frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
         reset_link = f"{frontend_base}/reset-password/{uidb64}/{token}/"
 
-        subject = "Reset your password"
-        message = (
-            f"Hello {user.first_name or ''},\n\n"
-            f"You requested a password reset.\n"
-            f"Use the link below to set a new password:\n\n"
-            f"{reset_link}\n\n"
-            f"If you did not request this, ignore this email.\n"
+        # subject = "Reset your password"
+        # message = (
+        #     f"Hello {user.first_name or ''},\n\n"
+        #     f"You requested a password reset.\n"
+        #     f"Use the link below to set a new password:\n\n"
+        #     f"{reset_link}\n\n"
+        #     f"If you did not request this, ignore this email.\n"
+        # )
+        # user.email_user(subject, message)
+
+        send_tasc_email(
+            subject="Reset your password",
+            to=[user.email],
+            template="emails/auth/password_reset.html",
+            context={
+                "user": user,
+                "reset_link": reset_link,
+            },
         )
-        user.email_user(subject, message)
+
 
     return Response(
         {
@@ -448,20 +464,38 @@ def resend_verification_email(request):
 
     # Always return generic response
     if user and not getattr(user, "email_verified", False):
+        # uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        # token = default_token_generator.make_token(user)
+
+        # frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
+        # verify_link = f"{frontend_base}/verify-email/{uidb64}/{token}/"
+
+        # subject = "Verify your email"
+        # message = (
+        #     f"Hello {user.first_name or ''},\n\n"
+        #     f"Please verify your email address using the link below:\n\n"
+        #     f"{verify_link}\n\n"
+        #     f"If you did not request this, ignore this email.\n"
+        # )
+        # user.email_user(subject, message)
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
+        token = email_verification_token.make_token(user)
 
-        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
-        verify_link = f"{frontend_base}/verify-email/{uidb64}/{token}/"
-
-        subject = "Verify your email"
-        message = (
-            f"Hello {user.first_name or ''},\n\n"
-            f"Please verify your email address using the link below:\n\n"
-            f"{verify_link}\n\n"
-            f"If you did not request this, ignore this email.\n"
+        verify_path = reverse(
+            "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
         )
-        user.email_user(subject, message)
+        verify_url = request.build_absolute_uri(verify_path)
+
+        send_tasc_email(
+            subject="Verify your TASC LMS account",
+            to=[user.email],
+            template="emails/auth/verify_email.html",
+            context={
+                "user": user,
+                "verify_url": verify_url,
+            },
+        )
+
 
     return Response(
         {
