@@ -8,6 +8,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+
 User = get_user_model()
 
 from .models import Organization, Membership
@@ -208,3 +209,20 @@ class ResendVerificationEmailSerializer(serializers.Serializer):
     def validate_email(self, value):
         # Don't reveal whether email exists (avoid account enumeration)
         return value
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Django's built-in password strength validators
+        validate_password(attrs["new_password"])
+
+        return attrs

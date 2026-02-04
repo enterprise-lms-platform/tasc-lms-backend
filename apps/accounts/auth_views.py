@@ -1,19 +1,23 @@
 # apps/accounts/auth_views.py
 
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParameter
+
 from django.conf import settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.conf import settings
 
 from rest_framework import status, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
-
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .serializers import (
@@ -22,14 +26,12 @@ from .serializers import (
     AuthTokensSerializer,
     EmailTokenObtainPairSerializer,
     ResendVerificationEmailSerializer,
+    ChangePasswordSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
 )
 
 from .tokens import email_verification_token
-from django.contrib.auth.tokens import default_token_generator
-from django.utils.http import urlsafe_base64_encode
-from django.utils.encoding import force_bytes
-from django.conf import settings
-from .serializers import PasswordResetRequestSerializer, PasswordResetConfirmSerializer
 
 
 User = get_user_model()
@@ -464,4 +466,59 @@ def resend_verification_email(request):
             "detail": "If an account with that email exists, a verification link has been sent."
         },
         status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Change password",
+    description=(
+        "Change the current user's password.\n\n"
+        "Requires authentication (Bearer access token)."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "old_password": {"type": "string", "example": "OldPass123!"},
+                "new_password": {"type": "string", "example": "NewStrongPass123!"},
+                "confirm_password": {"type": "string", "example": "NewStrongPass123!"},
+            },
+            "required": ["old_password", "new_password", "confirm_password"],
+        }
+    },
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string",
+                    "example": "Password updated successfully.",
+                }
+            },
+        },
+        400: {"description": "Old password incorrect or validation error"},
+        401: {"description": "Unauthorized"},
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    serializer = ChangePasswordSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    user = request.user
+
+    old_password = serializer.validated_data["old_password"]
+    if not user.check_password(old_password):
+        return Response(
+            {"old_password": ["Old password is incorrect."]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.set_password(serializer.validated_data["new_password"])
+    user.save(update_fields=["password"])
+
+    return Response(
+        {"detail": "Password updated successfully."}, status=status.HTTP_200_OK
     )
