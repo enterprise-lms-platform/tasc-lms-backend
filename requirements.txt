@@ -1,0 +1,64 @@
+asgiref==3.11.0
+attrs==24.3.0
+
+# Formatting / tooling
+black==24.10.0
+isort==7.0.0
+ruff==0.14.14
+pre-commit==4.5.1
+cfgv==3.5.0
+click==8.3.1
+distlib==0.4.0
+filelock==3.20.3
+identify==2.6.16
+mypy_extensions==1.1.0
+nodeenv==1.10.0
+pathspec==1.0.4
+platformdirs==4.5.1
+pytokens==0.4.1
+virtualenv==20.36.1
+
+# Django core
+Django==5.1.5
+sqlparse==0.5.5
+typing_extensions==4.15.0
+whitenoise==6.11.0
+
+# Django ecosystem
+django-cors-headers==4.9.0
+django-environ==0.12.0
+dj-database-url==3.1.0
+django-allauth==65.14.0
+
+# REST / Auth
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+PyJWT==2.11.0
+
+# API docs
+drf-spectacular==0.28.0
+drf-spectacular-sidecar==2024.11.1
+inflection==0.5.1
+uritemplate==4.2.0
+
+# Database
+psycopg==3.3.2
+psycopg-binary==3.3.2
+
+# Serialization / schema
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==0.30.0
+packaging==26.0
+
+# Env / config
+python-decouple==3.8
+PyYAML==6.0.3
+
+# Images
+Pillow==11.1.0
+
+requests==2.32.3
+
+cryptography==42.0.8
