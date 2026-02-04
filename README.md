@@ -85,7 +85,7 @@ The project is organized into modular apps to ensure clear separation of concern
 1. Clone the repository and navigate to the project root.
 2. Create a virtual environment: `python -m venv venv`
 3. Activate the environment: `source venv/bin/activate` (Linux/macOS) or `venv\Scripts\activate` (Windows)
-4. Install dependencies: `pip install -r requirements.txt`
+4. Install dependencies: `pip install -r requirements.txt,pip install --upgrade setuptools ,python.exe -m pip install --upgrade pip`
 5. Set up your environment variables in a `.env` file (see `.env.example`).
 6. Run migrations: `python manage.py migrate`
 7. Start the development server: `python manage.py runserver`
