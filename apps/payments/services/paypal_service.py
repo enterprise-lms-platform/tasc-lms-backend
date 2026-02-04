@@ -75,24 +75,33 @@ class PayPalService:
         except Exception as e:
             raise Exception(f"PayPal error: {str(e)}")
     
-    def create_refund(self, capture_id, amount=None):
-        """Create a PayPal refund"""
+    def handle_webhook(self, request):
+        """Handle PayPal webhook events"""
+        transmission_id = request.META.get('HTTP_PAYPAL_TRANSMISSION_ID')
+        timestamp = request.META.get('HTTP_PAYPAL_TRANSMISSION_TIME')
+        webhook_id = settings.PAYPAL_WEBHOOK_ID
+        event_body = request.body.decode('utf-8')
+        cert_url = request.META.get('HTTP_PAYPAL_CERT_URL')
+        actual_sig = request.META.get('HTTP_PAYPAL_TRANSMISSION_SIG')
+        
         try:
-            refund = self.api.Refund({
-                "capture_id": capture_id,
-                "amount": {
-                    "currency_code": "USD",
-                    "value": str(amount) if amount else None
-                }
-            })
+            is_valid = self.api.WebhookEvent.verify(
+                transmission_id,
+                timestamp,
+                webhook_id,
+                event_body,
+                cert_url,
+                actual_sig
+            )
             
-            if refund.create():
-                return {
-                    'refund_id': refund.id,
-                    'status': refund.status,
-                }
-            else:
-                raise Exception(refund.error)
-                
+            if not is_valid:
+                raise Exception("Invalid PayPal webhook signature")
+            
+            event = self.api.WebhookEvent.construct_from(
+                request.data, self.api.api
+            )
+            
+            return event
+            
         except Exception as e:
-            raise Exception(f"PayPal error: {str(e)}")
+            raise Exception(f"PayPal webhook error: {str(e)}")

@@ -56,26 +56,6 @@ class StripeService:
         except stripe.error.StripeError as e:
             raise Exception(f"Stripe error: {str(e)}")
     
-    def create_refund(self, payment, amount=None):
-        """Create a refund in Stripe"""
-        try:
-            refund_data = {
-                'payment_intent': payment.provider_payment_id,
-            }
-            
-            if amount:
-                refund_data['amount'] = int(amount * 100)
-            
-            refund = self.client.Refund.create(**refund_data)
-            
-            return {
-                'refund_id': refund.id,
-                'status': refund.status,
-                'amount': refund.amount / 100,
-            }
-            
-        except stripe.error.StripeError as e:
-            raise Exception(f"Stripe error: {str(e)}")
     
     def handle_webhook(self, payload, sig_header):
         """Handle Stripe webhook events"""
