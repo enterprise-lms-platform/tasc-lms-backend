@@ -36,39 +36,14 @@ class PaymentConfirmationSerializer(serializers.Serializer):
     order_id = serializers.CharField(required=False)
     payment_method = serializers.ChoiceField(choices=Payment.PAYMENT_METHODS)
 
-class RefundSerializer(serializers.ModelSerializer):
-    payment_details = PaymentSerializer(source='payment', read_only=True)
-    
-    class Meta:
-        model = Payment
-        fields = [
-            'id', 'payment_details', 'amount', 'currency',
-            'status', 'created_at', 'processed_at',
-        ]
-        read_only_fields = ['id', 'status', 'created_at', 'processed_at']
+class PaymentWebhookSerializer(serializers.Serializer):
+    provider = serializers.CharField()
+    event_type = serializers.CharField()
+    event_id = serializers.CharField()
+    payload = serializers.JSONField()
+    signature = serializers.CharField(required=False)
 
-class CreateRefundSerializer(serializers.Serializer):
+class PaymentStatusSerializer(serializers.Serializer):
     payment_id = serializers.UUIDField()
-    reason = serializers.CharField(max_length=500)
-    amount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, 
-        required=False, allow_null=True
-    )
-    
-    def validate(self, data):
-        try:
-            payment = Payment.objects.get(id=data['payment_id'])
-        except Payment.DoesNotExist:
-            raise serializers.ValidationError("Payment not found")
-        
-        if not payment.is_refundable():
-            raise serializers.ValidationError("Payment is not refundable")
-        
-        # If amount not specified, refund full amount
-        if 'amount' not in data or data['amount'] is None:
-            data['amount'] = payment.amount
-        elif data['amount'] > payment.amount:
-            raise serializers.ValidationError("Refund amount exceeds payment amount")
-        
-        data['payment'] = payment
-        return data
+    status = serializers.CharField()
+    details = serializers.JSONField(required=False) 
