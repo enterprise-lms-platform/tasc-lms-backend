@@ -106,7 +106,9 @@ class RegisterSerializer(serializers.Serializer):
     # Step 2
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
-    phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    phone_number = serializers.CharField(
+        max_length=32, required=False, allow_blank=True
+    )
     country = serializers.CharField(max_length=80, required=False, allow_blank=True)
     timezone = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
@@ -179,7 +181,9 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if attrs["new_password"] != attrs["confirm_password"]:
-            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
 
         # Validate strength using Django validators
         validate_password(attrs["new_password"])
@@ -196,3 +200,11 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+class ResendVerificationEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        # Don't reveal whether email exists (avoid account enumeration)
+        return value

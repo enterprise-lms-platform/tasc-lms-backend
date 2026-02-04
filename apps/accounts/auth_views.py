@@ -21,6 +21,7 @@ from .serializers import (
     UserMeSerializer,
     AuthTokensSerializer,
     EmailTokenObtainPairSerializer,
+    ResendVerificationEmailSerializer,
 )
 
 from .tokens import email_verification_token
@@ -401,4 +402,66 @@ def password_reset_confirm(request, uidb64, token):
 
     return Response(
         {"detail": "Password has been reset successfully."}, status=status.HTTP_200_OK
+    )
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Resend verification email",
+    description=(
+        "Resend the email verification link.\n\n"
+        "For security reasons, the response is always the same whether the email exists or not."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "example": "user@example.com"},
+            },
+            "required": ["email"],
+        }
+    },
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string",
+                    "example": "If an account with that email exists, a verification link has been sent.",
+                }
+            },
+        }
+    },
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def resend_verification_email(request):
+    serializer = ResendVerificationEmailSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    email = serializer.validated_data["email"].strip().lower()
+    user = User.objects.filter(email__iexact=email).first()
+
+    # Always return generic response
+    if user and not getattr(user, "email_verified", False):
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
+        verify_link = f"{frontend_base}/verify-email/{uidb64}/{token}/"
+
+        subject = "Verify your email"
+        message = (
+            f"Hello {user.first_name or ''},\n\n"
+            f"Please verify your email address using the link below:\n\n"
+            f"{verify_link}\n\n"
+            f"If you did not request this, ignore this email.\n"
+        )
+        user.email_user(subject, message)
+
+    return Response(
+        {
+            "detail": "If an account with that email exists, a verification link has been sent."
+        },
+        status=status.HTTP_200_OK,
     )
