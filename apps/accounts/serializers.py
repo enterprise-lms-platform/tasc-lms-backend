@@ -1,11 +1,26 @@
 from django.contrib.auth import get_user_model
+<<<<<<< HEAD
+=======
+from django.contrib.auth.password_validation import validate_password
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_str
+>>>>>>> origin/main
 from django.utils import timezone as dj_timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+<<<<<<< HEAD
 User = get_user_model()
 
+=======
+
+User = get_user_model()
+
+from .models import Organization, Membership
+
+>>>>>>> origin/main
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
@@ -100,7 +115,13 @@ class RegisterSerializer(serializers.Serializer):
     # Step 2
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
+<<<<<<< HEAD
     phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True)
+=======
+    phone_number = serializers.CharField(
+        max_length=32, required=False, allow_blank=True
+    )
+>>>>>>> origin/main
     country = serializers.CharField(max_length=80, required=False, allow_blank=True)
     timezone = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
@@ -155,3 +176,72 @@ class RegisterSerializer(serializers.Serializer):
 
         user.save()
         return user
+<<<<<<< HEAD
+=======
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        # Don’t reveal whether the email exists (security best practice)
+        return value
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Validate strength using Django validators
+        validate_password(attrs["new_password"])
+
+        # Resolve user
+        try:
+            uid = force_str(urlsafe_base64_decode(attrs["uidb64"]))
+            user = User.objects.get(pk=uid)
+        except Exception:
+            raise serializers.ValidationError({"uidb64": "Invalid user identifier."})
+
+        if not default_token_generator.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Invalid or expired token."})
+
+        attrs["user"] = user
+        return attrs
+
+
+class ResendVerificationEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        # Don't reveal whether email exists (avoid account enumeration)
+        return value
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Django's built-in password strength validators
+        validate_password(attrs["new_password"])
+
+        return attrs
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+>>>>>>> origin/main

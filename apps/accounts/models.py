@@ -27,6 +27,17 @@ class User(AbstractUser):
     timezone = models.CharField(max_length=80, blank=True, null=True)
     role = models.CharField(max_length=30, choices=Role.choices, default=Role.LEARNER)
 
+<<<<<<< HEAD
+=======
+    # Profile
+    avatar = models.URLField(blank=True, null=True)
+    bio = models.TextField(blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+
+    # Google OAuth
+    google_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    google_picture = models.URLField(blank=True, null=True)
+>>>>>>> origin/main
 
     # consent
     marketing_opt_in = models.BooleanField(default=False)
@@ -46,8 +57,42 @@ class Organization(models.Model):
     """
 
     name = models.CharField(max_length=255, unique=True)
+<<<<<<< HEAD
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+=======
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
+    description = models.TextField(blank=True)
+    logo = models.URLField(blank=True, null=True)
+    website = models.URLField(blank=True, null=True)
+    
+    # Contact
+    contact_email = models.EmailField(blank=True, null=True)
+    contact_phone = models.CharField(max_length=32, blank=True, null=True)
+    address = models.TextField(blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
+    
+    # Settings
+    is_active = models.BooleanField(default=True)
+    max_seats = models.PositiveIntegerField(null=True, blank=True, help_text="Maximum number of seats")
+    
+    # Billing
+    billing_email = models.EmailField(blank=True, null=True)
+    billing_address = models.TextField(blank=True)
+    tax_id = models.CharField(max_length=100, blank=True, null=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['slug']),
+            models.Index(fields=['is_active']),
+        ]
+>>>>>>> origin/main
 
     def __str__(self) -> str:
         return self.name
@@ -79,9 +124,29 @@ class Membership(models.Model):
     )
     is_active = models.BooleanField(default=True)
     joined_at = models.DateTimeField(auto_now_add=True)
+<<<<<<< HEAD
 
     class Meta:
         unique_together = ("user", "organization")
+=======
+    
+    # Job details
+    job_title = models.CharField(max_length=100, blank=True)
+    department = models.CharField(max_length=100, blank=True)
+    manager = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='managed_memberships'
+    )
+
+    class Meta:
+        unique_together = ("user", "organization")
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+        ]
+>>>>>>> origin/main
 
     def __str__(self) -> str:
         return f"{self.user} -> {self.organization} ({self.role})"
