@@ -1,64 +1,42 @@
 # apps/accounts/auth_views.py
 
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParameter
-<<<<<<< HEAD
-=======
-
->>>>>>> origin/main
 from django.conf import settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
-<<<<<<< HEAD
-from django.core.mail import send_mail
-from django.contrib.auth import get_user_model
-=======
 #from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.conf import settings
->>>>>>> origin/main
 
 from rest_framework import status, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
-<<<<<<< HEAD
-from rest_framework.permissions import AllowAny
-from rest_framework.decorators import api_view, permission_classes
-
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-=======
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
->>>>>>> origin/main
 
 from .serializers import (
     RegisterSerializer,
     UserMeSerializer,
     AuthTokensSerializer,
     EmailTokenObtainPairSerializer,
-<<<<<<< HEAD
-=======
     ResendVerificationEmailSerializer,
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     LogoutSerializer
->>>>>>> origin/main
 )
 
 from .tokens import email_verification_token
 
-<<<<<<< HEAD
-=======
 from apps.notifications.services import send_tasc_email
 
 
->>>>>>> origin/main
 User = get_user_model()
 
 
@@ -106,13 +84,9 @@ class LoginView(TokenObtainPairView):
             ),
             OpenApiExample(
                 "Email not verified",
-<<<<<<< HEAD
-                value={"detail": "Email not verified. Please verify your email before logging in."},
-=======
                 value={
                     "detail": "Email not verified. Please verify your email before logging in."
                 },
->>>>>>> origin/main
                 response_only=True,
                 status_codes=["403"],
             ),
@@ -125,11 +99,6 @@ class LoginView(TokenObtainPairView):
         user = serializer.user
 
         # Block login until email verified / activated
-<<<<<<< HEAD
-        if not getattr(user, "email_verified", False) or not getattr(user, "is_active", False):
-            return Response(
-                {"detail": "Email not verified. Please verify your email before logging in."},
-=======
         if not getattr(user, "email_verified", False) or not getattr(
             user, "is_active", False
         ):
@@ -137,7 +106,6 @@ class LoginView(TokenObtainPairView):
                 {
                     "detail": "Email not verified. Please verify your email before logging in."
                 },
->>>>>>> origin/main
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -221,32 +189,15 @@ class RegisterView(APIView):
         if hasattr(user, "email_verified"):
             user.email_verified = False
         user.is_active = False
-<<<<<<< HEAD
-        user.save(update_fields=["is_active"] + (["email_verified"] if hasattr(user, "email_verified") else []))
-=======
         user.save(
             update_fields=["is_active"]
             + (["email_verified"] if hasattr(user, "email_verified") else [])
         )
->>>>>>> origin/main
 
         # Build verification link
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
 
-<<<<<<< HEAD
-        verify_path = reverse("accounts-email-verify", kwargs={"uidb64": uidb64, "token": token})
-        verify_url = request.build_absolute_uri(verify_path)
-
-        send_mail(
-            subject="Verify your TASC LMS account",
-            message=f"Click the link to verify your email: {verify_url}",
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
-
-=======
         verify_path = reverse(
             "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
         )
@@ -263,7 +214,6 @@ class RegisterView(APIView):
         )
 
 
->>>>>>> origin/main
         return Response(
             {
                 "message": "Account created successfully. Verification email sent.",
@@ -276,10 +226,6 @@ class RegisterView(APIView):
 class VerifyEmailResponseSerializer(serializers.Serializer):
     message = serializers.CharField()
 
-<<<<<<< HEAD
-=======
-
->>>>>>> origin/main
 class VerifyEmailErrorSerializer(serializers.Serializer):
     detail = serializers.CharField()
 
@@ -297,12 +243,6 @@ class VerifyEmailErrorSerializer(serializers.Serializer):
         400: VerifyEmailErrorSerializer,
     },
     examples=[
-<<<<<<< HEAD
-        OpenApiExample("Verified", value={"message": "Email verified successfully."}, response_only=True),
-        OpenApiExample("Invalid/Expired", value={"detail": "Verification link expired or invalid."}, response_only=True),
-    ],
-    
-=======
         OpenApiExample(
             "Verified",
             value={"message": "Email verified successfully."},
@@ -314,7 +254,6 @@ class VerifyEmailErrorSerializer(serializers.Serializer):
             response_only=True,
         ),
     ],
->>>>>>> origin/main
 )
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -323,26 +262,15 @@ def verify_email(request, uidb64, token):
         uid = force_str(urlsafe_base64_decode(uidb64))
         user = User.objects.get(pk=uid)
     except (User.DoesNotExist, ValueError, TypeError):
-<<<<<<< HEAD
-        return Response({"detail": "Invalid verification link."}, status=status.HTTP_400_BAD_REQUEST)
-=======
         return Response(
             {"detail": "Invalid verification link."}, status=status.HTTP_400_BAD_REQUEST
         )
->>>>>>> origin/main
 
     if email_verification_token.check_token(user, token):
         # Mark verified + activate
         if hasattr(user, "email_verified"):
             user.email_verified = True
         user.is_active = True
-<<<<<<< HEAD
-        user.save(update_fields=["is_active"] + (["email_verified"] if hasattr(user, "email_verified") else []))
-
-        return Response({"message": "Email verified successfully."}, status=status.HTTP_200_OK)
-
-    return Response({"detail": "Verification link expired or invalid."}, status=status.HTTP_400_BAD_REQUEST)
-=======
         user.save(
             update_fields=["is_active"]
             + (["email_verified"] if hasattr(user, "email_verified") else [])
@@ -664,4 +592,3 @@ def logout(request):
         return Response({"refresh": ["Invalid or expired refresh token."]}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({"detail": "Logged out successfully."}, status=status.HTTP_200_OK)
->>>>>>> origin/main

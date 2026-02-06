@@ -1,34 +1,41 @@
 from django.db import models
 from django.contrib.auth import get_user_model
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 import uuid
+from django.conf import settings
 
 User = get_user_model()
 
 
 class Payment(models.Model):
-    PAYMENT_STATUS = (
+    # Use lists [] instead of tuples () for choices
+    PAYMENT_STATUS = [
         ('pending', 'Pending'),
         ('completed', 'Completed'),
         ('failed', 'Failed'),
-        ('refunded', 'Refunded'),
         ('cancelled', 'Cancelled'),
-    )
+    ]
     
-    PAYMENT_METHODS = (
-        ('stripe', 'Stripe'),
-        ('paypal', 'PayPal'),
-        ('pesapal', 'PesaPal'),
-        ('mpesa', 'M-Pesa'),
-    )
+    PAYMENT_METHODS = [
+        ('paypal', 'PayPal')
+    ]
     
-    CURRENCIES = (
+    CURRENCIES = [
         ('USD', 'US Dollar'),
-    )
+        ('KES', 'Kenyan Shilling'),
+    ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
+    
+    course = models.ForeignKey(
+        'catalogue.Course',  # Course is in catalogue app, not learning
+        on_delete=models.CASCADE,
+        related_name='payments',
+        null=True,
+        blank=True
+    )
     
     amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
     currency = models.CharField(max_length=3, choices=CURRENCIES, default='USD')
@@ -43,9 +50,56 @@ class Payment(models.Model):
     # Metadata
     metadata = models.JSONField(default=dict, blank=True)
     description = models.TextField(blank=True)
-from django.conf import settings
-from django.core.validators import MinValueValidator, MaxValueValidator
-from django.utils import timezone
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Card details
+    card_last4 = models.CharField(max_length=4, blank=True)
+    card_brand = models.CharField(max_length=50, blank=True)
+    
+    # Webhook tracking
+    webhook_received = models.BooleanField(default=False)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['user', 'course']),
+            models.Index(fields=['provider_payment_id']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.amount} {self.currency}"
+    
+    def mark_completed(self):
+        """Mark payment as completed and enroll user in course"""
+        self.status = 'completed'
+        self.completed_at = timezone.now()
+        self.save()
+        
+        # Enroll user in course if course exists
+        if self.course:
+            try:
+                from learning.models import Enrollment
+                enrollment, created = Enrollment.objects.get_or_create(
+                    user=self.user,
+                    course=self.course,
+                    defaults={
+                        'status': 'active',
+                        'organization': self.user.organization if hasattr(self.user, 'organization') else None
+                    }
+                )
+                
+                # If enrollment already existed but was inactive, activate it
+                if not created and enrollment.status != 'active':
+                    enrollment.status = 'active'
+                    enrollment.save()
+            except ImportError:
+                # If Enrollment doesn't exist, skip (for development)
+                pass
 
 
 class Invoice(models.Model):
@@ -63,6 +117,7 @@ class Invoice(models.Model):
         INDIVIDUAL = 'individual', 'Individual Purchase'
         ORGANIZATION = 'organization', 'Organization Purchase'
         SUBSCRIPTION = 'subscription', 'Subscription'
+        COURSE = 'course', 'Course Enrollment'  # Added course type
 
     # Basic Information
     invoice_number = models.CharField(max_length=50, unique=True)
@@ -82,6 +137,23 @@ class Invoice(models.Model):
         null=True,
         blank=True,
         related_name='invoices'
+    )
+    
+    course = models.ForeignKey(
+        'catalogue.Course',  # FIXED
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoices'
+    )
+    
+    # Payment reference
+    payment = models.OneToOneField(
+        Payment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoice'
     )
 
     # Customer Details Snapshot
@@ -125,6 +197,8 @@ class Invoice(models.Model):
             models.Index(fields=['organization']),
             models.Index(fields=['status']),
             models.Index(fields=['-issue_date']),
+            models.Index(fields=['course']),
+            models.Index(fields=['payment']),
         ]
 
     def __str__(self):
@@ -132,7 +206,6 @@ class Invoice(models.Model):
 
     def generate_invoice_number(self):
         """Generate a unique invoice number"""
-        import uuid
         timestamp = timezone.now().strftime('%Y%m%d')
         unique_id = uuid.uuid4().hex[:8].upper()
         return f"INV-{timestamp}-{unique_id}"
@@ -170,14 +243,21 @@ class InvoiceItem(models.Model):
     item_id = models.PositiveIntegerField(null=True, blank=True)
     description = models.CharField(max_length=255)
     
+    course = models.ForeignKey(
+        'catalogue.Course',  # FIXED
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoice_items'
+    )
+    
     # Quantity and pricing
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     
-    # References
     enrollment = models.ForeignKey(
-        'learning.Enrollment',
+        'learning.Enrollment',  
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -251,6 +331,14 @@ class Transaction(models.Model):
         related_name='transactions'
     )
     
+    course = models.ForeignKey(
+        'catalogue.Course',  # FIXED
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='transactions'
+    )
+    
     # Transaction details
     transaction_id = models.CharField(max_length=255, unique=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -259,7 +347,7 @@ class Transaction(models.Model):
     
     # Payment method
     payment_method = models.CharField(max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CREDIT_CARD)
-    payment_provider = models.CharField(max_length=50, blank=True)  # Stripe, PayPal, etc.
+    payment_provider = models.CharField(max_length=50, blank=True)  # PayPal, etc.
     
     # Gateway details
     gateway_transaction_id = models.CharField(max_length=255, blank=True, null=True)
@@ -281,20 +369,25 @@ class Transaction(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['status', 'created_at']),
-            models.Index(fields=['user', 'course']),
-            models.Index(fields=['provider_payment_id']),
+            models.Index(fields=['transaction_id']),
+            models.Index(fields=['user']),
+            models.Index(fields=['invoice']),
+            models.Index(fields=['course']),
         ]
     
     def __str__(self):
-        return f"{self.user.email} - {self.amount} {self.currency}"
-    
-    def mark_completed(self):
-        self.status = 'completed'
-        self.completed_at = timezone.now()
-        self.save()
-        
-        # Enroll user in course
-        self.course.enrolled_users.add(self.user)
+        return f"{self.transaction_id} - {self.amount} {self.currency}"
+
+    def generate_transaction_id(self):
+        """Generate a unique transaction ID"""
+        timestamp = timezone.now().strftime('%Y%m%d')
+        unique_id = uuid.uuid4().hex[:8].upper()
+        return f"TXN-{timestamp}-{unique_id}"
+
+    def save(self, *args, **kwargs):
+        if not self.transaction_id:
+            self.transaction_id = self.generate_transaction_id()
+        super().save(*args, **kwargs)
 
 
 class PaymentWebhook(models.Model):
@@ -309,30 +402,9 @@ class PaymentWebhook(models.Model):
     
     def __str__(self):
         return f"{self.provider} - {self.event_type}"
-
+    
     class Meta:
         ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['transaction_id']),
-            models.Index(fields=['user']),
-            models.Index(fields=['status']),
-            models.Index(fields=['-created_at']),
-        ]
-
-    def __str__(self):
-        return f"{self.transaction_id} - {self.amount} {self.currency}"
-
-    def generate_transaction_id(self):
-        """Generate a unique transaction ID"""
-        import uuid
-        timestamp = timezone.now().strftime('%Y%m%d')
-        unique_id = uuid.uuid4().hex[:8].upper()
-        return f"TXN-{timestamp}-{unique_id}"
-
-    def save(self, *args, **kwargs):
-        if not self.transaction_id:
-            self.transaction_id = self.generate_transaction_id()
-        super().save(*args, **kwargs)
 
 
 class PaymentMethod(models.Model):
@@ -388,7 +460,7 @@ class PaymentMethod(models.Model):
         ordering = ['-is_default', '-created_at']
 
     def __str__(self):
-        if self.method_type == 'credit_card':
+        if self.method_type == 'credit_card' or self.method_type == 'debit_card':
             return f"{self.card_brand} **** {self.card_last_four}"
         elif self.method_type == 'paypal':
             return f"PayPal - {self.paypal_email}"

@@ -1,26 +1,18 @@
 from django.contrib.auth import get_user_model
-<<<<<<< HEAD
-=======
 from django.contrib.auth.password_validation import validate_password
 from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
->>>>>>> origin/main
 from django.utils import timezone as dj_timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
-<<<<<<< HEAD
-User = get_user_model()
-
-=======
 
 User = get_user_model()
 
 from .models import Organization, Membership
 
->>>>>>> origin/main
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
@@ -115,13 +107,9 @@ class RegisterSerializer(serializers.Serializer):
     # Step 2
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
-<<<<<<< HEAD
-    phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True)
-=======
     phone_number = serializers.CharField(
         max_length=32, required=False, allow_blank=True
     )
->>>>>>> origin/main
     country = serializers.CharField(max_length=80, required=False, allow_blank=True)
     timezone = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
@@ -176,8 +164,6 @@ class RegisterSerializer(serializers.Serializer):
 
         user.save()
         return user
-<<<<<<< HEAD
-=======
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
@@ -244,4 +230,3 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
->>>>>>> origin/main

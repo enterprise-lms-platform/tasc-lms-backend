@@ -1,8 +1,4 @@
 from django.db import models
-<<<<<<< HEAD
-
-# Create your models here.
-=======
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -198,4 +194,3 @@ class Tag(models.Model):
 
     def __str__(self):
         return self.name
->>>>>>> origin/main

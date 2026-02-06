@@ -27,8 +27,6 @@ class User(AbstractUser):
     timezone = models.CharField(max_length=80, blank=True, null=True)
     role = models.CharField(max_length=30, choices=Role.choices, default=Role.LEARNER)
 
-<<<<<<< HEAD
-=======
     # Profile
     avatar = models.URLField(blank=True, null=True)
     bio = models.TextField(blank=True)
@@ -37,7 +35,6 @@ class User(AbstractUser):
     # Google OAuth
     google_id = models.CharField(max_length=255, blank=True, null=True, unique=True)
     google_picture = models.URLField(blank=True, null=True)
->>>>>>> origin/main
 
     # consent
     marketing_opt_in = models.BooleanField(default=False)
@@ -57,10 +54,6 @@ class Organization(models.Model):
     """
 
     name = models.CharField(max_length=255, unique=True)
-<<<<<<< HEAD
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-=======
     slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
     description = models.TextField(blank=True)
     logo = models.URLField(blank=True, null=True)
@@ -92,7 +85,6 @@ class Organization(models.Model):
             models.Index(fields=['slug']),
             models.Index(fields=['is_active']),
         ]
->>>>>>> origin/main
 
     def __str__(self) -> str:
         return self.name
@@ -124,11 +116,6 @@ class Membership(models.Model):
     )
     is_active = models.BooleanField(default=True)
     joined_at = models.DateTimeField(auto_now_add=True)
-<<<<<<< HEAD
-
-    class Meta:
-        unique_together = ("user", "organization")
-=======
     
     # Job details
     job_title = models.CharField(max_length=100, blank=True)
@@ -146,7 +133,6 @@ class Membership(models.Model):
         indexes = [
             models.Index(fields=['organization', 'is_active']),
         ]
->>>>>>> origin/main
 
     def __str__(self) -> str:
         return f"{self.user} -> {self.organization} ({self.role})"

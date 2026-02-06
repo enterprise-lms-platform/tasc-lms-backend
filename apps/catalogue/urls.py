@@ -1,8 +1,3 @@
-<<<<<<< HEAD
-from django.urls import path
-
-urlpatterns = []
-=======
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
@@ -22,4 +17,3 @@ router.register(r'sessions', SessionViewSet, basename='session')
 urlpatterns = [
     path('', include(router.urls)),
 ]
->>>>>>> origin/main
