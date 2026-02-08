@@ -1,6 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .views import me, verify_email
+from .views import me, verify_email, invite_user
 from .auth_views import (
     LoginView,
     RefreshView,
@@ -11,6 +11,7 @@ from .auth_views import (
     resend_verification_email,
     change_password,
     logout,
+    set_password_from_invite,
 )
 
 urlpatterns = [
@@ -28,4 +29,9 @@ urlpatterns = [
     path("resend-verification/", resend_verification_email, name="resend-verification"),
     path("change-password/", change_password, name="change-password"),
     path("logout/", logout, name="logout"),
+    path(
+        "set-password/<uidb64>/<token>/",
+        set_password_from_invite,
+        name="set-password-from-invite",
+    ),
 ]
