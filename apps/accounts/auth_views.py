@@ -29,7 +29,8 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
-    LogoutSerializer
+    LogoutSerializer,
+    SetPasswordFromInviteSerializer,
 )
 
 from .tokens import email_verification_token
@@ -592,3 +593,51 @@ def logout(request):
         return Response({"refresh": ["Invalid or expired refresh token."]}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({"detail": "Logged out successfully."}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Set password from invite",
+    description="Invited user sets their password using the invitation link token.",
+    parameters=[
+        OpenApiParameter(name="uidb64", type=str, location=OpenApiParameter.PATH),
+        OpenApiParameter(name="token", type=str, location=OpenApiParameter.PATH),
+    ],
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "new_password": {"type": "string"},
+                "confirm_password": {"type": "string"},
+            },
+            "required": ["new_password", "confirm_password"],
+        }
+    },
+    responses={
+        200: {"type": "object", "properties": {"detail": {"type": "string"}}},
+        400: {"description": "Invalid token or validation error"},
+    },
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def set_password_from_invite(request, uidb64, token):
+    """
+    Set password for invited user using uid + token.
+    """
+    payload = {
+        **request.data,
+        "uidb64": uidb64,
+        "token": token,
+    }
+    serializer = SetPasswordFromInviteSerializer(data=payload)
+    serializer.is_valid(raise_exception=True)
+
+    user = serializer.validated_data["user"]
+    user.set_password(serializer.validated_data["new_password"])
+    user.must_set_password = False
+    user.save(update_fields=["password", "must_set_password"])
+
+    return Response(
+        {"detail": "Password set successfully. You can now login."},
+        status=status.HTTP_200_OK,
+    )
