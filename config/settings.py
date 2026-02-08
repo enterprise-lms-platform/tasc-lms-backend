@@ -231,15 +231,31 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+
+
 # ----------------------------------------
 # CORS
 # ----------------------------------------
+def get_list_from_env(var_name, default=""):
+    """Helper to parse comma-separated environment variables into a list."""
+    value = env(var_name, default=default)
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+# Always allow localhost for development
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
 ]
+
+# Extend with environment-specific origins (staging, production, etc.)
+CORS_ALLOWED_ORIGINS.extend(get_list_from_env("CORS_ALLOWED_ORIGINS"))
+
+# CSRF trusted origins for form submissions
+CSRF_TRUSTED_ORIGINS = get_list_from_env("CSRF_TRUSTED_ORIGINS")
 
 CORS_ALLOW_CREDENTIALS = True
 
