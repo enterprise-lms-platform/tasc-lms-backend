@@ -1,7 +1,7 @@
 # Core Django & Database
 Django==5.1.5
 djangorestframework==3.16.1
-psycopg-binary==3.3.2
+psycopg-binary==3.2.9
 sqlparse==0.5.5
 
 # Authentication & Security
