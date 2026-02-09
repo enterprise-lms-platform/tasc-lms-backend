@@ -98,6 +98,15 @@ def google_oauth_login(request):
         
         google_data = google_response.json()
         
+        # Verify audience (client ID) if configured
+        if hasattr(settings, 'GOOGLE_CLIENT_ID') and settings.GOOGLE_CLIENT_ID:
+            token_aud = google_data.get('aud')
+            if token_aud != settings.GOOGLE_CLIENT_ID:
+                return Response(
+                    {'error': 'Invalid token audience. Token was not issued for this application.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         # Extract user information
         google_id = google_data.get('sub')
         email = google_data.get('email')
