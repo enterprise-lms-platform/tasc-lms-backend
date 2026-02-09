@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+from datetime import datetime
 from typing import Any
 
 from django.conf import settings
@@ -35,7 +36,14 @@ def send_tasc_email(
     if not enabled:
         return
 
-    html = render_to_string(template, context)
+    # Inject support_email and year for base template
+    enriched_context = {
+        "support_email": getattr(settings, "SUPPORT_EMAIL", None) or getattr(settings, "DEFAULT_FROM_EMAIL", "support@tasc-lms.com"),
+        "year": datetime.now().year,
+        **context,
+    }
+
+    html = render_to_string(template, enriched_context)
     text = strip_tags(html)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "") or ""

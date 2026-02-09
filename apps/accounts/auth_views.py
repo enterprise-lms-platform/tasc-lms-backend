@@ -199,10 +199,8 @@ class RegisterView(APIView):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
 
-        verify_path = reverse(
-            "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
-        )
-        verify_url = request.build_absolute_uri(verify_path)
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
 
         send_tasc_email(
             subject="Verify your TASC LMS account",
@@ -336,8 +334,8 @@ def password_reset_request(request):
         token = default_token_generator.make_token(user)
 
         # Use env-configurable frontend base URL if you have it; fallback to a sane default
-        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
-        reset_link = f"{frontend_base}/reset-password/{uidb64}/{token}/"
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        reset_link = f"{frontend_base}/reset-password/{uidb64}/{token}"
 
         # subject = "Reset your password"
         # message = (
@@ -355,7 +353,7 @@ def password_reset_request(request):
             template="emails/auth/password_reset.html",
             context={
                 "user": user,
-                "reset_link": reset_link,
+                "reset_url": reset_link,
             },
         )
 
@@ -480,10 +478,8 @@ def resend_verification_email(request):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
 
-        verify_path = reverse(
-            "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
-        )
-        verify_url = request.build_absolute_uri(verify_path)
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
 
         send_tasc_email(
             subject="Verify your TASC LMS account",

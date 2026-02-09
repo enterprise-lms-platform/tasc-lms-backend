@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .serializers import UserMeSerializer, InviteUserSerializer
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_str, force_bytes
@@ -170,8 +171,8 @@ def invite_user(request):
     token = default_token_generator.make_token(user)
 
     # Build frontend set-password URL
-    frontend_base = getattr(request._request, "scheme", "http") + "://" + request.get_host().replace(":8000", ":5173")
-    set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}/"
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
 
     # Send invitation email
     send_tasc_email(

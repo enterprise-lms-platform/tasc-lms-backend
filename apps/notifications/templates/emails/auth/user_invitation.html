@@ -1,64 +1,57 @@
 {% extends "emails/base.html" %}
 
-{% block title %}You've been invited to TASC LMS{% endblock %}
-
 {% block content %}
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-    <h1 style="color: #ffffff; margin: 0; font-size: 28px;">Welcome to TASC LMS</h1>
+  <h2 style="margin:0 0 12px;color:#111;font-size:20px;">
+    Welcome to TASC LMS
+  </h2>
+
+  <p style="margin:0 0 14px;color:#333;line-height:1.7;">
+    Hi <strong>{{ user.first_name }} {{ user.last_name }}</strong>,
+    <br>
+    You've been invited to join <strong>TASC Learning Management System</strong> by {{ inviter.first_name }} {{ inviter.last_name }}.
+  </p>
+
+  <p style="margin:0 0 18px;color:#333;line-height:1.7;">
+    To get started, please set your password by clicking the button below:
+  </p>
+
+  <div style="margin:18px 0 18px;">
+    <a href="{{ set_password_url }}"
+       style="
+         display:inline-block;
+         background:#ff8a1f;
+         color:#ffffff;
+         text-decoration:none;
+         padding:12px 18px;
+         border-radius:12px;
+         font-weight:800;
+         box-shadow:0 10px 18px rgba(255, 138, 31, 0.25);
+       ">
+      Set Your Password
+    </a>
   </div>
-  
-  <div style="background-color: #ffffff; padding: 40px 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
-    <p style="font-size: 16px; color: #333333; margin-bottom: 20px;">
-      Hello <strong>{{ user.first_name }} {{ user.last_name }}</strong>,
-    </p>
-    
-    <p style="font-size: 16px; color: #333333; margin-bottom: 20px;">
-      You've been invited to join <strong>TASC Learning Management System</strong> by {{ inviter.first_name }} {{ inviter.last_name }}.
-    </p>
-    
-    <p style="font-size: 16px; color: #333333; margin-bottom: 30px;">
-      To get started, please set your password by clicking the button below:
-    </p>
-    
-    <div style="text-align: center; margin: 30px 0;">
-      <a href="{{ set_password_url }}" 
-         style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                color: #ffffff; 
-                padding: 15px 40px; 
-                text-decoration: none; 
-                border-radius: 5px; 
-                font-size: 16px; 
-                font-weight: bold; 
-                display: inline-block;">
-        Set Your Password
-      </a>
-    </div>
-    
-    <p style="font-size: 14px; color: #666666; margin-top: 30px;">
+
+  <div style="margin-top:16px;padding:12px 14px;background:#fff7f0;border:1px solid #f1e6dc;border-radius:12px;">
+    <p style="margin:0;color:#444;font-size:12px;line-height:1.6;">
       If the button doesn't work, copy and paste this link into your browser:
-    </p>
-    <p style="font-size: 12px; color: #999999; word-break: break-all; background-color: #f5f5f5; padding: 10px; border-radius: 5px;">
-      {{ set_password_url }}
-    </p>
-    
-    <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-      <p style="font-size: 14px; color: #666666; margin: 0;">
-        Your account details:
-      </p>
-      <ul style="font-size: 14px; color: #333333; margin-top: 10px;">
-        <li><strong>Email:</strong> {{ user.email }}</li>
-        <li><strong>Role:</strong> {{ user.get_role_display }}</li>
-      </ul>
-    </div>
-    
-    <p style="font-size: 14px; color: #999999; margin-top: 30px; font-style: italic;">
-      If you did not expect this invitation, please ignore this email or contact our support team.
+      <br>
+      <a href="{{ set_password_url }}" style="color:#ff8a1f;text-decoration:none;word-break:break-all;font-weight:700;">
+        {{ set_password_url }}
+      </a>
     </p>
   </div>
-  
-  <div style="text-align: center; margin-top: 20px; padding: 20px; color: #999999; font-size: 12px;">
-    <p>© 2025 TASC Learning Management System. All rights reserved.</p>
+
+  <div style="margin-top:20px;padding-top:16px;border-top:1px solid #f1e6dc;">
+    <p style="margin:0 0 8px;color:#666;font-size:13px;font-weight:600;">
+      Your account details:
+    </p>
+    <p style="margin:0;color:#333;font-size:13px;line-height:1.6;">
+      <strong>Email:</strong> {{ user.email }}<br>
+      <strong>Role:</strong> {{ user.get_role_display }}
+    </p>
   </div>
-</div>
+
+  <p style="margin:20px 0 0;color:#666;font-size:12px;line-height:1.6;font-style:italic;">
+    If you did not expect this invitation, please ignore this email or contact our support team.
+  </p>
 {% endblock %}
