@@ -52,9 +52,9 @@ INSTALLED_APPS = [
 # Middleware
 # ----------------------------------------
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -171,7 +171,9 @@ USE_TZ = True
 # ----------------------------------------
 # Static files
 # ----------------------------------------
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
 
 # ----------------------------------------
 # REST framework
@@ -182,6 +184,30 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# ----------------------------------------
+# Simple JWT
+# ----------------------------------------
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": False,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "VERIFYING_KEY": None,
+    "AUDIENCE": None,
+    "ISSUER": None,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "TOKEN_TYPE_CLAIM": "token_type",
 }
 
 SPECTACULAR_SETTINGS = {
@@ -205,13 +231,34 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+
+
 # ----------------------------------------
 # CORS
 # ----------------------------------------
+def get_list_from_env(var_name, default=""):
+    """Helper to parse comma-separated environment variables into a list."""
+    value = env(var_name, default=default)
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+# Always allow localhost for development
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
 ]
+
+# Extend with environment-specific origins (staging, production, etc.)
+CORS_ALLOWED_ORIGINS.extend(get_list_from_env("CORS_ALLOWED_ORIGINS"))
+
+# CSRF trusted origins for form submissions
+CSRF_TRUSTED_ORIGINS = get_list_from_env("CSRF_TRUSTED_ORIGINS")
+
+CORS_ALLOW_CREDENTIALS = True
+
 
 
 AUTH_USER_MODEL = "accounts.User"
@@ -221,4 +268,4 @@ EMAIL_BACKEND = env(
     "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
 )
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@tasc-lms.local")
-FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:3000")
+FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:5173")

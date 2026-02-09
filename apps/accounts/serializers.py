@@ -77,6 +77,7 @@ class UserMeSerializer(serializers.ModelSerializer):
             "country",
             "timezone",
             "role",
+            "google_picture",
             "marketing_opt_in",
             "terms_accepted_at",
             "email_verified",
@@ -230,3 +231,51 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
+
+
+class InviteUserSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    role = serializers.ChoiceField(choices=User.Role.choices)
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_role(self, value):
+        """Prevent inviting users as learner or tasc_admin."""
+        if value in ["learner", "tasc_admin"]:
+            raise serializers.ValidationError(
+                f"Cannot invite users with role '{value}'. "
+                "Learners should self-register, and TASC Admins require superuser privileges."
+            )
+        return value
+
+
+class SetPasswordFromInviteSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Validate password strength
+        validate_password(attrs["new_password"])
+
+        # Resolve user
+        try:
+            uid = force_str(urlsafe_base64_decode(attrs["uidb64"]))
+            user = User.objects.get(pk=uid)
+        except Exception:
+            raise serializers.ValidationError({"uidb64": "Invalid user identifier."})
+
+        if not default_token_generator.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Invalid or expired token."})
+
+        attrs["user"] = user
+        return attrs

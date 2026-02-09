@@ -42,6 +42,25 @@ class User(AbstractUser):
 
     # verification
     email_verified = models.BooleanField(default=False)
+    must_set_password = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        # Ensure Django superusers are always treated as platform super admins
+        if self.is_superuser:
+            # force app role
+            if self.role != self.Role.TASC_ADMIN:
+                self.role = self.Role.TASC_ADMIN
+
+            # superuser bootstrap should not be blocked by verification
+            if not self.email_verified:
+                self.email_verified = True
+
+            # safety: make sure the account can log in
+            if not self.is_active:
+                self.is_active = True
+
+        super().save(*args, **kwargs)
+
 
     def __str__(self) -> str:
         return self.email or self.username
