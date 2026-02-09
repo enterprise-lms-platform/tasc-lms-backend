@@ -148,6 +148,9 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID", default="")
+
 # ----------------------------------------
 # Password validation
 # ----------------------------------------

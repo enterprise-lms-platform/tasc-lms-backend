@@ -13,6 +13,12 @@ from .auth_views import (
     logout,
     set_password_from_invite,
 )
+from .google_auth_views import (
+    google_oauth_login,
+    google_oauth_link,
+    google_oauth_unlink,
+    google_oauth_status,
+)
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="register"),
@@ -34,4 +40,9 @@ urlpatterns = [
         set_password_from_invite,
         name="set-password-from-invite",
     ),
+    # Google OAuth endpoints
+    path("google/login/", google_oauth_login, name="google-oauth-login"),
+    path("google/link/", google_oauth_link, name="google-oauth-link"),
+    path("google/unlink/", google_oauth_unlink, name="google-oauth-unlink"),
+    path("google/status/", google_oauth_status, name="google-oauth-status"),
 ]
