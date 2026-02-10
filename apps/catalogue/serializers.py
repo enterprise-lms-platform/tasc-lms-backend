@@ -164,3 +164,52 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
 class CourseCreateSerializer(CourseCreateUpdateSerializer):
     """Alias for course creation serializer."""
     pass
+
+
+# ========================================
+# Public Serializers (for unauthenticated access)
+# ========================================
+
+class PublicSessionSerializer(serializers.ModelSerializer):
+    """
+    Public serializer for Session - excludes video_url and content_text.
+    Unauthenticated users can see session structure but not access content.
+    """
+    duration_minutes = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = Session
+        fields = [
+            'id', 'title', 'description', 'session_type',
+            'order', 'video_duration_seconds', 'duration_minutes',
+            'is_free_preview', 'is_mandatory',
+        ]
+        read_only_fields = fields
+
+
+class PublicCourseDetailSerializer(CourseListSerializer):
+    """
+    Public serializer for Course detail view.
+    Includes session list but uses PublicSessionSerializer to hide content URLs.
+    """
+    sessions = PublicSessionSerializer(many=True, read_only=True)
+    instructor = serializers.SerializerMethodField()
+    
+    class Meta(CourseListSerializer.Meta):
+        fields = CourseListSerializer.Meta.fields + [
+            'description', 'prerequisites', 'learning_objectives',
+            'target_audience', 'trailer_video_url',
+            'sessions',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = CourseListSerializer.Meta.read_only_fields + ['created_at', 'updated_at']
+    
+    def get_instructor(self, obj):
+        """Return basic instructor info without sensitive data."""
+        if obj.instructor:
+            return {
+                'id': obj.instructor.id,
+                'name': obj.instructor.get_full_name() or obj.instructor.email,
+                'avatar': obj.instructor.avatar
+            }
+        return None
