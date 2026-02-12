@@ -125,6 +125,10 @@ DEFAULT_FROM_EMAIL = env(
 # ----------------------------------------
 AUTH_USER_MODEL = "accounts.User"
 
+# Login lockout (US-015)
+MAX_LOGIN_ATTEMPTS = 5
+ACCOUNT_LOCK_MINUTES = 15
+
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # admin login
     "allauth.account.auth_backends.AuthenticationBackend",  # allauth

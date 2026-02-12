@@ -91,6 +91,35 @@ class UserMeSerializer(serializers.ModelSerializer):
         return getattr(obj, "username", obj.email)
 
 
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """Editable profile fields only; used for PATCH /api/v1/auth/me/."""
+
+    class Meta:
+        model = User
+        fields = [
+            "first_name",
+            "last_name",
+            "phone_number",
+            "country",
+            "timezone",
+            "date_of_birth",
+            "avatar",
+            "bio",
+            "marketing_opt_in",
+        ]
+        extra_kwargs = {
+            "first_name": {"required": False, "allow_blank": True},
+            "last_name": {"required": False, "allow_blank": True},
+            "phone_number": {"required": False, "allow_blank": True, "max_length": 32},
+            "country": {"required": False, "allow_blank": True, "max_length": 80},
+            "timezone": {"required": False, "allow_blank": True, "max_length": 80},
+            "date_of_birth": {"required": False, "allow_null": True},
+            "avatar": {"required": False, "allow_blank": True, "allow_null": True},
+            "bio": {"required": False, "allow_blank": True},
+            "marketing_opt_in": {"required": False},
+        }
+
+
 class AuthTokensSerializer(serializers.Serializer):
     refresh = serializers.CharField()
     access = serializers.CharField()

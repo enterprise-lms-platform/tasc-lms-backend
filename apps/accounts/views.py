@@ -2,7 +2,7 @@ from drf_spectacular.utils import extend_schema, OpenApiExample
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .serializers import UserMeSerializer, InviteUserSerializer
+from .serializers import UserMeSerializer, ProfileUpdateSerializer, InviteUserSerializer
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -45,9 +45,24 @@ User = get_user_model()
         ),
     ],
 )
-@api_view(["GET"])
+@extend_schema(
+    methods=["PATCH"],
+    request=ProfileUpdateSerializer,
+    responses={200: UserMeSerializer},
+    summary="Update profile",
+    description="Partially update the authenticated user's profile.",
+)
+@api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def me(request):
+    if request.method == "GET":
+        return Response(UserMeSerializer(request.user).data)
+    # PATCH
+    serializer = ProfileUpdateSerializer(
+        instance=request.user, data=request.data, partial=True
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
     return Response(UserMeSerializer(request.user).data)
 
 
