@@ -10,7 +10,7 @@ User = get_user_model()
 
 
 class MeEndpointTests(TestCase):
-    """Tests for GET /api/v1/auth/me/"""
+    """Tests for GET and PATCH /api/v1/auth/me/"""
 
     def setUp(self):
         self.client = APIClient()
@@ -31,28 +31,29 @@ class MeEndpointTests(TestCase):
         token = RefreshToken.for_user(self.user)
         return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
 
-    def test_unauthenticated_returns_401(self):
+    # ---- GET ----
+    def test_get_unauthenticated_returns_401(self):
         """me endpoint must reject unauthenticated requests."""
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_authenticated_returns_200(self):
+    def test_get_authenticated_returns_200(self):
         """me endpoint returns profile for authenticated user."""
         response = self.client.get(self.url, **self._auth_header())
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["email"], self.user.email)
 
-    def test_response_excludes_is_staff(self):
+    def test_get_response_excludes_is_staff(self):
         """is_staff must NOT be present in the response."""
         response = self.client.get(self.url, **self._auth_header())
         self.assertNotIn("is_staff", response.data)
 
-    def test_response_excludes_is_superuser(self):
+    def test_get_response_excludes_is_superuser(self):
         """is_superuser must NOT be present in the response."""
         response = self.client.get(self.url, **self._auth_header())
         self.assertNotIn("is_superuser", response.data)
 
-    def test_response_includes_expected_fields(self):
+    def test_get_response_includes_expected_fields(self):
         """me endpoint returns the expected set of fields."""
         response = self.client.get(self.url, **self._auth_header())
         expected_fields = {
@@ -61,6 +62,75 @@ class MeEndpointTests(TestCase):
             "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
         }
         self.assertEqual(set(response.data.keys()), expected_fields)
+
+    # ---- PATCH ----
+    def test_patch_unauthenticated_returns_401(self):
+        """PATCH me must reject unauthenticated requests."""
+        response = self.client.patch(
+            self.url, {"first_name": "Updated"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_patch_partial_update_returns_200_and_same_response_shape(self):
+        """PATCH updates only sent fields and returns same shape as GET me."""
+        payload = {
+            "first_name": "UpdatedFirst",
+            "last_name": "UpdatedLast",
+            "phone_number": "+1234567890",
+            "country": "USA",
+            "marketing_opt_in": True,
+        }
+        response = self.client.patch(
+            self.url, payload, format="json", **self._auth_header()
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Response shape must match GET me
+        expected_fields = {
+            "id", "name", "email", "username", "first_name", "last_name",
+            "phone_number", "country", "timezone", "role", "google_picture",
+            "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
+        }
+        self.assertEqual(set(response.data.keys()), expected_fields)
+        self.assertEqual(response.data["first_name"], "UpdatedFirst")
+        self.assertEqual(response.data["last_name"], "UpdatedLast")
+        self.assertEqual(response.data["phone_number"], "+1234567890")
+        self.assertEqual(response.data["country"], "USA")
+        self.assertIs(response.data["marketing_opt_in"], True)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "UpdatedFirst")
+        self.assertEqual(self.user.last_name, "UpdatedLast")
+
+    def test_patch_ignores_forbidden_fields(self):
+        """role, email_verified, is_active etc. must not be updatable via PATCH."""
+        original_role = self.user.role
+        original_email_verified = self.user.email_verified
+        original_is_active = self.user.is_active
+        response = self.client.patch(
+            self.url,
+            {
+                "first_name": "OnlyThis",
+                "role": "tasc_admin",
+                "email_verified": False,
+                "is_active": False,
+            },
+            format="json",
+            **self._auth_header(),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["first_name"], "OnlyThis")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "OnlyThis")
+        self.assertEqual(self.user.role, original_role)
+        self.assertEqual(self.user.email_verified, original_email_verified)
+        self.assertEqual(self.user.is_active, original_is_active)
+
+    def test_patch_empty_body_returns_200(self):
+        """PATCH with empty body (partial) is valid and returns current profile."""
+        response = self.client.patch(
+            self.url, {}, format="json", **self._auth_header()
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], self.user.email)
 
 
 class GoogleOAuthLinkTests(TestCase):
