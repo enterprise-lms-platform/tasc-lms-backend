@@ -35,7 +35,9 @@ from .serializers import (
 
 from .tokens import email_verification_token
 
-from apps.notifications.services import send_tasc_email
+from apps.notifications.services import send_tasc_email, send_account_locked_email
+from django.utils import timezone
+from datetime import timedelta
 
 
 User = get_user_model()
@@ -94,8 +96,37 @@ class LoginView(TokenObtainPairView):
         ],
     )
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        email = (request.data.get("email") or "").strip().lower()
+        user_by_email = User.objects.filter(email__iexact=email).first() if email else None
+
+        # B) If user exists and is locked, return 403 (avoid revealing valid email)
+        if user_by_email and getattr(user_by_email, "account_locked_until", None):
+            if timezone.now() < user_by_email.account_locked_until:
+                return Response(
+                    {"detail": "Account locked. Try again later or reset your password."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+        except serializers.ValidationError:
+            # C) Invalid credentials: increment and possibly lock (only if we have a user)
+            if user_by_email:
+                user_by_email.failed_login_attempts = (getattr(user_by_email, "failed_login_attempts", 0) or 0) + 1
+                max_attempts = getattr(settings, "MAX_LOGIN_ATTEMPTS", 5)
+                if user_by_email.failed_login_attempts >= max_attempts:
+                    lock_minutes = getattr(settings, "ACCOUNT_LOCK_MINUTES", 15)
+                    user_by_email.account_locked_until = timezone.now() + timedelta(minutes=lock_minutes)
+                    user_by_email.failed_login_attempts = 0
+                    user_by_email.save(update_fields=["failed_login_attempts", "account_locked_until"])
+                    send_account_locked_email(user_by_email)
+                else:
+                    user_by_email.save(update_fields=["failed_login_attempts"])
+            return Response(
+                {"detail": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         user = serializer.user
 
@@ -109,6 +140,11 @@ class LoginView(TokenObtainPairView):
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # D) Successful login: clear lockout fields
+        user.failed_login_attempts = 0
+        user.account_locked_until = None
+        user.save(update_fields=["failed_login_attempts", "account_locked_until"])
 
         tokens = serializer.validated_data  # {"refresh": "...", "access": "..."}
 

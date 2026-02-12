@@ -1,7 +1,9 @@
 from unittest.mock import patch, MagicMock
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -255,3 +257,95 @@ class GoogleOAuthLinkTests(TestCase):
             # The linked user must be request.user, not attacker@evil.com
             self.user.refresh_from_db()
             self.assertEqual(self.user.google_id, "another-google-id")
+
+
+@override_settings(MAX_LOGIN_ATTEMPTS=5, ACCOUNT_LOCK_MINUTES=15)
+class LoginLockoutTests(TestCase):
+    """Tests for login lockout after failed attempts (US-015)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.login_url = "/api/v1/auth/login/"
+        self.user = User.objects.create_user(
+            username="lockuser",
+            email="lock@example.com",
+            password="correctpass",
+            email_verified=True,
+            is_active=True,
+        )
+
+    def test_lock_after_five_failed_attempts(self):
+        """After 5 failed attempts account is locked and 6th attempt returns 403."""
+        for _ in range(5):
+            response = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+            self.assertIn("detail", response.data)
+
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.account_locked_until)
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "lock@example.com", "password": "wrong"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Account locked", response.data["detail"])
+
+    def test_locked_account_blocks_login_until_after_lock_expiry(self):
+        """Locked account returns 403; after lock expires wrong password returns 401."""
+        self.user.failed_login_attempts = 5
+        self.user.account_locked_until = timezone.now() + timedelta(minutes=15)
+        self.user.save(update_fields=["failed_login_attempts", "account_locked_until"])
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "lock@example.com", "password": "correctpass"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Expire the lock
+        self.user.account_locked_until = timezone.now() - timedelta(minutes=1)
+        self.user.save(update_fields=["account_locked_until"])
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "lock@example.com", "password": "correctpass"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_successful_login_resets_counters(self):
+        """Successful login clears failed_login_attempts and account_locked_until."""
+        self.user.failed_login_attempts = 3
+        self.user.account_locked_until = None
+        self.user.save(update_fields=["failed_login_attempts", "account_locked_until"])
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "lock@example.com", "password": "correctpass"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.failed_login_attempts, 0)
+        self.assertIsNone(self.user.account_locked_until)
+
+    @patch("apps.accounts.auth_views.send_account_locked_email")
+    def test_email_sent_on_lock(self, mock_send):
+        """When lock triggers, send_account_locked_email is called."""
+        for _ in range(5):
+            self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+
+        self.assertEqual(mock_send.call_count, 1)
+        self.assertEqual(mock_send.call_args[0][0].pk, self.user.pk)

@@ -44,6 +44,10 @@ class User(AbstractUser):
     email_verified = models.BooleanField(default=False)
     must_set_password = models.BooleanField(default=False)
 
+    # login lockout (US-015)
+    failed_login_attempts = models.PositiveSmallIntegerField(default=0)
+    account_locked_until = models.DateTimeField(null=True, blank=True)
+
     def save(self, *args, **kwargs):
         # Ensure Django superusers are always treated as platform super admins
         if self.is_superuser:
