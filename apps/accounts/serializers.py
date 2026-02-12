@@ -82,8 +82,6 @@ class UserMeSerializer(serializers.ModelSerializer):
             "terms_accepted_at",
             "email_verified",
             "is_active",
-            "is_staff",
-            "is_superuser",
         ]
 
     def get_name(self, obj) -> str:

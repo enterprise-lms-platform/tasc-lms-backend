@@ -34,9 +34,6 @@ User = get_user_model()
                 "email": "user@example.com",
                 "username": "parker",
                 "is_active": True,
-                "is_staff": False,
-                "is_superuser": False,
-                "is_authenticated": True,
             },
             response_only=True,
         ),
@@ -49,6 +46,7 @@ User = get_user_model()
     ],
 )
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def me(request):
     return Response(UserMeSerializer(request.user).data)
 
