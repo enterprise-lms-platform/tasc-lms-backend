@@ -18,12 +18,12 @@ class Payment(models.Model):
     ]
     
     PAYMENT_METHODS = [
-        ('paypal', 'PayPal')
+        ('flutterwave', 'Flutterwave')
     ]
     
     CURRENCIES = [
         ('USD', 'US Dollar'),
-        ('KES', 'Kenyan Shilling'),
+        ('UGX', 'Ugandan Shilling'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

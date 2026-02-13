@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    WebhookView,
     InvoiceViewSet,
     TransactionViewSet,
     PaymentMethodViewSet,
@@ -16,6 +17,12 @@ router.register(r'payment-methods', PaymentMethodViewSet, basename='payment-meth
 router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-subscription')
 
+
 urlpatterns = [
     path('', include(router.urls)),
+    path('webhook/<str:provider>/', WebhookView.as_view(), name='payment-webhook'),
+    
+    # Flutterwave specific webhook
+    path('webhook/flutterwave/', WebhookView.as_view(), {'provider': 'flutterwave'}, 
+         name='flutterwave-webhook'),
 ]

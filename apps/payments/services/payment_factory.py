@@ -1,5 +1,5 @@
 from django.conf import settings
-from .paypal_service import PayPalService
+from .flutterwave_service import FlutterwaveService
 
 class PaymentFactory:
     """Factory pattern to create payment service instances"""
@@ -7,7 +7,7 @@ class PaymentFactory:
     @staticmethod
     def get_service(provider):
         services = {
-            'paypal': PayPalService,
+            'paypal': FlutterwaveService,
         }
         
         if provider not in services:
