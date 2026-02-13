@@ -1,14 +1,14 @@
 # Core Django & Database
 Django==5.1.5
 djangorestframework==3.16.1
-psycopg-binary==3.3.2
+psycopg2-binary==2.9.9
 sqlparse==0.5.5
 
 # Authentication & Security
 djangorestframework-simplejwt==5.5.1
 PyJWT==2.11.0
 django-allauth==65.14.0
-cryptography==42.0.8
+cryptography==45.0.6
 
 # API Documentation
 drf-spectacular==0.28.0
@@ -60,4 +60,6 @@ Pillow==11.1.0
 
 # HTTP & Email
 requests==2.32.3
-# sendgrid==6.12.5
+sendgrid==6.12.5
+
+gunicorn==21.2.0

@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
@@ -7,6 +9,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -97,6 +101,15 @@ def google_oauth_login(request):
             )
         
         google_data = google_response.json()
+        
+        # Verify audience (client ID) if configured
+        if hasattr(settings, 'GOOGLE_CLIENT_ID') and settings.GOOGLE_CLIENT_ID:
+            token_aud = google_data.get('aud')
+            if token_aud != settings.GOOGLE_CLIENT_ID:
+                return Response(
+                    {'error': 'Invalid token audience. Token was not issued for this application.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Extract user information
         google_id = google_data.get('sub')
@@ -192,60 +205,44 @@ def google_oauth_login(request):
 @extend_schema(
     tags=['Accounts'],
     summary='Link Google Account',
-    description='Link a Google OAuth account to an existing user account.',
+    description='Link a Google OAuth account to the authenticated user.',
     request={
         'application/json': {
             'type': 'object',
             'properties': {
-                'id_token': {'type': 'string'},
-                'email': {'type': 'string', 'format': 'email'},
-                'password': {'type': 'string'},
+                'id_token': {'type': 'string', 'description': 'Google OAuth ID token'},
             },
-            'required': ['id_token', 'email', 'password'],
+            'required': ['id_token'],
         }
     },
     responses={
         200: OpenApiResponse(description='Account linked successfully'),
-        400: OpenApiResponse(description='Invalid request or credentials'),
-        401: OpenApiResponse(description='Invalid email or password'),
-        500: OpenApiResponse(description='Server error'),
+        400: OpenApiResponse(description='Invalid request or token'),
     },
 )
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def google_oauth_link(request):
     """
     Link Google Account Endpoint.
     
     Expects a JSON body with:
     {
-        "id_token": "google_id_token",
-        "email": "user@example.com",
-        "password": "user_password"
+        "id_token": "google_id_token"
     }
     
-    Links a Google account to an existing user account.
+    Links a Google account to the currently authenticated user.
     """
     id_token = request.data.get('id_token')
-    email = request.data.get('email')
-    password = request.data.get('password')
     
-    if not id_token or not email or not password:
+    if not id_token:
         return Response(
-            {'error': 'ID token, email, and password are required'},
+            {'error': 'ID token is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
     try:
-        # Verify user credentials
-        user = User.objects.get(email__iexact=email)
-        if not user.check_password(password):
-            return Response(
-                {'error': 'Invalid email or password'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Verify Google ID token
+        # Verify Google ID token (same verification as google_oauth_login)
         google_response = requests.get(
             f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
         )
@@ -257,17 +254,28 @@ def google_oauth_link(request):
             )
         
         google_data = google_response.json()
+        
+        # Verify audience (client ID) if configured
+        if hasattr(settings, 'GOOGLE_CLIENT_ID') and settings.GOOGLE_CLIENT_ID:
+            token_aud = google_data.get('aud')
+            if token_aud != settings.GOOGLE_CLIENT_ID:
+                return Response(
+                    {'error': 'Invalid token audience.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         google_id = google_data.get('sub')
         picture = google_data.get('picture')
         
         # Check if Google ID is already linked to another account
+        user = request.user
         if User.objects.filter(google_id=google_id).exclude(id=user.id).exists():
             return Response(
                 {'error': 'Google account is already linked to another account'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Link Google account
+        # Link Google account to the authenticated user
         user.google_id = google_id
         user.google_picture = picture
         if not user.avatar:
@@ -284,14 +292,10 @@ def google_oauth_link(request):
             }
         }, status=status.HTTP_200_OK)
     
-    except User.DoesNotExist:
+    except Exception:
+        logger.exception("Failed to link Google account for user %s", request.user.id)
         return Response(
-            {'error': 'Invalid email or password'},
-            status=status.HTTP_401_UNAUTHORIZED
-        )
-    except Exception as e:
-        return Response(
-            {'error': f'Failed to link account: {str(e)}'},
+            {'error': 'Failed to link Google account. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

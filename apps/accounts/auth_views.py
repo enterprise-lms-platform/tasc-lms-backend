@@ -29,12 +29,15 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
-    LogoutSerializer
+    LogoutSerializer,
+    SetPasswordFromInviteSerializer,
 )
 
 from .tokens import email_verification_token
 
-from apps.notifications.services import send_tasc_email
+from apps.notifications.services import send_tasc_email, send_account_locked_email
+from django.utils import timezone
+from datetime import timedelta
 
 
 User = get_user_model()
@@ -93,8 +96,37 @@ class LoginView(TokenObtainPairView):
         ],
     )
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        email = (request.data.get("email") or "").strip().lower()
+        user_by_email = User.objects.filter(email__iexact=email).first() if email else None
+
+        # B) If user exists and is locked, return 403 (avoid revealing valid email)
+        if user_by_email and getattr(user_by_email, "account_locked_until", None):
+            if timezone.now() < user_by_email.account_locked_until:
+                return Response(
+                    {"detail": "Account locked. Try again later or reset your password."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+        except serializers.ValidationError:
+            # C) Invalid credentials: increment and possibly lock (only if we have a user)
+            if user_by_email:
+                user_by_email.failed_login_attempts = (getattr(user_by_email, "failed_login_attempts", 0) or 0) + 1
+                max_attempts = getattr(settings, "MAX_LOGIN_ATTEMPTS", 5)
+                if user_by_email.failed_login_attempts >= max_attempts:
+                    lock_minutes = getattr(settings, "ACCOUNT_LOCK_MINUTES", 15)
+                    user_by_email.account_locked_until = timezone.now() + timedelta(minutes=lock_minutes)
+                    user_by_email.failed_login_attempts = 0
+                    user_by_email.save(update_fields=["failed_login_attempts", "account_locked_until"])
+                    send_account_locked_email(user_by_email)
+                else:
+                    user_by_email.save(update_fields=["failed_login_attempts"])
+            return Response(
+                {"detail": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         user = serializer.user
 
@@ -108,6 +140,11 @@ class LoginView(TokenObtainPairView):
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # D) Successful login: clear lockout fields
+        user.failed_login_attempts = 0
+        user.account_locked_until = None
+        user.save(update_fields=["failed_login_attempts", "account_locked_until"])
 
         tokens = serializer.validated_data  # {"refresh": "...", "access": "..."}
 
@@ -198,10 +235,8 @@ class RegisterView(APIView):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
 
-        verify_path = reverse(
-            "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
-        )
-        verify_url = request.build_absolute_uri(verify_path)
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
 
         send_tasc_email(
             subject="Verify your TASC LMS account",
@@ -335,8 +370,8 @@ def password_reset_request(request):
         token = default_token_generator.make_token(user)
 
         # Use env-configurable frontend base URL if you have it; fallback to a sane default
-        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:3000")
-        reset_link = f"{frontend_base}/reset-password/{uidb64}/{token}/"
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        reset_link = f"{frontend_base}/reset-password/{uidb64}/{token}"
 
         # subject = "Reset your password"
         # message = (
@@ -354,7 +389,7 @@ def password_reset_request(request):
             template="emails/auth/password_reset.html",
             context={
                 "user": user,
-                "reset_link": reset_link,
+                "reset_url": reset_link,
             },
         )
 
@@ -479,10 +514,8 @@ def resend_verification_email(request):
         uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
         token = email_verification_token.make_token(user)
 
-        verify_path = reverse(
-            "accounts-email-verify", kwargs={"uidb64": uidb64, "token": token}
-        )
-        verify_url = request.build_absolute_uri(verify_path)
+        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
 
         send_tasc_email(
             subject="Verify your TASC LMS account",
@@ -592,3 +625,51 @@ def logout(request):
         return Response({"refresh": ["Invalid or expired refresh token."]}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({"detail": "Logged out successfully."}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Set password from invite",
+    description="Invited user sets their password using the invitation link token.",
+    parameters=[
+        OpenApiParameter(name="uidb64", type=str, location=OpenApiParameter.PATH),
+        OpenApiParameter(name="token", type=str, location=OpenApiParameter.PATH),
+    ],
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "new_password": {"type": "string"},
+                "confirm_password": {"type": "string"},
+            },
+            "required": ["new_password", "confirm_password"],
+        }
+    },
+    responses={
+        200: {"type": "object", "properties": {"detail": {"type": "string"}}},
+        400: {"description": "Invalid token or validation error"},
+    },
+)
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def set_password_from_invite(request, uidb64, token):
+    """
+    Set password for invited user using uid + token.
+    """
+    payload = {
+        **request.data,
+        "uidb64": uidb64,
+        "token": token,
+    }
+    serializer = SetPasswordFromInviteSerializer(data=payload)
+    serializer.is_valid(raise_exception=True)
+
+    user = serializer.validated_data["user"]
+    user.set_password(serializer.validated_data["new_password"])
+    user.must_set_password = False
+    user.save(update_fields=["password", "must_set_password"])
+
+    return Response(
+        {"detail": "Password set successfully. You can now login."},
+        status=status.HTTP_200_OK,
+    )

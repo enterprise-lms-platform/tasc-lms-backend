@@ -1,6 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .views import me, verify_email
+from .views import me, verify_email, invite_user
 from .auth_views import (
     LoginView,
     RefreshView,
@@ -11,6 +11,13 @@ from .auth_views import (
     resend_verification_email,
     change_password,
     logout,
+    set_password_from_invite,
+)
+from .google_auth_views import (
+    google_oauth_login,
+    google_oauth_link,
+    google_oauth_unlink,
+    google_oauth_status,
 )
 
 urlpatterns = [
@@ -28,4 +35,14 @@ urlpatterns = [
     path("resend-verification/", resend_verification_email, name="resend-verification"),
     path("change-password/", change_password, name="change-password"),
     path("logout/", logout, name="logout"),
+    path(
+        "set-password/<uidb64>/<token>/",
+        set_password_from_invite,
+        name="set-password-from-invite",
+    ),
+    # Google OAuth endpoints
+    path("google/login/", google_oauth_login, name="google-oauth-login"),
+    path("google/link/", google_oauth_link, name="google-oauth-link"),
+    path("google/unlink/", google_oauth_unlink, name="google-oauth-unlink"),
+    path("google/status/", google_oauth_status, name="google-oauth-status"),
 ]

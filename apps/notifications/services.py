@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+from datetime import datetime
 from typing import Any
 
 from django.conf import settings
@@ -9,6 +10,21 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
+
+
+def send_account_locked_email(user) -> None:
+    """
+    Send branded notification when account is locked after too many failed logins.
+    Includes a link to the frontend password reset page.
+    """
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    reset_url = f"{frontend_base}/passwordreset"
+    send_tasc_email(
+        subject="Account temporarily locked",
+        to=[user.email],
+        template="emails/auth/account_locked.html",
+        context={"user": user, "reset_url": reset_url},
+    )
 
 
 def send_tasc_email(
@@ -35,7 +51,14 @@ def send_tasc_email(
     if not enabled:
         return
 
-    html = render_to_string(template, context)
+    # Inject support_email and year for base template
+    enriched_context = {
+        "support_email": getattr(settings, "SUPPORT_EMAIL", None) or getattr(settings, "DEFAULT_FROM_EMAIL", "support@tasc-lms.com"),
+        "year": datetime.now().year,
+        **context,
+    }
+
+    html = render_to_string(template, enriched_context)
     text = strip_tags(html)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "") or ""

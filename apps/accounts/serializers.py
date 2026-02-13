@@ -77,12 +77,11 @@ class UserMeSerializer(serializers.ModelSerializer):
             "country",
             "timezone",
             "role",
+            "google_picture",
             "marketing_opt_in",
             "terms_accepted_at",
             "email_verified",
             "is_active",
-            "is_staff",
-            "is_superuser",
         ]
 
     def get_name(self, obj) -> str:
@@ -90,6 +89,35 @@ class UserMeSerializer(serializers.ModelSerializer):
         if full:
             return full
         return getattr(obj, "username", obj.email)
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """Editable profile fields only; used for PATCH /api/v1/auth/me/."""
+
+    class Meta:
+        model = User
+        fields = [
+            "first_name",
+            "last_name",
+            "phone_number",
+            "country",
+            "timezone",
+            "date_of_birth",
+            "avatar",
+            "bio",
+            "marketing_opt_in",
+        ]
+        extra_kwargs = {
+            "first_name": {"required": False, "allow_blank": True},
+            "last_name": {"required": False, "allow_blank": True},
+            "phone_number": {"required": False, "allow_blank": True, "max_length": 32},
+            "country": {"required": False, "allow_blank": True, "max_length": 80},
+            "timezone": {"required": False, "allow_blank": True, "max_length": 80},
+            "date_of_birth": {"required": False, "allow_null": True},
+            "avatar": {"required": False, "allow_blank": True, "allow_null": True},
+            "bio": {"required": False, "allow_blank": True},
+            "marketing_opt_in": {"required": False},
+        }
 
 
 class AuthTokensSerializer(serializers.Serializer):
@@ -230,3 +258,51 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField()
+
+
+class InviteUserSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    role = serializers.ChoiceField(choices=User.Role.choices)
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_role(self, value):
+        """Prevent inviting users as learner or tasc_admin."""
+        if value in ["learner", "tasc_admin"]:
+            raise serializers.ValidationError(
+                f"Cannot invite users with role '{value}'. "
+                "Learners should self-register, and TASC Admins require superuser privileges."
+            )
+        return value
+
+
+class SetPasswordFromInviteSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        # Validate password strength
+        validate_password(attrs["new_password"])
+
+        # Resolve user
+        try:
+            uid = force_str(urlsafe_base64_decode(attrs["uidb64"]))
+            user = User.objects.get(pk=uid)
+        except Exception:
+            raise serializers.ValidationError({"uidb64": "Invalid user identifier."})
+
+        if not default_token_generator.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Invalid or expired token."})
+
+        attrs["user"] = user
+        return attrs
