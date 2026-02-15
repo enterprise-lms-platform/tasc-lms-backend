@@ -20,9 +20,15 @@ router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-s
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('webhook/<str:provider>/', WebhookView.as_view(), name='payment-webhook'),
     
-    # Flutterwave specific webhook
-    path('webhook/flutterwave/', WebhookView.as_view(), {'provider': 'flutterwave'}, 
+    # FIXED: Add actions mapping for WebhookView
+    path('webhook/<str:provider>/', 
+         WebhookView.as_view({'post': 'webhook'}),  # Map POST to webhook action
+         name='payment-webhook'),
+    
+    # FIXED: Flutterwave specific webhook - use the same approach
+    path('webhook/flutterwave/', 
+         WebhookView.as_view({'post': 'webhook'}),  # Map POST to webhook action
+         {'provider': 'flutterwave'},  # This passes provider as a kwarg to the view
          name='flutterwave-webhook'),
 ]

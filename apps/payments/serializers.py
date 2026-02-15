@@ -40,7 +40,7 @@ class CreatePaymentSerializer(serializers.Serializer):
     
     amount = serializers.DecimalField(
         max_digits=10, decimal_places=2, 
-        min_value=0.01,
+        min_value=(0.01),
         required=False
     )
     description = serializers.CharField(required=False, allow_blank=True)
