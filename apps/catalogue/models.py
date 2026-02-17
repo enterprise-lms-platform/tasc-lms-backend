@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -194,3 +195,101 @@ class Tag(models.Model):
 
     def __str__(self):
         return self.name
+
+class LiveStreamSession(models.Model):
+    """
+    LiveStreamSession represents a live session for a course that an instructor can schedule and manage.
+    """
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('live', 'Live'),
+        ('completed', 'Completed'),
+        ('canceled', 'Canceled'),
+    ]
+    PLATFORM_CHOICES = [
+        ('zoom', 'Zoom'),
+        ('google_meet', 'Google Meet'),
+        ('other', 'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='live_stream_sessions')
+
+    instructor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='live_stream_sessions'
+    )
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    duration_minutes = models.PositiveIntegerField(
+        help_text="Duration in minutes",
+        validators=[MinValueValidator(15), MaxValueValidator(480)]  # 15 min to 8 hours
+    )
+
+    timezone = models.CharField(max_length=50, default='UTC')
+
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default='zoom')
+    
+    meeting_url = models.URLField(blank=True, help_text="URL for learners to join")
+    instructor_url = models.URLField(blank=True, help_text="URL for instructor to start")
+
+    platform_meeting_id = models.CharField(max_length=255, blank=True)
+    platform_password = models.CharField(max_length=255, blank=True)
+
+     # Status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    
+    # Recording
+    recording_url = models.URLField(blank=True, help_text="URL of recorded session")
+    
+    # Calendar Integration
+    calendar_event_id = models.CharField(
+        max_length=255, 
+        blank=True,
+        help_text="Google Calendar or other calendar event ID"
+    )
+
+    calendar_provider = models.CharField(
+        max_length=50, 
+        blank=True,
+        help_text="google_calendar, outlook, etc."
+    )
+    
+    # Notifications
+    reminder_sent = models.BooleanField(default=False)
+
+     # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_livestreams'
+    )
+    
+    # Settings
+    max_attendees = models.PositiveIntegerField(null=True, blank=True)
+    allow_chat = models.BooleanField(default=True)
+    allow_questions = models.BooleanField(default=True)
+    mute_on_entry = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['start_time']
+        indexes = [
+            models.Index(fields=['course', 'status']),
+            models.Index(fields=['instructor', 'start_time']),
+            models.Index(fields=['start_time', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.course.title} - {self.title} ({self.start_time})"
+
+
