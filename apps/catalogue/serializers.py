@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from django.utils.text import slugify
+
 from .models import (
     Category, Course, Session, Tag
 )
@@ -124,12 +126,13 @@ class CourseDetailSerializer(CourseListSerializer):
 
 class CourseCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating courses."""
+    slug = serializers.SlugField(required=False, allow_blank=True)
     tags = serializers.PrimaryKeyRelatedField(
         many=True,
         queryset=Tag.objects.all(),
         required=False
     )
-    
+
     class Meta:
         model = Course
         fields = [
@@ -143,9 +146,25 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'status', 'featured',
             'meta_title', 'meta_description', 'meta_keywords'
         ]
-    
+
+    def _unique_slug(self, base):
+        if not base:
+            base = 'course'
+        slug = base
+        n = 2
+        while Course.objects.filter(slug=slug).exists():
+            slug = f'{base}-{n}'
+            n += 1
+        return slug
+
     def create(self, validated_data):
         tags_data = validated_data.pop('tags', [])
+        slug = validated_data.get('slug') or ''
+        if not slug.strip():
+            slug = self._unique_slug(slugify(validated_data.get('title', '') or 'course'))
+        else:
+            slug = self._unique_slug(slugify(slug))
+        validated_data['slug'] = slug
         course = Course.objects.create(**validated_data)
         if tags_data:
             course.tags.set(tags_data)
@@ -153,6 +172,8 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
     
     def update(self, instance, validated_data):
         tags_data = validated_data.pop('tags', None)
+        if 'slug' in validated_data and not (validated_data.get('slug') or '').strip():
+            validated_data.pop('slug')
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
