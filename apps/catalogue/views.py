@@ -3,16 +3,22 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.contrib.auth import get_user_model
 
 from .models import (
     Category, Course, Session, Tag
 )
+from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
     SessionSerializer, SessionCreateSerializer,
     CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer
 )
+
+User = get_user_model()
 
 
 @extend_schema(
@@ -70,33 +76,44 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
 class CourseViewSet(viewsets.ModelViewSet):
     """ViewSet for managing courses."""
     queryset = Course.objects.all()
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditCourse, CanDeleteCourse]
+
     def get_serializer_class(self):
         if self.action == 'list':
             return CourseListSerializer
         elif self.action in ['create', 'update', 'partial_update']:
             return CourseCreateSerializer
         return CourseDetailSerializer
-    
+
     def get_queryset(self):
         queryset = Course.objects.all()
         category = self.request.query_params.get('category', None)
         instructor = self.request.query_params.get('instructor', None)
         tag = self.request.query_params.get('tag', None)
+        status_param = self.request.query_params.get('status', None)
         is_published = self.request.query_params.get('is_published', None)
-        
+
         if category:
             queryset = queryset.filter(category_id=category)
         if instructor:
             queryset = queryset.filter(instructor_id=instructor)
         if tag:
             queryset = queryset.filter(tags__name=tag)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         if is_published is not None:
-            queryset = queryset.filter(is_published=is_published.lower() == 'true')
-        
+            if is_published.lower() == 'true':
+                queryset = queryset.filter(status=Course.Status.PUBLISHED)
+            else:
+                queryset = queryset.exclude(status=Course.Status.PUBLISHED)
+
+        if self.action in ('update', 'partial_update', 'destroy'):
+            role = getattr(self.request.user, 'role', None)
+            if role == User.Role.INSTRUCTOR:
+                queryset = queryset.filter(instructor_id=self.request.user.id)
+
         return queryset.distinct()
-    
+
     @extend_schema(
         summary='List courses',
         description='Returns paginated list of courses with filtering options',
@@ -104,45 +121,197 @@ class CourseViewSet(viewsets.ModelViewSet):
             OpenApiParameter(name='category', type=int, description='Filter by category ID'),
             OpenApiParameter(name='instructor', type=int, description='Filter by instructor ID'),
             OpenApiParameter(name='tag', type=str, description='Filter by tag name'),
-            OpenApiParameter(name='is_published', type=bool, description='Filter by published status'),
+            OpenApiParameter(name='status', type=str, description='Filter by status (draft, published, archived)'),
+            OpenApiParameter(name='is_published', type=bool, description='Filter by published status (true => published only, false => exclude published)'),
         ],
         responses={200: CourseListSerializer},
+        examples=[
+            OpenApiExample(
+                'Course list (minimal)',
+                value={
+                    'count': 1,
+                    'next': None,
+                    'previous': None,
+                    'results': [
+                        {
+                            'id': 1,
+                            'title': 'Course 001',
+                            'slug': 'course-001',
+                            'short_description': 'Short summary',
+                            'category': {'id': 1, 'name': 'Web Dev', 'slug': 'web-dev'},
+                            'level': 'beginner',
+                            'price': '0.00',
+                            'status': 'draft',
+                            'instructor_name': 'Jane Doe',
+                        }
+                    ],
+                },
+                response_only=True,
+            ),
+        ],
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
-    
+
+    def perform_create(self, serializer):
+        save_kwargs = {'created_by': self.request.user}
+        role = getattr(self.request.user, 'role', None)
+        if role == User.Role.INSTRUCTOR:
+            save_kwargs['instructor'] = self.request.user
+        elif serializer.validated_data.get('instructor') is None:
+            save_kwargs['instructor'] = self.request.user
+        instance = serializer.save(**save_kwargs)
+        if instance.status == Course.Status.PUBLISHED and instance.published_at is None:
+            instance.published_at = timezone.now()
+            instance.save(update_fields=['published_at'])
+
     @extend_schema(
         summary='Create course',
         description='Create a new course. Requires instructor or admin permissions.',
         request=CourseCreateSerializer,
         responses={201: CourseDetailSerializer},
+        examples=[
+            OpenApiExample(
+                'Minimal course create',
+                value={
+                    'title': 'Course 001',
+                    'description': 'Intro course description',
+                    'short_description': 'Short summary',
+                    'category': 1,
+                    'level': 'beginner',
+                    'price': '0.00',
+                    'currency': 'USD',
+                    'discount_percentage': 0,
+                    'duration_hours': 1,
+                    'duration_weeks': 1,
+                    'total_sessions': 1,
+                    'status': 'draft',
+                    'featured': False,
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Course created',
+                value={
+                    'id': 1,
+                    'title': 'Course 001',
+                    'slug': 'course-001',
+                    'category': {'id': 1, 'name': 'Web Dev', 'slug': 'web-dev'},
+                    'level': 'beginner',
+                    'price': '0.00',
+                    'status': 'draft',
+                    'instructor_name': 'Jane Doe',
+                },
+                response_only=True,
+            ),
+        ],
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
-    
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        detail_serializer = CourseDetailSerializer(serializer.instance, context=self.get_serializer_context())
+        data = detail_serializer.data
+        headers = self.get_success_headers(data)
+        return Response(data, status=status.HTTP_201_CREATED, headers=headers)
+
     @extend_schema(
         summary='Get course details',
         description='Returns detailed information about a course including sessions',
         responses={200: CourseDetailSerializer},
+        examples=[
+            OpenApiExample(
+                'Course detail (minimal)',
+                value={
+                    'id': 1,
+                    'title': 'Course 001',
+                    'slug': 'course-001',
+                    'short_description': 'Short summary',
+                    'description': 'Intro course description',
+                    'category': {'id': 1, 'name': 'Web Dev', 'slug': 'web-dev'},
+                    'level': 'beginner',
+                    'price': '0.00',
+                    'status': 'draft',
+                    'instructor_name': 'Jane Doe',
+                },
+                response_only=True,
+            ),
+        ],
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
-    
+
     @extend_schema(
         summary='Update course',
         description='Update course information. Only instructor or admin can update.',
         request=CourseCreateSerializer,
         responses={200: CourseDetailSerializer},
+        examples=[
+            OpenApiExample(
+                'Minimal course update',
+                value={
+                    'title': 'Course 001 (Updated)',
+                    'short_description': 'Updated short summary',
+                    'status': 'draft',
+                },
+                request_only=True,
+            ),
+        ],
     )
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)
-    
+
+    @extend_schema(
+        summary='Partially update course',
+        description='Patch course fields. Only instructor or admin can update.',
+        request=CourseCreateSerializer,
+        responses={200: CourseDetailSerializer},
+        examples=[
+            OpenApiExample(
+                'Minimal course patch',
+                value={
+                    'title': 'Course 001 (Updated)',
+                    'short_description': 'Updated short summary',
+                    'status': 'draft',
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Course patched (minimal)',
+                value={
+                    'id': 1,
+                    'title': 'Course 001 (Updated)',
+                    'slug': 'course-001',
+                    'short_description': 'Updated short summary',
+                    'status': 'draft',
+                },
+                response_only=True,
+            ),
+        ],
+    )
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
     @extend_schema(
         summary='Delete course',
-        description='Delete a course. Only instructor or admin can delete.',
+        description='Delete a course. Only LMS Manager or TASC Admin can delete.',
         responses={204: None},
+        examples=[
+            OpenApiExample(
+                'Delete forbidden',
+                value={'detail': 'Only LMS Manager or TASC Admin can delete courses.'},
+                response_only=True,
+            ),
+            OpenApiExample(
+                'Delete success',
+                value=None,
+                response_only=True,
+            ),
+        ],
     )
     def destroy(self, request, *args, **kwargs):
+        if getattr(request.user, 'role', None) not in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            raise PermissionDenied('Only LMS Manager or TASC Admin can delete courses.')
         return super().destroy(request, *args, **kwargs)
 
 
