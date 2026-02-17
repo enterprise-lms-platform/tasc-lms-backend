@@ -809,33 +809,3 @@ class WebhookView(viewsets.GenericViewSet):
                 {'error': result.get('message', 'Webhook processing failed')},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-@extend_schema(
-    tags=['Payments - Webhooks'],
-    description='Handle Flutterwave webhooks',
-)
-class WebhookView(viewsets.GenericViewSet):
-    """Handle Flutterwave webhooks"""
-    permission_classes = [AllowAny]
-    serializer_class = PaymentWebhookSerializer
-    
-    @extend_schema(
-        summary='Flutterwave webhook',
-        description='Receive webhooks from Flutterwave',
-        request=PaymentWebhookSerializer,
-        responses={200: OpenApiResponse(description='Webhook received')},
-    )
-    @action(detail=False, methods=['post'], url_path='flutterwave')
-    def flutterwave_webhook(self, request):
-        """Handle Flutterwave webhook"""
-        service = FlutterwaveService()
-        result = service.handle_webhook(request)
-        
-        if result['success']:
-            return Response({'success': True})
-        else:
-            return Response(
-                {'error': result.get('message', 'Webhook processing failed')},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        

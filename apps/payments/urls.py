@@ -20,15 +20,14 @@ router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-s
 
 urlpatterns = [
     path('', include(router.urls)),
-    
-    # FIXED: Add actions mapping for WebhookView
-    path('webhook/<str:provider>/', 
-         WebhookView.as_view({'post': 'webhook'}),  # Map POST to webhook action
+    # FIX: Updated action mapping to 'flutterwave_webhook'
+    # Reason: The ViewSet defines flutterwave_webhook() as the @action method.
+    # Previous mapping to 'webhook' caused schema generation failure.
+    path('webhook/<str:provider>/',
+         WebhookView.as_view({'post': 'flutterwave_webhook'}),
          name='payment-webhook'),
-    
-    # FIXED: Flutterwave specific webhook - use the same approach
-    path('webhook/flutterwave/', 
-         WebhookView.as_view({'post': 'webhook'}),  # Map POST to webhook action
-         {'provider': 'flutterwave'},  # This passes provider as a kwarg to the view
+    path('webhook/flutterwave/',
+         WebhookView.as_view({'post': 'flutterwave_webhook'}),
+         {'provider': 'flutterwave'},
          name='flutterwave-webhook'),
 ]
