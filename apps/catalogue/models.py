@@ -1,3 +1,4 @@
+from time import timezone
 import uuid
 from django.db import models
 from django.conf import settings
@@ -293,3 +294,111 @@ class LiveStreamSession(models.Model):
         return f"{self.course.title} - {self.title} ({self.start_time})"
 
 
+    @property
+    def isis_live(self):
+        now = timezone.now()
+        return self.status == 'live' and self.start_time <= now <= self.end_time
+    
+    @property
+    def is_upcoming(self):
+        return self.status == 'scheduled' and self.start_time > timezone.now()
+    
+    @property
+    def has_ended(self):
+        return self.status == 'ended' or self.end_time < timezone.now()
+    
+    def start_session(self):
+        """Start the livestream session"""
+        self.status = 'live'
+        self.save()
+        
+        # Notify enrolled learners
+        self.notify_learners('Session started')
+
+    def end_session(self):
+        """End the livestream session"""
+        self.status = 'ended'
+        self.save()
+    
+    def cancel_session(self, reason=""):
+        """Cancel the session"""
+        self.status = 'cancelled'
+        self.save()
+        
+        # Notify enrolled learners
+        self.notify_learners('Session cancelled', reason)
+
+    # def notify_learners(self, event_type, message=""):
+    #     """Send notifications to enrolled learners"""
+    #     from .tasks import send_livestream_notification
+    #     # Implement async notification task
+    #     pass
+
+class LiveStreamAttendance(models.Model):
+    """
+    Track learner attendance in livestream sessions.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    session = models.ForeignKey(
+        LiveStreamSession,
+        on_delete=models.CASCADE,
+        related_name='attendance'
+    )
+     # Attendance tracking
+    joined_at = models.DateTimeField(null=True, blank=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.PositiveIntegerField(default=0)
+    
+    # Engagement
+    questions_asked = models.PositiveIntegerField(default=0)
+    chat_messages = models.PositiveIntegerField(default=0)
+    
+    # Certificate
+    certificate_issued = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ('session', 'learner')
+        indexes = [
+            models.Index(fields=['session', 'learner']),
+        ]
+    def __str__(self):
+        return f"{self.learner.username} - {self.session.title}"
+    
+    def mark_joined(self):
+        self.joined_at = timezone.now()
+        self.save()
+
+    def mark_left(self):
+        self.left_at = timezone.now()
+        if self.joined_at:
+            self.duration_seconds = int((self.left_at - self.joined_at).total_seconds())
+        self.save()
+
+class LiveStreamQuestion(models.Model):
+    """
+    Represents a question asked by a learner during a livestream session.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    session = models.ForeignKey(
+        LiveStreamSession,
+        on_delete=models.CASCADE,
+        related_name='questions'
+    )
+     # Question details
+    question_text = models.TextField()
+    asked_at = models.DateTimeField(auto_now_add=True)
+    
+    # Engagement
+    upvotes = models.PositiveIntegerField(default=0)
+    answered = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['asked_at']
+        indexes = [
+            models.Index(fields=['session', 'asked_at']),
+        ]
+
+    def __str__(self):
+        return f"Question in {self.session.title} at {self.asked_at}"
