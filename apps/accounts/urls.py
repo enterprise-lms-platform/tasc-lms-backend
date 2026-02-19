@@ -3,6 +3,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import me, verify_email, invite_user
 from .auth_views import (
     LoginView,
+    VerifyOTPView,
+    ResendOTPView,
     RefreshView,
     RegisterView,
     verify_email,
@@ -24,6 +26,8 @@ urlpatterns = [
     path("register/", RegisterView.as_view(), name="register"),
     path("verify-email/<uidb64>/<token>/", verify_email, name="accounts-email-verify"),
     path("login/", LoginView.as_view(), name="token_obtain_pair"),
+    path("login/verify-otp/", VerifyOTPView.as_view(), name="login-verify-otp"),
+    path("login/resend-otp/", ResendOTPView.as_view(), name="login-resend-otp"),
     path("refresh/", RefreshView.as_view(), name="token_refresh"),
     path("me/", me, name="me"),
     path("password-reset/", password_reset_request, name="password-reset"),
