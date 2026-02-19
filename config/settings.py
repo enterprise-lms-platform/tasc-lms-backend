@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "apps.learning",
     "apps.payments",
     "apps.notifications",
+    "apps.audit",
 ]
 
 # ----------------------------------------
@@ -232,6 +233,7 @@ SPECTACULAR_SETTINGS = {
         {"name": "Catalogue", "description": "Courses and categories"},
         {"name": "Learning", "description": "Enrollments, progress, certificates"},
         {"name": "Payments", "description": "Billing, invoices, transactions"},
+        {"name": "Superadmin - Audit Logs", "description": "Audit log viewing for admins"},
     ],
     "COMPONENT_SPLIT_REQUEST": True,
     "SECURITY": [{"bearerAuth": []}],

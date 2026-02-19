@@ -237,6 +237,18 @@ class VerifyOTPView(APIView):
         challenge.save(update_fields=["is_used"])
 
         user = challenge.user
+        # US-027: Log successful login (post-OTP verification)
+        from apps.audit.services import log_event
+
+        log_event(
+            actor=user,
+            action="login",
+            resource="user",
+            details="Logged in via email",
+            request=request,
+            resource_id=str(user.id),
+        )
+
         refresh = RefreshToken.for_user(user)
         data = {
             "refresh": str(refresh),
