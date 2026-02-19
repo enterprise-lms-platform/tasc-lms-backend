@@ -135,6 +135,7 @@ class MeEndpointTests(TestCase):
         self.assertEqual(response.data["email"], self.user.email)
 
 
+@override_settings(GOOGLE_CLIENT_ID="test-client-id")
 class GoogleOAuthLinkTests(TestCase):
     """Tests for POST /api/v1/auth/google/link/"""
 
@@ -209,6 +210,9 @@ class GoogleOAuthLinkTests(TestCase):
             json=MagicMock(return_value={
                 "sub": "existing-google-id",  # belongs to self.other_user
                 "picture": "https://example.com/pic.jpg",
+                "aud": "test-client-id",
+                "email": "other@example.com",
+                "email_verified": True,
             }),
         )
         response = self.client.post(
@@ -231,32 +235,35 @@ class GoogleOAuthLinkTests(TestCase):
             "Failed to link Google account. Please try again.",
         )
 
-    def test_no_email_password_in_request_body(self):
+    @patch("apps.accounts.google_auth_views.requests.get")
+    def test_no_email_password_in_request_body(self, mock_get):
         """Endpoint must NOT accept or require email/password fields."""
         # Even if email+password are sent, they should be ignored.
         # The endpoint should work with just id_token + auth header.
-        with patch("apps.accounts.google_auth_views.requests.get") as mock_get:
-            mock_get.return_value = MagicMock(
-                status_code=200,
-                json=MagicMock(return_value={
-                    "sub": "another-google-id",
-                    "picture": None,
-                }),
-            )
-            response = self.client.post(
-                self.url,
-                {
-                    "id_token": "tok",
-                    "email": "attacker@evil.com",
-                    "password": "doesntmatter",
-                },
-                format="json",
-                **self.auth_header,
-            )
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            # The linked user must be request.user, not attacker@evil.com
-            self.user.refresh_from_db()
-            self.assertEqual(self.user.google_id, "another-google-id")
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={
+                "sub": "another-google-id",
+                "picture": None,
+                "aud": "test-client-id",
+                "email": "link@example.com",
+                "email_verified": True,
+            }),
+        )
+        response = self.client.post(
+            self.url,
+            {
+                "id_token": "tok",
+                "email": "attacker@evil.com",
+                "password": "doesntmatter",
+            },
+            format="json",
+            **self.auth_header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # The linked user must be request.user, not attacker@evil.com
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.google_id, "another-google-id")
 
 
 @override_settings(MAX_LOGIN_ATTEMPTS=5, ACCOUNT_LOCK_MINUTES=15)
@@ -386,7 +393,6 @@ class LoginOTPTests(TestCase):
         self.verify_url = "/api/v1/auth/login/verify-otp/"
         self.resend_url = "/api/v1/auth/login/resend-otp/"
 
-    @patch("apps.accounts.auth_views.send_login_otp_email")
     def _login_get_challenge_id(self, mock_send_otp):
         """Helper: login with password, capture challenge_id and OTP from mock."""
         response = self.client.post(
