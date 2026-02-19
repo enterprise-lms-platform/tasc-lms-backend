@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
@@ -68,6 +70,33 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return self.email or self.username
+
+
+class LoginOTPChallenge(models.Model):
+    """
+    OTP challenge for mandatory email OTP on every login.
+    Stores hashed OTP only; plain OTP is never persisted.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="login_otp_challenges",
+    )
+    otp_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    send_count = models.PositiveSmallIntegerField(default=1)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "is_used"]),
+            models.Index(fields=["expires_at"]),
+        ]
 
 
 class Organization(models.Model):
