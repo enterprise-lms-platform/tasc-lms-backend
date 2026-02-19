@@ -349,3 +349,119 @@ class LoginLockoutTests(TestCase):
 
         self.assertEqual(mock_send.call_count, 1)
         self.assertEqual(mock_send.call_args[0][0].pk, self.user.pk)
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_successful_password_returns_mfa_required(self, mock_send_otp):
+        """Correct password returns mfa_required with challenge_id, not tokens."""
+        response = self.client.post(
+            self.login_url,
+            {"email": "lock@example.com", "password": "correctpass"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["mfa_required"])
+        self.assertEqual(response.data["method"], "email_otp")
+        self.assertIn("challenge_id", response.data)
+        self.assertEqual(response.data["expires_in"], 300)
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        mock_send_otp.assert_called_once()
+        self.assertEqual(mock_send_otp.call_args[0][0].pk, self.user.pk)
+        self.assertEqual(len(mock_send_otp.call_args[0][1]), 6)
+
+
+class LoginOTPTests(TestCase):
+    """Tests for email OTP login flow (verify-otp, resend-otp)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="otpuser",
+            email="otp@example.com",
+            password="testpass123",
+            email_verified=True,
+            is_active=True,
+        )
+        self.login_url = "/api/v1/auth/login/"
+        self.verify_url = "/api/v1/auth/login/verify-otp/"
+        self.resend_url = "/api/v1/auth/login/resend-otp/"
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def _login_get_challenge_id(self, mock_send_otp):
+        """Helper: login with password, capture challenge_id and OTP from mock."""
+        response = self.client.post(
+            self.login_url,
+            {"email": "otp@example.com", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        challenge_id = response.data["challenge_id"]
+        otp_sent = mock_send_otp.call_args[0][1]
+        return challenge_id, otp_sent
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_verify_otp_returns_tokens_and_marks_challenge_used(self, mock_send_otp):
+        """Successful OTP verification returns JWT tokens and marks challenge used."""
+        challenge_id, otp = self._login_get_challenge_id(mock_send_otp)
+
+        response = self.client.post(
+            self.verify_url,
+            {"challenge_id": challenge_id, "otp": otp},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertIn("user", response.data)
+        self.assertEqual(response.data["user"]["email"], self.user.email)
+
+        from apps.accounts.models import LoginOTPChallenge
+
+        challenge = LoginOTPChallenge.objects.get(id=challenge_id)
+        self.assertTrue(challenge.is_used)
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_wrong_otp_increments_attempts_after_five_rejects(self, mock_send_otp):
+        """Wrong OTP increments attempts; after 5 attempts returns 403."""
+        challenge_id, _ = self._login_get_challenge_id(mock_send_otp)
+
+        for i in range(5):
+            response = self.client.post(
+                self.verify_url,
+                {"challenge_id": challenge_id, "otp": "000000"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertIn("Invalid or expired", response.data["detail"])
+
+        response = self.client.post(
+            self.verify_url,
+            {"challenge_id": challenge_id, "otp": "000000"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Too many attempts", response.data["detail"])
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_resend_increments_send_count_after_three_rejects(self, mock_send_otp):
+        """Resend increments send_count; after 3 resends returns 429."""
+        challenge_id, otp = self._login_get_challenge_id(mock_send_otp)
+
+        for _ in range(2):
+            response = self.client.post(
+                self.resend_url,
+                {"challenge_id": challenge_id},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("OTP sent", response.data["detail"])
+
+        self.assertEqual(mock_send_otp.call_count, 3)
+
+        response = self.client.post(
+            self.resend_url,
+            {"challenge_id": challenge_id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn("Maximum resend", response.data["detail"])
