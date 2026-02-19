@@ -279,6 +279,15 @@ class InviteUserSerializer(serializers.Serializer):
         return value
 
 
+class VerifyOTPSerializer(serializers.Serializer):
+    challenge_id = serializers.UUIDField()
+    otp = serializers.CharField(min_length=6, max_length=6)
+
+
+class ResendOTPSerializer(serializers.Serializer):
+    challenge_id = serializers.UUIDField()
+
+
 class SetPasswordFromInviteSerializer(serializers.Serializer):
     uidb64 = serializers.CharField()
     token = serializers.CharField()

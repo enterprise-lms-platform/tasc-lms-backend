@@ -13,6 +13,7 @@ from django.utils.encoding import force_bytes
 from django.conf import settings
 
 from rest_framework import status, serializers
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -31,9 +32,14 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     LogoutSerializer,
     SetPasswordFromInviteSerializer,
+    VerifyOTPSerializer,
+    ResendOTPSerializer,
 )
 
 from .tokens import email_verification_token
+from .models import LoginOTPChallenge
+from .utils import generate_otp, hash_otp, verify_otp
+from .services import send_login_otp_email
 
 from apps.notifications.services import send_tasc_email, send_account_locked_email
 from django.utils import timezone
@@ -45,8 +51,8 @@ User = get_user_model()
 
 class LoginView(TokenObtainPairView):
     """
-    Login using email + password.
-    Returns JWT tokens plus user payload so frontend can bootstrap immediately.
+    Login step 1: email + password.
+    On success, sends OTP email and returns challenge_id for verify-otp step.
     """
 
     serializer_class = EmailTokenObtainPairSerializer
@@ -54,7 +60,10 @@ class LoginView(TokenObtainPairView):
     @extend_schema(
         tags=["Accounts"],
         summary="Login",
-        description="Obtain access/refresh tokens and basic user profile using email + password.",
+        description=(
+            "Step 1: Submit email + password. On success, an OTP is sent to your email. "
+            "Use the challenge_id with POST /auth/login/verify-otp/ to complete login."
+        ),
         request={
             "application/json": {
                 "type": "object",
@@ -65,23 +74,25 @@ class LoginView(TokenObtainPairView):
                 "required": ["email", "password"],
             }
         },
-        responses={200: AuthTokensSerializer},
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "mfa_required": {"type": "boolean"},
+                    "method": {"type": "string"},
+                    "challenge_id": {"type": "string", "format": "uuid"},
+                    "expires_in": {"type": "integer"},
+                },
+            },
+        },
         examples=[
             OpenApiExample(
-                "Login OK",
+                "MFA required",
                 value={
-                    "access": "jwt-access-token",
-                    "refresh": "jwt-refresh-token",
-                    "user": {
-                        "id": 1,
-                        "name": "Full Name",
-                        "email": "example@email.com",
-                        "username": "username",
-                        "email_verified": True,
-                        "is_active": True,
-                        "is_staff": False,
-                        "is_superuser": False,
-                    },
+                    "mfa_required": True,
+                    "method": "email_otp",
+                    "challenge_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "expires_in": 300,
                 },
                 response_only=True,
             ),
@@ -141,19 +152,161 @@ class LoginView(TokenObtainPairView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # D) Successful login: clear lockout fields
+        # D) Successful password validation: clear lockout fields
         user.failed_login_attempts = 0
         user.account_locked_until = None
         user.save(update_fields=["failed_login_attempts", "account_locked_until"])
 
-        tokens = serializer.validated_data  # {"refresh": "...", "access": "..."}
+        # E) Create OTP challenge instead of issuing tokens
+        now = timezone.now()
+        otp = generate_otp()
+        challenge = LoginOTPChallenge.objects.create(
+            user=user,
+            otp_hash=hash_otp(otp),
+            expires_at=now + timedelta(minutes=5),
+            attempts=0,
+            send_count=1,
+            last_sent_at=now,
+            is_used=False,
+        )
+        send_login_otp_email(user, otp)
 
+        return Response(
+            {
+                "mfa_required": True,
+                "method": "email_otp",
+                "challenge_id": str(challenge.id),
+                "expires_in": 300,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Verify OTP",
+    description="Step 2: Submit challenge_id and OTP code to complete login and receive JWT tokens.",
+    request=VerifyOTPSerializer,
+    responses={
+        200: AuthTokensSerializer,
+        400: {"description": "Invalid or expired code"},
+        403: {"description": "Too many attempts"},
+    },
+)
+class VerifyOTPView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = "otp_verify"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = VerifyOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        challenge_id = serializer.validated_data["challenge_id"]
+        otp = serializer.validated_data["otp"]
+
+        try:
+            challenge = LoginOTPChallenge.objects.get(
+                id=challenge_id,
+                is_used=False,
+                expires_at__gt=timezone.now(),
+            )
+        except LoginOTPChallenge.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or expired code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if challenge.attempts >= 5:
+            challenge.is_used = True
+            challenge.save(update_fields=["is_used"])
+            return Response(
+                {"detail": "Too many attempts. Please request a new code."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not verify_otp(otp, challenge.otp_hash):
+            challenge.attempts += 1
+            challenge.save(update_fields=["attempts"])
+            return Response(
+                {"detail": "Invalid or expired code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        challenge.is_used = True
+        challenge.save(update_fields=["is_used"])
+
+        user = challenge.user
+        refresh = RefreshToken.for_user(user)
         data = {
-            "refresh": tokens["refresh"],
-            "access": tokens["access"],
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
             "user": UserMeSerializer(user).data,
         }
         return Response(data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["Accounts"],
+    summary="Resend OTP",
+    description="Resend the login OTP email. Max 3 sends per challenge.",
+    request=ResendOTPSerializer,
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "detail": {"type": "string"},
+                "expires_in": {"type": "integer"},
+            },
+        },
+        429: {"description": "Max resends exceeded"},
+    },
+)
+class ResendOTPView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = "otp_resend"
+    throttle_classes = [ScopedRateThrottle]
+
+    def post(self, request):
+        serializer = ResendOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        challenge_id = serializer.validated_data["challenge_id"]
+
+        try:
+            challenge = LoginOTPChallenge.objects.get(
+                id=challenge_id,
+                is_used=False,
+                expires_at__gt=timezone.now(),
+            )
+        except LoginOTPChallenge.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or expired challenge."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if challenge.send_count >= 3:
+            return Response(
+                {"detail": "Maximum resend limit reached. Please start a new login."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        now = timezone.now()
+        otp = generate_otp()
+        challenge.otp_hash = hash_otp(otp)
+        challenge.last_sent_at = now
+        challenge.expires_at = now + timedelta(minutes=5)
+        challenge.send_count += 1
+        challenge.save(
+            update_fields=["otp_hash", "last_sent_at", "expires_at", "send_count"]
+        )
+
+        send_login_otp_email(challenge.user, otp)
+
+        return Response(
+            {"detail": "OTP sent.", "expires_in": 300},
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(

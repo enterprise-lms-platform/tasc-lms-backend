@@ -191,6 +191,10 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "otp_verify": "10/minute",
+        "otp_resend": "10/minute",
+    },
 }
 
 # ----------------------------------------
