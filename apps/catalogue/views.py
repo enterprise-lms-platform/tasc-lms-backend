@@ -161,9 +161,44 @@ class CourseViewSet(viewsets.ModelViewSet):
         elif serializer.validated_data.get('instructor') is None:
             save_kwargs['instructor'] = self.request.user
         instance = serializer.save(**save_kwargs)
+        from apps.audit.services import log_event
+
+        log_event(
+            action="created",
+            resource="course",
+            resource_id=str(instance.id),
+            actor=self.request.user,
+            request=self.request,
+            details=f"Course created: {instance.title} (status={instance.status})",
+        )
         if instance.status == Course.Status.PUBLISHED and instance.published_at is None:
             instance.published_at = timezone.now()
             instance.save(update_fields=['published_at'])
+
+    def perform_update(self, serializer):
+        old_status = serializer.instance.status
+        old_title = serializer.instance.title
+        instance = serializer.save()
+        from apps.audit.services import log_event
+
+        detail_parts = [f"Course updated: {instance.title}"]
+        if old_title != instance.title:
+            detail_parts.append(f"title: '{old_title}' -> '{instance.title}'")
+        if old_status != instance.status:
+            detail_parts.append(f"status: {old_status} -> {instance.status}")
+            if old_status != Course.Status.PUBLISHED and instance.status == Course.Status.PUBLISHED:
+                detail_parts.append("published")
+            if old_status == Course.Status.PUBLISHED and instance.status != Course.Status.PUBLISHED:
+                detail_parts.append("unpublished")
+
+        log_event(
+            action="updated",
+            resource="course",
+            resource_id=str(instance.id),
+            actor=self.request.user,
+            request=self.request,
+            details=" | ".join(detail_parts),
+        )
 
     @extend_schema(
         summary='Create course',
@@ -312,6 +347,17 @@ class CourseViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         if getattr(request.user, 'role', None) not in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
             raise PermissionDenied('Only LMS Manager or TASC Admin can delete courses.')
+        instance = self.get_object()
+        from apps.audit.services import log_event
+
+        log_event(
+            action="deleted",
+            resource="course",
+            resource_id=str(instance.id),
+            actor=request.user,
+            request=request,
+            details=f"Course deleted: {instance.title} (status={instance.status})",
+        )
         return super().destroy(request, *args, **kwargs)
 
 

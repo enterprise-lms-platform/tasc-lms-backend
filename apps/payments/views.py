@@ -146,6 +146,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.paid_at = timezone.now()
         invoice.paid_amount = invoice.total_amount
         invoice.save()
+        # US-027 audit: record invoice payment event after successful status update
+        from apps.audit.services import log_event
+        log_event(
+            action="updated",
+            resource="invoice",
+            resource_id=str(invoice.id),
+            actor=request.user,
+            request=request,
+            details=f"Invoice paid: {invoice.invoice_number} | amount={invoice.total_amount}",
+        )
         
         # Create transaction record
         transaction = Transaction.objects.create(
@@ -621,6 +631,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
         result = service.initialize_payment(payment)
         
         if result['success']:
+            # US-027 audit: record payment initiation only after provider initialization succeeds
+            from apps.audit.services import log_event
+            log_event(
+                action="created",
+                resource="payment",
+                resource_id=str(payment.id),
+                actor=request.user,
+                request=request,
+                details=f"Payment initiated: amount={payment.amount} {payment.currency} | course={payment.course_id}",
+            )
             return Response({
                 'payment_id': str(payment.id),
                 'payment_link': result['payment_link'],
@@ -663,6 +683,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 
                 if result['status'] == 'successful':
                     payment.mark_completed()
+                    # US-027 audit: record successful payment completion after local status update
+                    from apps.audit.services import log_event
+                    log_event(
+                        action="updated",
+                        resource="payment",
+                        resource_id=str(payment.id),
+                        actor=request.user if request.user.is_authenticated else None,
+                        request=request,
+                        details=f"Payment completed: amount={payment.amount} {payment.currency}",
+                    )
                     
                     return Response({
                         'success': True,
@@ -766,6 +796,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
             
             if result['success'] and result['status'] == 'successful':
                 payment.mark_completed()
+                # US-027 audit: record successful payment completion after local status update
+                from apps.audit.services import log_event
+                log_event(
+                    action="updated",
+                    resource="payment",
+                    resource_id=str(payment.id),
+                    actor=request.user if request.user.is_authenticated else None,
+                    request=request,
+                    details=f"Payment completed: amount={payment.amount} {payment.currency}",
+                )
             
             return Response({
                 'payment_id': str(payment.id),

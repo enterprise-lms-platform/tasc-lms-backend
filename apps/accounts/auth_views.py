@@ -475,6 +475,16 @@ def verify_email(request, uidb64, token):
             update_fields=["is_active"]
             + (["email_verified"] if hasattr(user, "email_verified") else [])
         )
+        from apps.audit.services import log_event
+
+        log_event(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+            actor=None,
+            request=request,
+            details=f"Email verified: {user.email} | is_active=True",
+        )
 
         return Response(
             {"message": "Email verified successfully."}, status=status.HTTP_200_OK

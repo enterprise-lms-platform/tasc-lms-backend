@@ -4,9 +4,14 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from apps.accounts.tokens import email_verification_token
+from apps.audit.models import AuditLog
 
 User = get_user_model()
 
@@ -133,6 +138,128 @@ class MeEndpointTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["email"], self.user.email)
+
+
+class AccountsAuditInstrumentationTests(TestCase):
+    """Tests for US-027 Phase 2A audit instrumentation in accounts views."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def test_patch_me_creates_audit_log(self):
+        user = User.objects.create_user(
+            username="meaudituser",
+            email="meaudit@example.com",
+            password="testpass123",
+            first_name="Before",
+            email_verified=True,
+            is_active=True,
+        )
+
+        response = self.client.patch(
+            "/api/v1/auth/me/",
+            {"first_name": "After"},
+            format="json",
+            **self._auth_header(user),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="updated",
+                resource="user",
+                resource_id=str(user.id),
+                actor=user,
+            ).exists()
+        )
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_invite_user_create_and_update_create_audit_logs(self, mock_send_tasc_email):
+        mock_send_tasc_email.return_value = None
+        admin_user = User.objects.create_user(
+            username="inviteadmin",
+            email="inviteadmin@example.com",
+            password="testpass123",
+            role="tasc_admin",
+            email_verified=True,
+            is_active=True,
+        )
+        invite_url = "/api/v1/admin/users/invite/"
+        invite_email = "invited.user@example.com"
+
+        create_response = self.client.post(
+            invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Invited",
+                "last_name": "User",
+                "role": "instructor",
+            },
+            format="json",
+            **self._auth_header(admin_user),
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+
+        invited_user = User.objects.get(email__iexact=invite_email)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="created",
+                resource="user",
+                resource_id=str(invited_user.id),
+                actor=admin_user,
+            ).exists()
+        )
+
+        update_response = self.client.post(
+            invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Invited",
+                "last_name": "User",
+                "role": "finance",
+            },
+            format="json",
+            **self._auth_header(admin_user),
+        )
+        self.assertEqual(update_response.status_code, status.HTTP_201_CREATED)
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="updated",
+                resource="user",
+                resource_id=str(invited_user.id),
+                actor=admin_user,
+            ).exists()
+        )
+
+    def test_verify_email_persists_activation_and_creates_audit_log(self):
+        user = User.objects.create_user(
+            username="verifyaudit",
+            email="verifyaudit@example.com",
+            password="testpass123",
+            email_verified=False,
+            is_active=False,
+        )
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        token = email_verification_token.make_token(user)
+        response = self.client.get(f"/api/v1/auth/verify-email/{uidb64}/{token}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        user.refresh_from_db()
+        self.assertTrue(user.email_verified)
+        self.assertTrue(user.is_active)
+
+        log = AuditLog.objects.filter(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+        ).order_by("-created_at").first()
+        self.assertIsNotNone(log)
+        self.assertIsNone(log.actor)
 
 
 @override_settings(GOOGLE_CLIENT_ID="test-client-id")
