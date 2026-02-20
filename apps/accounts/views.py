@@ -106,7 +106,17 @@ def verify_email(request, uidb64, token):
     if email_verification_token.check_token(user, token):
         user.email_verified = True
         user.is_active = True  # Activate account upon email verification
-        user.save(update_fields=["email_verified"])
+        user.save(update_fields=["email_verified", "is_active"])
+        from apps.audit.services import log_event
+
+        log_event(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+            actor=None,
+            request=request,
+            details=f"Email verified: {user.email} | is_active=True",
+        )
         return Response(
             {"message": "Email verified successfully."}, status=status.HTTP_200_OK
         )
