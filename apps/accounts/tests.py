@@ -253,14 +253,13 @@ class AccountsAuditInstrumentationTests(TestCase):
         self.assertTrue(user.email_verified)
         self.assertTrue(user.is_active)
 
-        self.assertTrue(
-            AuditLog.objects.filter(
-                action="updated",
-                resource="user",
-                resource_id=str(user.id),
-                actor=None,
-            ).exists()
-        )
+        log = AuditLog.objects.filter(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+        ).order_by("-created_at").first()
+        self.assertIsNotNone(log)
+        self.assertIsNone(log.actor)
 
 
 @override_settings(GOOGLE_CLIENT_ID="test-client-id")
