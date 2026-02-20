@@ -62,7 +62,16 @@ def me(request):
         instance=request.user, data=request.data, partial=True
     )
     serializer.is_valid(raise_exception=True)
+    from apps.audit.services import log_event
     serializer.save()
+    log_event(
+        action="updated",
+        resource="user",
+        resource_id=str(request.user.id),
+        actor=request.user,
+        request=request,
+        details=f"User profile updated via /me endpoint: {request.user.email}",
+    )
     return Response(UserMeSerializer(request.user).data)
 
 
