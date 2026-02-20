@@ -138,6 +138,7 @@ def invite_user(request):
 
     serializer = InviteUserSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
+    from apps.audit.services import log_event
 
     email = serializer.validated_data["email"]
     first_name = serializer.validated_data["first_name"]
@@ -198,6 +199,25 @@ def invite_user(request):
             "set_password_url": set_password_url,
         },
     )
+
+    if created:
+        log_event(
+            action="created",
+            resource="user",
+            resource_id=str(user.id),
+            actor=request.user,
+            request=request,
+            details=f"Invited user created: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
+        )
+    else:
+        log_event(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+            actor=request.user,
+            request=request,
+            details=f"Invited user updated: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
+        )
 
     return Response(
         {"detail": "Invitation sent successfully", "email": user.email},
