@@ -1,9 +1,8 @@
-from time import timezone
+from django.utils import timezone
 import uuid
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.contrib.postgres.fields import ArrayField
 import hmac
 import hashlib
 
@@ -263,12 +262,7 @@ class LivestreamSession(models.Model):
         default='none'
     )
     recurrence_end_date = models.DateTimeField(null=True, blank=True)
-    recurrence_days = ArrayField(
-        models.CharField(max_length=3, choices=[
-            ('mon', 'Monday'), ('tue', 'Tuesday'), ('wed', 'Wednesday'),
-            ('thu', 'Thursday'), ('fri', 'Friday'), ('sat', 'Saturday'),
-            ('sun', 'Sunday')
-        ]),
+    recurrence_days = models.JSONField(
         blank=True,
         default=list,
         help_text="Days of week for weekly recurrence"
