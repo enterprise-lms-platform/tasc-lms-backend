@@ -50,6 +50,7 @@ class Course(models.Model):
     subtitle = models.CharField(max_length=255, blank=True)
     description = models.TextField()
     short_description = models.CharField(max_length=500, blank=True)
+    subcategory = models.CharField(max_length=255, blank=True, help_text="Sub-classification within the category")
 
     # Classification
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='courses')
@@ -63,6 +64,11 @@ class Course(models.Model):
 
     # Duration and Effort
     duration_hours = models.PositiveIntegerField(default=0, help_text="Total duration in hours")
+    duration_minutes = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(59)],
+        help_text="Remaining minutes within the hour (0–59)"
+    )
     duration_weeks = models.PositiveIntegerField(default=0, help_text="Recommended weeks to complete")
     total_sessions = models.PositiveIntegerField(default=0)
 
@@ -82,6 +88,7 @@ class Course(models.Model):
 
     # Media
     thumbnail = models.URLField(blank=True, null=True)
+    banner = models.URLField(blank=True, null=True, help_text="Wide banner image for the course detail page")
     trailer_video_url = models.URLField(blank=True, null=True)
 
     # Requirements and Objectives
@@ -93,6 +100,24 @@ class Course(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     featured = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
+
+    # Course behaviour settings
+    is_public = models.BooleanField(default=False)
+    allow_self_enrollment = models.BooleanField(default=True)
+    certificate_on_completion = models.BooleanField(default=False)
+    enable_discussions = models.BooleanField(default=False)
+    sequential_learning = models.BooleanField(default=False)
+    enrollment_limit = models.PositiveIntegerField(null=True, blank=True)
+    access_duration = models.CharField(max_length=20, blank=True, default='lifetime')
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    # Grading & Objectives (structured)
+    grading_config = models.JSONField(default=dict, blank=True)
+    learning_objectives_list = models.JSONField(
+        default=list, blank=True,
+        help_text="Structured list of learning objective strings; mirrors learning_objectives as newline-joined text"
+    )
 
     # SEO
     meta_title = models.CharField(max_length=255, blank=True)
@@ -131,9 +156,14 @@ class Session(models.Model):
     Session represents an individual learning session within a course.
     """
     class SessionType(models.TextChoices):
-        VIDEO = 'video', 'Video'
-        TEXT = 'text', 'Text'
-        LIVE = 'live', 'Live Session'
+        VIDEO      = 'video',      'Video'
+        TEXT       = 'text',       'Text'
+        LIVE       = 'live',       'Live Session'
+        DOCUMENT   = 'document',   'Document'
+        HTML       = 'html',       'HTML / Rich Text'
+        QUIZ       = 'quiz',       'Quiz'
+        ASSIGNMENT = 'assignment', 'Assignment'
+        SCORM      = 'scorm',      'SCORM Package'
 
     class Status(models.TextChoices):
         DRAFT = 'draft', 'Draft'
