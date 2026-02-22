@@ -16,17 +16,17 @@ class CalendarService:
     Generates calendar files and links for Google, Outlook, Apple Calendar.
     Also handles timezone conversion for learners.
     """
-    
+
     @staticmethod
     def generate_ics_file(session, user=None, user_timezone='UTC'):
         """
         Generate .ics file content for calendar import.
-        
+
         Args:
             session: LivestreamSession instance
             user: User instance (for personalized links)
             user_timezone: User's preferred timezone
-        
+
         Returns:
             str: ICS file content
         """
@@ -37,37 +37,32 @@ class CalendarService:
         cal.add('method', 'PUBLISH')
         cal.add('x-wr-calname', f"{session.course.title}: {session.title}")
         cal.add('x-wr-timezone', user_timezone)
-        
+
         event = Event()
-        
-        # Event metadata
+
         event.add('summary', f"{session.course.title}: {session.title}")
         event.add('description', CalendarService._build_description(session, user))
         event.add('location', session.join_url or 'Online')
-        
-        # Time handling with timezone conversion
+
         start_time = session.start_time
         end_time = session.end_time
-        
-        # Convert to user's timezone if provided
+
         if user_timezone != 'UTC':
             import pytz
             try:
                 user_tz = pytz.timezone(user_timezone)
                 start_time = start_time.astimezone(user_tz)
                 end_time = end_time.astimezone(user_tz)
-            except:
+            except Exception:
                 pass
-        
+
         event.add('dtstart', start_time)
         event.add('dtend', end_time)
         event.add('dtstamp', timezone.now())
         event.add('uid', f"livestream-{session.id}@lms.com")
-        
-        # Add organizer
+
         event.add('organizer', session.instructor.email)
-        
-        # Add attendees (if user provided)
+
         if user:
             event.add('attendee', user.email, parameters={
                 'CN': user.get_full_name() or user.email,
@@ -75,27 +70,24 @@ class CalendarService:
                 'PARTSTAT': 'NEEDS-ACTION',
                 'RSVP': 'TRUE'
             })
-        
-        # Add alarm/reminder (15 minutes before)
+
         alarm = Alarm()
         alarm.add('action', 'DISPLAY')
         alarm.add('description', f'Reminder: {session.title} starts in 15 minutes')
         alarm.add('trigger', timedelta(minutes=-15))
         event.add_component(alarm)
-        
-        # Add second alarm (1 hour before)
+
         alarm2 = Alarm()
         alarm2.add('action', 'DISPLAY')
         alarm2.add('description', f'Reminder: {session.title} starts in 1 hour')
         alarm2.add('trigger', timedelta(hours=-1))
         event.add_component(alarm2)
-        
-        # Add URL for joining
+
         event.add('url', session.join_url)
-        
+
         cal.add_component(event)
         return cal.to_ical().decode('utf-8')
-    
+
     @staticmethod
     def _build_description(session, user=None):
         """Build rich description for calendar event"""
@@ -122,27 +114,26 @@ class CalendarService:
         description.append('- Microphone and camera (optional)')
         description.append('')
         description.append('This session will be recorded and available for later viewing.')
-        
+
         return '\n'.join(description)
-    
+
     @staticmethod
     def get_google_calendar_url(session, user=None):
         """
         Generate Google Calendar URL for adding event.
-        
+
         Args:
             session: LivestreamSession instance
             user: User instance (for personalized links)
-        
+
         Returns:
             str: Google Calendar URL
         """
         base_url = "https://www.google.com/calendar/render"
-        
-        # Format dates for Google (YYYYMMDDTHHMMSSZ)
+
         start_str = session.start_time.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         end_str = session.end_time.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        
+
         params = {
             'action': 'TEMPLATE',
             'text': f"{session.course.title}: {session.title}",
@@ -151,27 +142,26 @@ class CalendarService:
             'dates': f"{start_str}/{end_str}",
             'ctz': 'UTC',
         }
-        
-        # Add attendees if user provided
+
         if user:
             params['add'] = user.email
-        
+
         return f"{base_url}?{urlencode(params)}"
-    
+
     @staticmethod
     def get_outlook_calendar_url(session, user=None):
         """
         Generate Outlook Calendar URL for adding event.
-        
+
         Args:
             session: LivestreamSession instance
             user: User instance (for personalized links)
-        
+
         Returns:
             str: Outlook Calendar URL
         """
         base_url = "https://outlook.live.com/calendar/0/deeplink/compose"
-        
+
         params = {
             'path': '/calendar/action/compose',
             'rru': 'addevent',
@@ -181,40 +171,40 @@ class CalendarService:
             'body': CalendarService._build_description(session, user),
             'location': session.join_url,
         }
-        
+
         return f"{base_url}?{urlencode(params)}"
-    
+
     @staticmethod
     def get_apple_calendar_url(session, user=None):
         """
         Generate Apple Calendar URL (uses webcal protocol).
-        
+
         Args:
             session: LivestreamSession instance
             user: User instance (for personalized links)
-        
+
         Returns:
             str: webcal URL for Apple Calendar
         """
-        # This would typically point to an ICS endpoint
-        base_url = "webcal://" + settings.SITE_DOMAIN
+        from django.conf import settings as django_settings
+        base_url = "webcal://" + django_settings.SITE_DOMAIN
         path = reverse('livestream-ics', kwargs={'pk': session.id})
         return f"{base_url}{path}"
-    
+
     @staticmethod
     def get_yahoo_calendar_url(session, user=None):
         """
         Generate Yahoo Calendar URL.
-        
+
         Args:
             session: LivestreamSession instance
             user: User instance (for personalized links)
-        
+
         Returns:
             str: Yahoo Calendar URL
         """
         base_url = "https://calendar.yahoo.com"
-        
+
         params = {
             'v': 60,
             'view': 'd',
@@ -225,19 +215,19 @@ class CalendarService:
             'desc': CalendarService._build_description(session, user),
             'in_loc': session.join_url,
         }
-        
+
         return f"{base_url}/?{urlencode(params)}"
-    
+
     @staticmethod
     def get_all_calendar_links(session, request, user=None):
         """
         Get all calendar links for a session.
-        
+
         Args:
             session: LivestreamSession instance
             request: Django request object
             user: User instance (optional)
-        
+
         Returns:
             dict: All calendar links
         """
@@ -253,7 +243,7 @@ class CalendarService:
                 reverse('livestream-ics-download', kwargs={'pk': session.id})
             ),
         }
-    
+
     @staticmethod
     def get_timezone_converter():
         """
@@ -276,16 +266,16 @@ class TimezoneService:
     """
     Service for timezone conversion and display.
     """
-    
+
     @staticmethod
     def convert_to_user_timezone(dt, user_timezone):
         """
         Convert datetime to user's timezone.
-        
+
         Args:
             dt: Datetime object (aware)
             user_timezone: User's timezone string
-        
+
         Returns:
             datetime: Converted datetime
         """
@@ -293,25 +283,25 @@ class TimezoneService:
         try:
             user_tz = pytz.timezone(user_timezone)
             return dt.astimezone(user_tz)
-        except:
+        except Exception:
             return dt
-    
+
     @staticmethod
     def format_for_user(dt, user_timezone, format='%Y-%m-%d %H:%M %Z'):
         """
         Format datetime for display in user's timezone.
-        
+
         Args:
             dt: Datetime object
             user_timezone: User's timezone string
             format: strftime format
-        
+
         Returns:
             str: Formatted datetime string
         """
         converted = TimezoneService.convert_to_user_timezone(dt, user_timezone)
         return converted.strftime(format)
-    
+
     @staticmethod
     def get_timezone_options():
         """
