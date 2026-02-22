@@ -190,10 +190,17 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
-        # Resolve effective status
         if self.instance is not None:
-            effective_status = attrs.get('status', self.instance.status)
+            # UPDATE / PATCH: only run publish checks when status is explicitly
+            # set to 'published' in this request. If status is absent, the
+            # course status is not changing, so skip validation entirely —
+            # this prevents blocking PATCH on legacy published courses that
+            # were created before thumbnail/objectives were required.
+            if 'status' not in attrs:
+                return attrs
+            effective_status = attrs['status']
         else:
+            # CREATE: default to draft when status is omitted.
             effective_status = attrs.get('status', Course.Status.DRAFT)
 
         if effective_status == Course.Status.PUBLISHED:

@@ -415,3 +415,88 @@ class CourseSettingsFieldsTest(TestCase):
         course_id = response.data['id']
         get_response = self.client.get(f'{COURSES_URL}{course_id}/', **_auth(self.instructor))
         self.assertEqual(get_response.data['duration_minutes'], 45)
+
+
+# ---------------------------------------------------------------------------
+# F) Legacy published course PATCH safety
+# ---------------------------------------------------------------------------
+
+def _make_tasc_admin(suffix=''):
+    return User.objects.create_user(
+        username=f'tascadmin{suffix}',
+        email=f'tascadmin{suffix}@example.com',
+        password='pass1234',
+        role='tasc_admin',
+        email_verified=True,
+        is_active=True,
+    )
+
+
+class CoursePublishedLegacyPatchTest(TestCase):
+    """
+    Publish validation must NOT fire on PATCH when status is absent from payload.
+
+    Simulates courses that were published before the thumbnail/objectives
+    requirement was introduced (created directly in DB, bypassing serializer).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = _make_tasc_admin(suffix='_legacy')
+        # Create a legacy published course directly in DB — bypasses serializer
+        # validation, simulating a course published before validation was added.
+        self.legacy_course = Course.objects.create(
+            title='Legacy Published Course',
+            description='A course published before thumbnail/objectives were required.',
+            slug='legacy-published-course',
+            status='published',
+            # Deliberately no thumbnail, no learning_objectives, no list
+            thumbnail=None,
+            learning_objectives='',
+            learning_objectives_list=[],
+            instructor=self.admin,
+            created_by=self.admin,
+        )
+        self.url = f'{COURSES_URL}{self.legacy_course.id}/'
+
+    def test_patch_title_without_status_returns_200(self):
+        """PATCH of title only (no status in payload) must NOT trigger publish validation."""
+        response = self.client.patch(
+            self.url,
+            {'title': 'Updated Legacy Title'},
+            format='json',
+            **_auth(self.admin)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['title'], 'Updated Legacy Title')
+        # Confirm status was not changed
+        self.assertEqual(response.data['status'], 'published')
+
+    def test_patch_with_status_published_and_no_thumbnail_returns_400(self):
+        """Explicitly sending status='published' in PATCH must still enforce thumbnail."""
+        response = self.client.patch(
+            self.url,
+            {'status': 'published', 'title': 'Still No Thumbnail'},
+            format='json',
+            **_auth(self.admin)
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('thumbnail', response.data)
+
+    def test_patch_with_status_published_thumbnail_and_objectives_returns_200(self):
+        """Explicitly sending status='published' with valid thumbnail + objectives must pass."""
+        response = self.client.patch(
+            self.url,
+            {
+                'status': 'published',
+                'thumbnail': 'https://example.com/fixed-thumb.png',
+                'learning_objectives_list': [
+                    'Objective 1', 'Objective 2', 'Objective 3', 'Objective 4'
+                ],
+            },
+            format='json',
+            **_auth(self.admin)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'published')
+        self.assertEqual(response.data['thumbnail'], 'https://example.com/fixed-thumb.png')
