@@ -47,8 +47,6 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.notifications",
     "apps.audit",
-    "apps.superadmin",
-    "apps.livestream",
 ]
 
 # ----------------------------------------
