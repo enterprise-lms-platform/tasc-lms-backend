@@ -19,7 +19,7 @@ class ZoomService:
     Service class for Zoom API integration.
     Handles meeting creation, updates, deletions, and webhooks.
     """
-    
+
     def __init__(self):
         self.api_key = settings.ZOOM_API_KEY
         self.api_secret = settings.ZOOM_API_SECRET
@@ -28,27 +28,26 @@ class ZoomService:
         self.webhook_secret = settings.ZOOM_WEBHOOK_SECRET
         self._access_token = None
         self._token_expiry = 0
-    
+
     def _get_access_token(self):
         """
         Get OAuth access token for Zoom API using Server-to-Server OAuth.
         """
         if self._access_token and time.time() < self._token_expiry:
             return self._access_token
-        
-        # Using Server-to-Server OAuth (recommended)
+
         url = f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={self.account_id}"
-        
+
         auth_string = f"{self.api_key}:{self.api_secret}"
         base64_auth = base64.b64encode(auth_string.encode()).decode()
-        
+
         headers = {
             "Authorization": f"Basic {base64_auth}",
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        
+
         response = requests.post(url, headers=headers)
-        
+
         if response.status_code == 200:
             data = response.json()
             self._access_token = data['access_token']
@@ -56,7 +55,7 @@ class ZoomService:
             return self._access_token
         else:
             raise Exception(f"Failed to get Zoom access token: {response.text}")
-    
+
     def _get_headers(self):
         """Get headers with authorization"""
         token = self._get_access_token()
@@ -64,11 +63,11 @@ class ZoomService:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-    
+
     def create_meeting(self, session_data):
         """
         Create a Zoom meeting from session data.
-        
+
         Args:
             session_data: Dict with meeting details
                 - topic: Meeting title
@@ -77,20 +76,19 @@ class ZoomService:
                 - duration: Minutes
                 - timezone: Timezone string
                 - settings: Meeting settings dict
-        
+
         Returns:
             dict: Zoom meeting details
         """
         headers = self._get_headers()
-        
-        # Format start time for Zoom
+
         start_time = session_data['start_time']
         if isinstance(start_time, datetime):
             start_time = start_time.strftime('%Y-%m-%dT%H:%M:%S')
-        
+
         meeting_data = {
             "topic": session_data['topic'][:200],
-            "type": 2,  # Scheduled meeting
+            "type": 2,
             "start_time": start_time,
             "duration": session_data['duration'],
             "timezone": session_data.get('timezone', 'UTC'),
@@ -103,25 +101,24 @@ class ZoomService:
                 "waiting_room": session_data.get('waiting_room', True),
                 "audio": "both",
                 "auto_recording": session_data.get('auto_recording', 'cloud'),
-                "approval_type": 2,  # Automatically approve
-                "registration_type": 1,  # Attendees register once
+                "approval_type": 2,
+                "registration_type": 1,
                 "enforce_login": False,
                 "alternative_hosts": "",
                 "global_dial_in_countries": ["US"],
             }
         }
-        
-        # Add recurrence for recurring meetings
+
         if session_data.get('recurrence'):
-            meeting_data["type"] = 8  # Recurring meeting with fixed time
+            meeting_data["type"] = 8
             meeting_data["recurrence"] = session_data['recurrence']
-        
+
         response = requests.post(
             f"{self.base_url}/users/me/meetings",
             headers=headers,
             json=meeting_data
         )
-        
+
         if response.status_code == 201:
             data = response.json()
             return {
@@ -141,36 +138,36 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def update_meeting(self, meeting_id, session_data):
         """
         Update an existing Zoom meeting.
         """
         headers = self._get_headers()
-        
+
         meeting_data = {
             "topic": session_data['topic'][:200],
             "agenda": session_data.get('agenda', '')[:2000],
         }
-        
+
         if 'start_time' in session_data:
             start_time = session_data['start_time']
             if isinstance(start_time, datetime):
                 start_time = start_time.strftime('%Y-%m-%dT%H:%M:%S')
             meeting_data["start_time"] = start_time
-        
+
         if 'duration' in session_data:
             meeting_data["duration"] = session_data['duration']
-        
+
         if 'settings' in session_data:
             meeting_data["settings"] = session_data['settings']
-        
+
         response = requests.patch(
             f"{self.base_url}/meetings/{meeting_id}",
             headers=headers,
             json=meeting_data
         )
-        
+
         if response.status_code == 204:
             return {'success': True}
         else:
@@ -179,18 +176,18 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def delete_meeting(self, meeting_id):
         """
         Delete a Zoom meeting.
         """
         headers = self._get_headers()
-        
+
         response = requests.delete(
             f"{self.base_url}/meetings/{meeting_id}",
             headers=headers
         )
-        
+
         if response.status_code == 204:
             return {'success': True}
         else:
@@ -199,18 +196,18 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def get_meeting(self, meeting_id):
         """
         Get meeting details from Zoom.
         """
         headers = self._get_headers()
-        
+
         response = requests.get(
             f"{self.base_url}/meetings/{meeting_id}",
             headers=headers
         )
-        
+
         if response.status_code == 200:
             return {'success': True, 'data': response.json()}
         else:
@@ -219,18 +216,18 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def get_meeting_recordings(self, meeting_id):
         """
         Get cloud recordings for a meeting.
         """
         headers = self._get_headers()
-        
+
         response = requests.get(
             f"{self.base_url}/meetings/{meeting_id}/recordings",
             headers=headers
         )
-        
+
         if response.status_code == 200:
             return {'success': True, 'data': response.json()}
         else:
@@ -239,18 +236,18 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def get_meeting_participants(self, meeting_id):
         """
         Get participants of a completed meeting.
         """
         headers = self._get_headers()
-        
+
         response = requests.get(
             f"{self.base_url}/report/meetings/{meeting_id}/participants",
             headers=headers
         )
-        
+
         if response.status_code == 200:
             return {'success': True, 'data': response.json()}
         else:
@@ -259,7 +256,7 @@ class ZoomService:
                 'error': response.text,
                 'status_code': response.status_code
             }
-    
+
     def verify_webhook(self, request):
         """
         Verify Zoom webhook signature.
@@ -267,20 +264,17 @@ class ZoomService:
         signature = request.headers.get('x-zm-signature', '')
         timestamp = request.headers.get('x-zm-request-timestamp', '')
         payload = request.body
-        
-        # Create message string
+
         message = f"v0:{timestamp}:{payload.decode('utf-8')}"
-        
-        # Compute HMAC
+
         expected = hmac.new(
             self.webhook_secret.encode('utf-8'),
             message.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
-        
-        # Compare (constant time)
+
         return hmac.compare_digest(f"v0={expected}", signature)
-    
+
     def create_recurring_meeting(self, session_data, recurrence_pattern, recurrence_end):
         """
         Create a recurring meeting series.
@@ -291,17 +285,15 @@ class ZoomService:
             'biweekly': {'type': 2, 'repeat_interval': 2},
             'monthly': {'type': 3, 'repeat_interval': 1},
         }
-        
+
         recurrence = recurrence_map.get(recurrence_pattern, {'type': 1, 'repeat_interval': 1})
-        
-        # Add recurrence end date
+
         if recurrence_end:
             recurrence['end_date_time'] = recurrence_end.strftime('%Y-%m-%dT%H:%M:%SZ')
-        
-        # Add weekly days if provided
+
         if recurrence_pattern in ['weekly', 'biweekly'] and session_data.get('weekly_days'):
             recurrence['weekly_days'] = session_data['weekly_days']
-        
+
         session_data['recurrence'] = recurrence
         return self.create_meeting(session_data)
 
@@ -311,23 +303,21 @@ class ZoomWebhookHandler:
     Handle Zoom webhook events.
     Updates session status, attendance, and recordings.
     """
-    
+
     def __init__(self):
         self.zoom_service = ZoomService()
-    
+
     def handle_webhook(self, request):
         """
         Handle incoming Zoom webhook.
         """
-        # Verify signature
         if not self.zoom_service.verify_webhook(request):
             return {'success': False, 'error': 'Invalid signature'}
-        
+
         data = json.loads(request.body)
         event = data.get('event')
         payload = data.get('payload', {})
-        
-        # Route to appropriate handler
+
         if event == 'meeting.started':
             return self._handle_meeting_started(payload)
         elif event == 'meeting.ended':
@@ -341,133 +331,122 @@ class ZoomWebhookHandler:
         elif event == 'recording.transcript_completed':
             return self._handle_transcript_completed(payload)
         else:
-            # Acknowledge but don't process
             return {'success': True, 'message': f'Event {event} received'}
-    
+
     def _handle_meeting_started(self, payload):
         """Handle meeting.started webhook"""
-        from .models import LivestreamSession
-        
+        from apps.livestream.models import LivestreamSession
+
         meeting_id = payload.get('object', {}).get('id')
         if not meeting_id:
             return {'success': False, 'error': 'No meeting ID'}
-        
+
         try:
             session = LivestreamSession.objects.get(zoom_meeting_id=str(meeting_id))
             session.start_session()
-            
             return {'success': True, 'session_id': str(session.id)}
         except LivestreamSession.DoesNotExist:
             return {'success': False, 'error': 'Session not found'}
-    
+
     def _handle_meeting_ended(self, payload):
         """Handle meeting.ended webhook"""
-        from .models import LivestreamSession
-        
+        from apps.livestream.models import LivestreamSession
+
         meeting_id = payload.get('object', {}).get('id')
         if not meeting_id:
             return {'success': False, 'error': 'No meeting ID'}
-        
+
         try:
             session = LivestreamSession.objects.get(zoom_meeting_id=str(meeting_id))
             session.end_session()
-            
             return {'success': True, 'session_id': str(session.id)}
         except LivestreamSession.DoesNotExist:
             return {'success': False, 'error': 'Session not found'}
-    
+
     def _handle_participant_joined(self, payload):
         """Handle meeting.participant_joined webhook"""
-        from .models import LivestreamSession, LivestreamAttendance
-        
+        from apps.livestream.models import LivestreamSession, LivestreamAttendance
+
         meeting_id = payload.get('object', {}).get('id')
         participant = payload.get('object', {}).get('participant', {})
-        
+
         if not meeting_id or not participant:
             return {'success': False, 'error': 'Missing data'}
-        
+
         try:
             session = LivestreamSession.objects.get(zoom_meeting_id=str(meeting_id))
-            
-            # Find user by email
+
             email = participant.get('email')
             if not email:
                 return {'success': False, 'error': 'No email'}
-            
+
             from django.contrib.auth import get_user_model
             User = get_user_model()
-            
+
             try:
                 user = User.objects.get(email=email)
-                
                 attendance, _ = LivestreamAttendance.objects.get_or_create(
                     session=session,
                     learner=user
                 )
-                
                 attendance.mark_joined({
                     'participant_id': participant.get('participant_id'),
                     'device': participant.get('device', '')
                 })
-                
                 return {'success': True, 'attendance_id': str(attendance.id)}
             except User.DoesNotExist:
                 return {'success': False, 'error': 'User not found'}
-                
+
         except LivestreamSession.DoesNotExist:
             return {'success': False, 'error': 'Session not found'}
-    
+
     def _handle_participant_left(self, payload):
         """Handle meeting.participant_left webhook"""
-        from .models import LivestreamSession, LivestreamAttendance
-        
+        from apps.livestream.models import LivestreamSession, LivestreamAttendance
+
         meeting_id = payload.get('object', {}).get('id')
         participant = payload.get('object', {}).get('participant', {})
-        
+
         if not meeting_id or not participant:
             return {'success': False, 'error': 'Missing data'}
-        
+
         try:
             session = LivestreamSession.objects.get(zoom_meeting_id=str(meeting_id))
-            
+
             email = participant.get('email')
             if not email:
                 return {'success': False, 'error': 'No email'}
-            
+
             from django.contrib.auth import get_user_model
             User = get_user_model()
-            
+
             try:
                 user = User.objects.get(email=email)
-                
                 attendance = LivestreamAttendance.objects.get(
                     session=session,
                     learner=user
                 )
-                
                 attendance.mark_left()
-                
                 return {'success': True, 'attendance_id': str(attendance.id)}
             except (User.DoesNotExist, LivestreamAttendance.DoesNotExist):
                 return {'success': False, 'error': 'Attendance not found'}
-                
+
         except LivestreamSession.DoesNotExist:
             return {'success': False, 'error': 'Session not found'}
-    
+
     def _handle_recording_completed(self, payload):
         """Handle recording.completed webhook"""
-        from .models import LivestreamSession, LivestreamRecording
-        
+        from apps.livestream.models import LivestreamSession, LivestreamRecording
+
         meeting_id = payload.get('object', {}).get('id')
         recording_files = payload.get('object', {}).get('recording_files', [])
-        
+
         if not meeting_id:
             return {'success': False, 'error': 'No meeting ID'}
-        
+
         try:
             session = LivestreamSession.objects.get(zoom_meeting_id=str(meeting_id))
-            
-            # Process each recording file
+
             for file in recording_files:
                 recording, created = LivestreamRecording.objects.get_or_create(
                     zoom_recording_id=file['id'],
@@ -484,8 +463,7 @@ class ZoomWebhookHandler:
                         'duration_seconds': file.get('duration', 0),
                     }
                 )
-            
-            # Update session with main recording URL
+
             if recording_files:
                 main_recording = recording_files[0]
                 session.update_recording({
@@ -495,13 +473,12 @@ class ZoomWebhookHandler:
                     'duration': main_recording.get('duration', 0),
                     'download_url': main_recording.get('download_url', '')
                 })
-            
+
             return {'success': True, 'session_id': str(session.id)}
-            
+
         except LivestreamSession.DoesNotExist:
             return {'success': False, 'error': 'Session not found'}
-    
+
     def _handle_transcript_completed(self, payload):
         """Handle recording.transcript_completed webhook"""
-        # Store transcripts for searchable content
         return {'success': True, 'message': 'Transcript received'}
