@@ -202,40 +202,92 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Create course',
-        description='Create a new course. Requires instructor or admin permissions.',
+        description=(
+            'Create a new course. Requires instructor or admin permissions.\n\n'
+            '**Publish-time validation** (when `status=published`):\n'
+            '- `thumbnail` must be a non-empty URL.\n'
+            '- At least 4 non-empty learning objectives must be provided via '
+            '`learning_objectives_list` (array) **or** `learning_objectives` (newline-separated string).\n\n'
+            '**learning_objectives sync**: when `learning_objectives_list` is provided, '
+            '`learning_objectives` is automatically set to the newline-joined string.'
+        ),
         request=CourseCreateSerializer,
         responses={201: CourseDetailSerializer},
         examples=[
             OpenApiExample(
-                'Minimal course create',
+                'Draft course (minimal)',
                 value={
-                    'title': 'Course 001',
-                    'description': 'Intro course description',
-                    'short_description': 'Short summary',
+                    'title': 'Advanced React Patterns',
+                    'description': 'Full course description here.',
+                    'short_description': 'Master advanced React patterns.',
+                    'subcategory': 'react',
                     'category': 1,
-                    'level': 'beginner',
-                    'price': '0.00',
+                    'level': 'intermediate',
+                    'price': '129.99',
                     'currency': 'USD',
                     'discount_percentage': 0,
-                    'duration_hours': 1,
-                    'duration_weeks': 1,
-                    'total_sessions': 1,
+                    'duration_hours': 24,
+                    'duration_minutes': 30,
+                    'duration_weeks': 8,
+                    'total_sessions': 48,
                     'status': 'draft',
                     'featured': False,
+                    'is_public': False,
+                    'allow_self_enrollment': True,
+                    'certificate_on_completion': False,
+                    'enable_discussions': False,
+                    'sequential_learning': False,
+                    'enrollment_limit': None,
+                    'access_duration': 'lifetime',
+                    'start_date': None,
+                    'end_date': None,
+                    'grading_config': {
+                        'gradingScale': 'letter',
+                        'weightingMode': 'weighted',
+                        'passingThreshold': 60,
+                        'letterGradeThresholds': {'A': 90, 'B': 80, 'C': 70, 'D': 60},
+                        'categories': [
+                            {'id': 'assignments', 'name': 'Assignments', 'weight': 40},
+                            {'id': 'quizzes', 'name': 'Quizzes', 'weight': 30},
+                            {'id': 'projects', 'name': 'Projects', 'weight': 20},
+                            {'id': 'participation', 'name': 'Participation', 'weight': 10},
+                        ],
+                    },
+                    'learning_objectives_list': [],
+                    'prerequisites': '',
+                    'target_audience': '',
                 },
                 request_only=True,
             ),
             OpenApiExample(
-                'Course created',
+                'Published course (with objectives)',
+                value={
+                    'title': 'Advanced React Patterns',
+                    'description': 'Full course description here.',
+                    'thumbnail': 'https://cdn.example.com/courses/react-patterns.jpg',
+                    'status': 'published',
+                    'learning_objectives_list': [
+                        'Build production-ready React applications using advanced patterns',
+                        'Implement render props and higher-order components',
+                        'Create custom hooks for reusable logic',
+                        'Optimize React applications for performance',
+                    ],
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Course created (response)',
                 value={
                     'id': 1,
-                    'title': 'Course 001',
-                    'slug': 'course-001',
-                    'category': {'id': 1, 'name': 'Web Dev', 'slug': 'web-dev'},
-                    'level': 'beginner',
-                    'price': '0.00',
+                    'title': 'Advanced React Patterns',
+                    'slug': 'advanced-react-patterns',
+                    'category': {'id': 1, 'name': 'Web Development', 'slug': 'web-development'},
+                    'level': 'intermediate',
+                    'price': '129.99',
                     'status': 'draft',
                     'instructor_name': 'Jane Doe',
+                    'learning_objectives': '',
+                    'learning_objectives_list': [],
                 },
                 response_only=True,
             ),
