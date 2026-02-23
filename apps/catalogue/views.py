@@ -1,9 +1,10 @@
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -21,6 +22,13 @@ from .serializers import (
 User = get_user_model()
 
 
+class CataloguePageNumberPagination(PageNumberPagination):
+    """Pagination for catalogue list endpoints (tags, categories)."""
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
 @extend_schema(
     tags=['Catalogue - Tags'],
     description='Manage course tags for categorization and filtering',
@@ -30,6 +38,7 @@ class TagViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = CataloguePageNumberPagination
 
 
 @extend_schema(
@@ -40,20 +49,39 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for managing course categories."""
     queryset = Category.objects.filter(is_active=True)
     permission_classes = [IsAuthenticated]
-    
+    pagination_class = CataloguePageNumberPagination
+
     def get_serializer_class(self):
         if self.action == 'retrieve':
             return CategoryDetailSerializer
         return CategorySerializer
-    
+
+    def get_queryset(self):
+        queryset = Category.objects.filter(is_active=True)
+        parent_val = self.request.query_params.get('parent')
+        if parent_val is None:
+            return queryset
+        if parent_val.strip().lower() in ('', 'null'):
+            return queryset.filter(parent__isnull=True)
+        try:
+            parent_id = int(parent_val)
+        except (ValueError, TypeError):
+            raise ValidationError({
+                'parent': ['Invalid parent id. Must be an integer or \'null\'.']
+            })
+        return queryset.filter(parent_id=parent_id)
+
     @extend_schema(
         summary='Get all categories',
         description='Returns list of all active course categories with optional hierarchical structure',
         parameters=[
             OpenApiParameter(
                 name='parent',
-                description='Filter by parent category ID (null for top-level categories)',
-                type=int,
+                description=(
+                    'Filter by parent: omit for all; empty or "null" for root categories; '
+                    'integer ID for children of that parent.'
+                ),
+                type=str,
                 required=False
             ),
         ],
