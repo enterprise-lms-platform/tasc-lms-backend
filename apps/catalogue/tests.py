@@ -1,15 +1,17 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Category, Course, Session
+from .models import Category, Course, Session, Tag
 
 User = get_user_model()
 
 COURSES_URL = '/api/v1/catalogue/courses/'
 SESSIONS_URL = '/api/v1/catalogue/sessions/'
+CATEGORIES_URL = '/api/v1/catalogue/categories/'
+TAGS_URL = '/api/v1/catalogue/tags/'
 
 
 def _auth(user):
@@ -500,3 +502,107 @@ class CoursePublishedLegacyPatchTest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['status'], 'published')
         self.assertEqual(response.data['thumbnail'], 'https://example.com/fixed-thumb.png')
+
+
+# ---------------------------------------------------------------------------
+# G) Category parent filter (US-041 wizard bootstrap)
+# ---------------------------------------------------------------------------
+
+class CategoryParentFilterTest(APITestCase):
+    """GET /api/v1/catalogue/categories/?parent= supports absent, null, and id."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = _make_instructor(suffix='_catfilter')
+        self.root1 = Category.objects.create(name='Root A', slug='root-a', parent=None, is_active=True)
+        self.root2 = Category.objects.create(name='Root B', slug='root-b', parent=None, is_active=True)
+        self.child1 = Category.objects.create(name='Child 1', slug='child-1', parent=self.root1, is_active=True)
+        self.child2 = Category.objects.create(name='Child 2', slug='child-2', parent=self.root1, is_active=True)
+        self.child3 = Category.objects.create(name='Child 3', slug='child-3', parent=self.root2, is_active=True)
+
+    def test_list_categories_without_parent_param_returns_all_active(self):
+        response = self.client.get(CATEGORIES_URL, **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [c['id'] for c in response.data['results']]
+        self.assertIn(self.root1.id, ids)
+        self.assertIn(self.root2.id, ids)
+        self.assertIn(self.child1.id, ids)
+        self.assertIn(self.child2.id, ids)
+        self.assertIn(self.child3.id, ids)
+
+    def test_list_categories_parent_empty_returns_roots_only(self):
+        response = self.client.get(f'{CATEGORIES_URL}?parent=', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [c['id'] for c in response.data['results']]
+        self.assertIn(self.root1.id, ids)
+        self.assertIn(self.root2.id, ids)
+        self.assertNotIn(self.child1.id, ids)
+        self.assertNotIn(self.child2.id, ids)
+        self.assertNotIn(self.child3.id, ids)
+
+    def test_list_categories_parent_null_returns_roots_only(self):
+        response = self.client.get(f'{CATEGORIES_URL}?parent=null', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [c['id'] for c in response.data['results']]
+        self.assertIn(self.root1.id, ids)
+        self.assertIn(self.root2.id, ids)
+        self.assertNotIn(self.child1.id, ids)
+        self.assertNotIn(self.child2.id, ids)
+        self.assertNotIn(self.child3.id, ids)
+
+    def test_list_categories_parent_id_returns_children_only(self):
+        response = self.client.get(f'{CATEGORIES_URL}?parent={self.root1.id}', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [c['id'] for c in response.data['results']]
+        self.assertIn(self.child1.id, ids)
+        self.assertIn(self.child2.id, ids)
+        self.assertNotIn(self.root1.id, ids)
+        self.assertNotIn(self.root2.id, ids)
+        self.assertNotIn(self.child3.id, ids)
+
+    def test_list_categories_parent_invalid_returns_400(self):
+        response = self.client.get(f'{CATEGORIES_URL}?parent=notanint', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('parent', response.data)
+        self.assertIn('Invalid parent id', str(response.data['parent']))
+
+
+# ---------------------------------------------------------------------------
+# H) Tags pagination (US-041 wizard bootstrap)
+# ---------------------------------------------------------------------------
+
+class TagPaginationTest(APITestCase):
+    """GET /api/v1/catalogue/tags/ returns paginated response with count/next/previous/results."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = _make_instructor(suffix='_tagpag')
+        for i in range(65):
+            Tag.objects.create(name=f'Tag {i}', slug=f'tag-{i}')
+
+    def test_tags_list_returns_paginated_response(self):
+        response = self.client.get(TAGS_URL, **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('count', response.data)
+        self.assertIn('next', response.data)
+        self.assertIn('previous', response.data)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], 65)
+
+    def test_tags_list_default_page_size(self):
+        response = self.client.get(TAGS_URL, **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertLessEqual(len(response.data['results']), 50)
+
+    def test_tags_list_page_size_param(self):
+        response = self.client.get(f'{TAGS_URL}?page_size=10', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['results']), 10)
+        self.assertEqual(response.data['count'], 65)
+
+    def test_tags_list_page_param(self):
+        response = self.client.get(f'{TAGS_URL}?page=2&page_size=10', **_auth(self.user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['results']), 10)
+        self.assertIsNotNone(response.data['next'])
+        self.assertIsNotNone(response.data['previous'])
