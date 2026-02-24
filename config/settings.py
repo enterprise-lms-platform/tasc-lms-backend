@@ -274,6 +274,16 @@ FLUTTERWAVE_BASE_URL = os.getenv('FLUTTERWAVE_BASE_URL', 'https://api.flutterwav
 # Extend with environment-specific origins (staging, production, etc.)
 CORS_ALLOWED_ORIGINS.extend(get_list_from_env("CORS_ALLOWED_ORIGINS"))
 
+# Zoom Integration
+ZOOM_API_KEY = os.getenv('ZOOM_API_KEY', '')
+ZOOM_API_SECRET = os.getenv('ZOOM_API_SECRET', '')
+ZOOM_ACCOUNT_ID = os.getenv('ZOOM_ACCOUNT_ID', '')
+ZOOM_WEBHOOK_SECRET = os.getenv('ZOOM_WEBHOOK_SECRET', '')
+
+# Site settings
+SITE_DOMAIN = os.getenv('SITE_DOMAIN', 'localhost:8000')
+SITE_URL = os.getenv('SITE_URL', 'http://localhost:8000')
+
 # CSRF trusted origins for form submissions
 CSRF_TRUSTED_ORIGINS = get_list_from_env("CSRF_TRUSTED_ORIGINS")
 
