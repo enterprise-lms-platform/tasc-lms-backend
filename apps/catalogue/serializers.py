@@ -80,7 +80,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'duration_hours', 'duration_weeks', 'total_sessions',
             'instructor', 'instructor_name',
             'enrollment_count',
-            'featured', 'status', 'published_at'
+            'featured', 'status', 'published_at', 'access_duration', 'allow_self_enrollment'
         ]
         read_only_fields = ['id', 'enrollment_count']
     
@@ -179,13 +179,9 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'price', 'currency', 'discount_percentage',
             'duration_hours', 'duration_minutes', 'duration_weeks', 'total_sessions',
             'instructor',
-            'thumbnail', 'banner', 'trailer_video_url',
-            'prerequisites', 'learning_objectives', 'learning_objectives_list', 'target_audience',
-            'status', 'featured',
-            'is_public', 'allow_self_enrollment', 'certificate_on_completion',
-            'enable_discussions', 'sequential_learning',
-            'enrollment_limit', 'access_duration', 'start_date', 'end_date',
-            'grading_config',
+            'thumbnail', 'trailer_video_url',
+            'prerequisites', 'learning_objectives', 'target_audience',
+            'status', 'featured', 'access_duration', 'allow_self_enrollment',
             'meta_title', 'meta_description', 'meta_keywords'
         ]
 
