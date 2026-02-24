@@ -80,7 +80,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'duration_hours', 'duration_weeks', 'total_sessions',
             'instructor', 'instructor_name',
             'enrollment_count',
-            'featured', 'status', 'published_at'
+            'featured', 'status', 'published_at', 'access_duration', 'allow_self_enrollment'
         ]
         read_only_fields = ['id', 'enrollment_count']
     
@@ -143,7 +143,7 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'instructor',
             'thumbnail', 'trailer_video_url',
             'prerequisites', 'learning_objectives', 'target_audience',
-            'status', 'featured',
+            'status', 'featured', 'access_duration', 'allow_self_enrollment',
             'meta_title', 'meta_description', 'meta_keywords'
         ]
 

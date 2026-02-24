@@ -93,6 +93,8 @@ class Course(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     featured = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
+    access_duration = models.CharField(max_length=50, default='lifetime', blank=True)
+    allow_self_enrollment = models.BooleanField(default=True)
 
     # SEO
     meta_title = models.CharField(max_length=255, blank=True)
