@@ -335,7 +335,7 @@ class ZoomWebhookHandler:
 
     def _handle_meeting_started(self, payload):
         """Handle meeting.started webhook"""
-        from apps.livestream.models import LivestreamSession
+        from livestream.models import LivestreamSession
 
         meeting_id = payload.get('object', {}).get('id')
         if not meeting_id:
@@ -350,7 +350,7 @@ class ZoomWebhookHandler:
 
     def _handle_meeting_ended(self, payload):
         """Handle meeting.ended webhook"""
-        from apps.livestream.models import LivestreamSession
+        from livestream.models import LivestreamSession
 
         meeting_id = payload.get('object', {}).get('id')
         if not meeting_id:
@@ -365,7 +365,7 @@ class ZoomWebhookHandler:
 
     def _handle_participant_joined(self, payload):
         """Handle meeting.participant_joined webhook"""
-        from apps.livestream.models import LivestreamSession, LivestreamAttendance
+        from livestream.models import LivestreamSession, LivestreamAttendance
 
         meeting_id = payload.get('object', {}).get('id')
         participant = payload.get('object', {}).get('participant', {})
@@ -402,7 +402,7 @@ class ZoomWebhookHandler:
 
     def _handle_participant_left(self, payload):
         """Handle meeting.participant_left webhook"""
-        from apps.livestream.models import LivestreamSession, LivestreamAttendance
+        from livestream.models import LivestreamSession, LivestreamAttendance
 
         meeting_id = payload.get('object', {}).get('id')
         participant = payload.get('object', {}).get('participant', {})
@@ -436,7 +436,7 @@ class ZoomWebhookHandler:
 
     def _handle_recording_completed(self, payload):
         """Handle recording.completed webhook"""
-        from apps.livestream.models import LivestreamSession, LivestreamRecording
+        from livestream.models import LivestreamSession, LivestreamRecording
 
         meeting_id = payload.get('object', {}).get('id')
         recording_files = payload.get('object', {}).get('recording_files', [])
