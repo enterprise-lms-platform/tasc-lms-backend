@@ -81,7 +81,7 @@ class IsAdminOrReadOnly(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         
-        allowed_roles = ['lms_manager', 'tasc_admin', 'super_admin']
+        allowed_roles = ['lms_manager', 'super_admin']
         user_role = getattr(request.user, 'role', '').lower()
         
         return user_role in allowed_roles
