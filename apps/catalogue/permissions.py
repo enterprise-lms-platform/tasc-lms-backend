@@ -42,46 +42,14 @@ class CanDeleteCourse(BasePermission):
         role = getattr(request.user, 'role', None)
         return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
 
-class IsLMSManager(permissions.BasePermission):
-    """
-    Permission to only allow LMS Managers and Admins.
-    """
-    
-    def has_permission(self, request, view):
-        # Check if user is authenticated
-        if not request.user or not request.user.is_authenticated:
-            return False
-        
-        # Check user role - adjust based on your User model
-        # This assumes your User model has a 'role' field
-        allowed_roles = ['lms_manager', 'tasc_admin', 'super_admin']
-        user_role = getattr(request.user, 'role', '').lower()
-        
-        return user_role in allowed_roles
-    
-    def has_object_permission(self, request, view, obj):
-        # Same permission for object-level
-        allowed_roles = ['lms_manager', 'tasc_admin', 'super_admin']
-        user_role = getattr(request.user, 'role', '').lower()
-        
-        return user_role in allowed_roles
 
-
-class IsAdminOrReadOnly(permissions.BasePermission):
+class IsCategoryManagerOrReadOnly(BasePermission):
     """
-    Custom permission to only allow admins to edit.
+    Allows SAFE_METHODS for everyone who reaches the endpoint.
+    For write methods (POST, PUT, PATCH, DELETE) allows only LMS_MANAGER, TASC_ADMIN.
     """
-    
     def has_permission(self, request, view):
-        # Allow read-only for everyone
-        if request.method in permissions.SAFE_METHODS:
+        if request.method in SAFE_METHODS:
             return True
-        
-        # Write permissions only for authenticated users with proper role
-        if not request.user or not request.user.is_authenticated:
-            return False
-        
-        allowed_roles = ['lms_manager', 'super_admin']
-        user_role = getattr(request.user, 'role', '').lower()
-        
-        return user_role in allowed_roles
+        role = getattr(request.user, 'role', None)
+        return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
