@@ -287,7 +287,7 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'price', 'currency', 'discount_percentage',
             'duration_hours', 'duration_minutes', 'duration_weeks', 'total_sessions',
             'instructor',
-            'thumbnail', 'banner', 'trailer_video_url',
+            'thumbnail', 'trailer_video_url',
             'prerequisites', 'learning_objectives', 'target_audience',
             'status', 'featured', 'access_duration', 'allow_self_enrollment',
             'meta_title', 'meta_description', 'meta_keywords'
