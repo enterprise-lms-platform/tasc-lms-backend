@@ -301,15 +301,3 @@ EMAIL_BACKEND = env(
 )
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@tasc-lms.local")
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:5173")
-
-# DigitalOcean Spaces (presigned uploads)
-DO_SPACES_REGION = env("DO_SPACES_REGION", default="")
-DO_SPACES_BUCKET = env("DO_SPACES_BUCKET", default="")
-DO_SPACES_ENDPOINT = env(
-    "DO_SPACES_ENDPOINT",
-    default=(f"https://{DO_SPACES_REGION}.digitaloceanspaces.com" if DO_SPACES_REGION else ""),
-)
-DO_SPACES_ACCESS_KEY_ID = env("DO_SPACES_ACCESS_KEY_ID", default="")
-DO_SPACES_SECRET_ACCESS_KEY = env("DO_SPACES_SECRET_ACCESS_KEY", default="")
-DO_SPACES_CDN_BASE_URL = env("DO_SPACES_CDN_BASE_URL", default="")
-DO_SPACES_PRESIGN_EXPIRY_SECONDS = env.int("DO_SPACES_PRESIGN_EXPIRY_SECONDS", default=300)
