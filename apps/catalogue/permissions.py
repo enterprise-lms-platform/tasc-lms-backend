@@ -41,15 +41,3 @@ class CanDeleteCourse(BasePermission):
             return True
         role = getattr(request.user, 'role', None)
         return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
-
-
-class IsCategoryManagerOrReadOnly(BasePermission):
-    """
-    Allows SAFE_METHODS for everyone who reaches the endpoint.
-    For write methods (POST, PUT, PATCH, DELETE) allows only LMS_MANAGER, TASC_ADMIN.
-    """
-    def has_permission(self, request, view):
-        if request.method in SAFE_METHODS:
-            return True
-        role = getattr(request.user, 'role', None)
-        return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
