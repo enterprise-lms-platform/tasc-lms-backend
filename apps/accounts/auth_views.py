@@ -1,5 +1,7 @@
 # apps/accounts/auth_views.py
 
+import logging
+
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiParameter
 from django.conf import settings
 from django.urls import reverse
@@ -48,6 +50,26 @@ from datetime import timedelta
 
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+
+def _log_otp_send_failure(user, request, reason: str) -> None:
+    try:
+        from apps.audit.services import log_event
+
+        log_event(
+            actor=user,
+            action="failed",
+            resource="otp",
+            resource_id=str(getattr(user, "id", "")),
+            request=request,
+            details=f"OTP email send failed for {getattr(user, 'email', '')}: {reason}",
+        )
+    except Exception:
+        logger.exception(
+            "Failed to write OTP failure audit log",
+            extra={"user_id": getattr(user, "id", None), "email": getattr(user, "email", "")},
+        )
 
 
 class LoginView(TokenObtainPairView):
@@ -159,25 +181,38 @@ class LoginView(TokenObtainPairView):
         user.save(update_fields=["failed_login_attempts", "account_locked_until"])
 
         # E) Create OTP challenge instead of issuing tokens
-        now = timezone.now()
-        otp = generate_otp()
-        challenge = LoginOTPChallenge.objects.create(
-            user=user,
-            otp_hash=hash_otp(otp),
-            expires_at=now + timedelta(minutes=5),
-            attempts=0,
-            send_count=1,
-            last_sent_at=now,
-            is_used=False,
-        )
-        send_login_otp_email(user, otp)
+        ttl_seconds = getattr(settings, "LOGIN_OTP_TTL_SECONDS", 300)
+        try:
+            with transaction.atomic():
+                now = timezone.now()
+                otp = generate_otp()
+                challenge = LoginOTPChallenge.objects.create(
+                    user=user,
+                    otp_hash=hash_otp(otp),
+                    expires_at=now + timedelta(seconds=ttl_seconds),
+                    attempts=0,
+                    send_count=1,
+                    last_sent_at=now,
+                    is_used=False,
+                )
+                send_login_otp_email(user, otp)
+        except Exception as exc:
+            logger.exception(
+                "Login OTP email send failed",
+                extra={"user_id": user.id, "email": user.email},
+            )
+            _log_otp_send_failure(user, request, str(exc))
+            return Response(
+                {"detail": "Failed to send OTP email. Please try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
             {
                 "mfa_required": True,
                 "method": "email_otp",
                 "challenge_id": str(challenge.id),
-                "expires_in": 300,
+                "expires_in": ttl_seconds,
             },
             status=status.HTTP_200_OK,
         )
@@ -218,7 +253,8 @@ class VerifyOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if challenge.attempts >= 5:
+        max_attempts = getattr(settings, "LOGIN_OTP_MAX_ATTEMPTS", 5)
+        if challenge.attempts >= max_attempts:
             challenge.is_used = True
             challenge.save(update_fields=["is_used"])
             return Response(
@@ -298,26 +334,58 @@ class ResendOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if challenge.send_count >= 3:
+        max_resends = getattr(settings, "LOGIN_OTP_MAX_RESENDS", 3)
+        if challenge.send_count >= max_resends:
             return Response(
                 {"detail": "Maximum resend limit reached. Please start a new login."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        now = timezone.now()
-        otp = generate_otp()
-        challenge.otp_hash = hash_otp(otp)
-        challenge.last_sent_at = now
-        challenge.expires_at = now + timedelta(minutes=5)
-        challenge.send_count += 1
-        challenge.save(
-            update_fields=["otp_hash", "last_sent_at", "expires_at", "send_count"]
-        )
+        ttl_seconds = getattr(settings, "LOGIN_OTP_TTL_SECONDS", 300)
+        try:
+            with transaction.atomic():
+                challenge = LoginOTPChallenge.objects.select_for_update().get(
+                    id=challenge_id,
+                    is_used=False,
+                    expires_at__gt=timezone.now(),
+                )
+                if challenge.send_count >= max_resends:
+                    return Response(
+                        {
+                            "detail": "Maximum resend limit reached. Please start a new login."
+                        },
+                        status=status.HTTP_429_TOO_MANY_REQUESTS,
+                    )
 
-        send_login_otp_email(challenge.user, otp)
+                now = timezone.now()
+                otp = generate_otp()
+                challenge.otp_hash = hash_otp(otp)
+                challenge.last_sent_at = now
+                challenge.expires_at = now + timedelta(seconds=ttl_seconds)
+                challenge.send_count += 1
+                challenge.save(
+                    update_fields=["otp_hash", "last_sent_at", "expires_at", "send_count"]
+                )
+
+                send_login_otp_email(challenge.user, otp)
+        except LoginOTPChallenge.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or expired challenge."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Resend OTP email send failed",
+                extra={"user_id": challenge.user.id, "email": challenge.user.email},
+            )
+            _log_otp_send_failure(challenge.user, request, str(exc))
+            return Response(
+                {"detail": "Failed to send OTP email. Please try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
-            {"detail": "OTP sent.", "expires_in": 300},
+            {"detail": "OTP sent.", "expires_in": ttl_seconds},
             status=status.HTTP_200_OK,
         )
 

@@ -35,6 +35,7 @@ def send_tasc_email(
     context: dict[str, Any],
     from_email: str | None = None,
     reply_to: str | None = None,
+    raise_on_error: bool = False,
 ) -> None:
     """
     Sends an email using SendGrid Web API (HTTPS) to avoid SMTP port blocks (465/587).
@@ -42,6 +43,7 @@ def send_tasc_email(
 
     Controlled by:
       - settings.DJANGO_EMAIL_ENABLED / env DJANGO_EMAIL_ENABLED (true/false)
+      - settings.EMAIL_PROVIDER / env EMAIL_PROVIDER (console|django|sendgrid|auto)
       - settings.SENDGRID_API_KEY / env SENDGRID_API_KEY
       - settings.EMAIL_SUBJECT_PREFIX (optional)
       - settings.DEFAULT_FROM_EMAIL (optional)
@@ -58,28 +60,45 @@ def send_tasc_email(
         **context,
     }
 
-    html = render_to_string(template, enriched_context)
-    text = strip_tags(html)
+    try:
+        html = render_to_string(template, enriched_context)
+        text = strip_tags(html)
 
-    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "") or ""
-    full_subject = f"{subject_prefix}{subject}"
+        subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "") or ""
+        full_subject = f"{subject_prefix}{subject}"
 
-    from_addr = (
-        from_email
-        or getattr(settings, "DEFAULT_FROM_EMAIL", None)
-        or "no-reply@example.com"
-    )
-    support_email = reply_to or getattr(settings, "SUPPORT_EMAIL", None)
+        from_addr = (
+            from_email
+            or getattr(settings, "DEFAULT_FROM_EMAIL", None)
+            or "no-reply@example.com"
+        )
+        support_email = reply_to or getattr(settings, "SUPPORT_EMAIL", None)
 
-    sendgrid_key = (
-        getattr(settings, "SENDGRID_API_KEY", None)
-        or os.getenv("SENDGRID_API_KEY")
-        or ""
-    )
+        provider = str(getattr(settings, "EMAIL_PROVIDER", "auto")).lower()
+        if provider not in {"console", "django", "sendgrid", "auto"}:
+            logger.warning(
+                "Unknown EMAIL_PROVIDER value; falling back to auto",
+                extra={"email_provider": provider},
+            )
+            provider = "auto"
 
-    # Prefer SendGrid API if available
-    if sendgrid_key:
-        try:
+        if provider == "sendgrid":
+            sendgrid_key = getattr(settings, "SENDGRID_API_KEY", None) or ""
+            if not sendgrid_key:
+                raise RuntimeError(
+                    "EMAIL_PROVIDER is 'sendgrid' but SENDGRID_API_KEY is not configured."
+                )
+        elif provider in {"console", "django"}:
+            sendgrid_key = ""
+        else:
+            sendgrid_key = (
+                getattr(settings, "SENDGRID_API_KEY", None)
+                or os.getenv("SENDGRID_API_KEY")
+                or ""
+            )
+
+        # Use SendGrid when selected/available
+        if sendgrid_key:
             from sendgrid import SendGridAPIClient
             from sendgrid.helpers.mail import Mail, Email, To, Content
 
@@ -99,16 +118,8 @@ def send_tasc_email(
             sg = SendGridAPIClient(sendgrid_key)
             sg.send(mail)
             return
-        except Exception:
-            # Don't break auth flows, but log so we can debug staging easily.
-            logger.exception(
-                "SendGrid email send failed",
-                extra={"to": to, "template": template},
-            )
-            return
 
-    # Fallback (SMTP or whatever EMAIL_BACKEND is configured)
-    try:
+        # Fallback (SMTP or whatever EMAIL_BACKEND is configured)
         from django.core.mail import EmailMultiAlternatives
 
         msg = EmailMultiAlternatives(
@@ -123,7 +134,9 @@ def send_tasc_email(
         msg.send(fail_silently=False)
     except Exception:
         logger.exception(
-            "Django email send failed",
+            "Email send failed",
             extra={"to": to, "template": template},
         )
+        if raise_on_error:
+            raise
         return
