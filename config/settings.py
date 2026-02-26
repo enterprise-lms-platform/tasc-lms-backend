@@ -113,6 +113,7 @@ else:
 
 DJANGO_EMAIL_ENABLED = env.bool("DJANGO_EMAIL_ENABLED", default=True)
 
+EMAIL_PROVIDER = env("EMAIL_PROVIDER", default=("console" if DEBUG else "auto"))
 SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")  # keep empty in dev
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="support@tasclms.com")
 
@@ -204,6 +205,14 @@ REST_FRAMEWORK = {
         "otp_resend": "10/minute",
     },
 }
+
+# ----------------------------------------
+# Login OTP (MFA)
+# ----------------------------------------
+LOGIN_OTP_LENGTH = env.int("LOGIN_OTP_LENGTH", default=6)
+LOGIN_OTP_TTL_SECONDS = env.int("LOGIN_OTP_TTL_SECONDS", default=300)
+LOGIN_OTP_MAX_ATTEMPTS = env.int("LOGIN_OTP_MAX_ATTEMPTS", default=5)
+LOGIN_OTP_MAX_RESENDS = env.int("LOGIN_OTP_MAX_RESENDS", default=3)
 
 # ----------------------------------------
 # Simple JWT

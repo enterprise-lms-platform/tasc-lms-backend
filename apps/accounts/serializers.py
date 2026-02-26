@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -309,7 +310,17 @@ class InviteUserSerializer(serializers.Serializer):
 
 class VerifyOTPSerializer(serializers.Serializer):
     challenge_id = serializers.UUIDField()
-    otp = serializers.CharField(min_length=6, max_length=6)
+    otp = serializers.CharField()
+
+    def validate_otp(self, value):
+        expected_length = int(getattr(settings, "LOGIN_OTP_LENGTH", 6))
+        if len(value) != expected_length:
+            raise serializers.ValidationError(
+                f"OTP must be exactly {expected_length} digits."
+            )
+        if not value.isdigit():
+            raise serializers.ValidationError("OTP must contain digits only.")
+        return value
 
 
 class ResendOTPSerializer(serializers.Serializer):

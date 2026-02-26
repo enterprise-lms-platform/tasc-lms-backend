@@ -11,7 +11,9 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.models import LoginOTPChallenge
 from apps.accounts.tokens import email_verification_token
+from apps.accounts.utils import hash_otp
 from apps.audit.models import AuditLog
 
 User = get_user_model()
@@ -696,6 +698,22 @@ class LoginOTPTests(TestCase):
         return challenge_id, otp_sent
 
     @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_login_returns_503_when_otp_email_send_fails_and_rolls_back_challenge(
+        self, mock_send_otp
+    ):
+        mock_send_otp.side_effect = Exception("email service unavailable")
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "otp@example.com", "password": "testpass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("Failed to send OTP email", response.data["detail"])
+        self.assertFalse(LoginOTPChallenge.objects.filter(user=self.user).exists())
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
     def test_verify_otp_returns_tokens_and_marks_challenge_used(self, mock_send_otp):
         """Successful OTP verification returns JWT tokens and marks challenge used."""
         challenge_id, otp = self._login_get_challenge_id(mock_send_otp)
@@ -710,8 +728,6 @@ class LoginOTPTests(TestCase):
         self.assertIn("refresh", response.data)
         self.assertIn("user", response.data)
         self.assertEqual(response.data["user"]["email"], self.user.email)
-
-        from apps.accounts.models import LoginOTPChallenge
 
         challenge = LoginOTPChallenge.objects.get(id=challenge_id)
         self.assertTrue(challenge.is_used)
@@ -761,3 +777,38 @@ class LoginOTPTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
         self.assertIn("Maximum resend", response.data["detail"])
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_resend_returns_503_and_does_not_increment_send_count_on_email_failure(
+        self, mock_send_otp
+    ):
+        challenge = LoginOTPChallenge.objects.create(
+            user=self.user,
+            otp_hash=hash_otp("123456"),
+            expires_at=timezone.now() + timedelta(minutes=5),
+            attempts=0,
+            send_count=1,
+            last_sent_at=timezone.now(),
+            is_used=False,
+        )
+        mock_send_otp.side_effect = Exception("smtp down")
+
+        response = self.client.post(
+            self.resend_url,
+            {"challenge_id": str(challenge.id)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.send_count, 1)
+
+    @override_settings(LOGIN_OTP_TTL_SECONDS=420)
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_login_response_uses_configured_otp_ttl(self, mock_send_otp):
+        response = self.client.post(
+            self.login_url,
+            {"email": "otp@example.com", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["expires_in"], 420)
