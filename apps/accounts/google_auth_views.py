@@ -4,9 +4,10 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
 
@@ -68,6 +69,7 @@ User = get_user_model()
 )
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_login(request):
     """
     Google OAuth Login Endpoint.
@@ -171,11 +173,16 @@ def google_oauth_login(request):
                 )
                 is_new_user = True
         
-        # Ensure user is active
+        # Enforce consistent account state checks across auth methods
         if not user.is_active:
             return Response(
                 {'error': 'Account is inactive'},
                 status=status.HTTP_403_FORBIDDEN
+            )
+        if hasattr(user, "email_verified") and not user.email_verified:
+            return Response(
+                {"error": "Email not verified."},
+                status=status.HTTP_403_FORBIDDEN,
             )
         
         # Generate JWT tokens
@@ -222,6 +229,7 @@ def google_oauth_login(request):
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_link(request):
     """
     Link Google Account Endpoint.
@@ -311,6 +319,7 @@ def google_oauth_link(request):
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_unlink(request):
     """
     Unlink Google Account Endpoint.
@@ -390,3 +399,8 @@ def google_oauth_status(request):
         'google_id': user.google_id,
         'google_picture': user.google_picture,
     }, status=status.HTTP_200_OK)
+
+
+google_oauth_login.cls.throttle_scope = "google_login"
+google_oauth_link.cls.throttle_scope = "google_link"
+google_oauth_unlink.cls.throttle_scope = "google_unlink"
