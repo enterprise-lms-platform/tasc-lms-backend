@@ -2,6 +2,7 @@ from unittest.mock import patch, MagicMock
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -138,6 +139,91 @@ class MeEndpointTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["email"], self.user.email)
+
+
+class PasswordPolicyValidationTests(TestCase):
+    """Regression tests for password-policy enforcement and error key mapping."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_register_rejects_weak_password_under_password_key(self):
+        payload = {
+            "email": "newuser@example.com",
+            "password": "abcdefg1",
+            "confirm_password": "abcdefg1",
+            "first_name": "New",
+            "last_name": "User",
+            "phone_number": "",
+            "country": "",
+            "timezone": "",
+            "accept_terms": True,
+            "marketing_opt_in": False,
+        }
+
+        response = self.client.post("/api/v1/auth/register/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("uppercase" in msg.lower() for msg in response.data["password"])
+        )
+        self.assertTrue(
+            any("special character" in msg.lower() for msg in response.data["password"])
+        )
+
+    def test_change_password_rejects_short_password_under_new_password_key(self):
+        user = User.objects.create_user(
+            username="changepwduser",
+            email="changepwd@example.com",
+            password="StrongPass1!",
+            email_verified=True,
+            is_active=True,
+        )
+        token = RefreshToken.for_user(user)
+
+        response = self.client.post(
+            "/api/v1/auth/change-password/",
+            {
+                "old_password": "StrongPass1!",
+                "new_password": "Ab1!",
+                "confirm_password": "Ab1!",
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token.access_token}",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("at least 8" in msg.lower() for msg in response.data["new_password"])
+        )
+
+    def test_reset_confirm_rejects_weak_password_under_new_password_key(self):
+        user = User.objects.create_user(
+            username="resetpwduser",
+            email="resetpwd@example.com",
+            password="StrongPass1!",
+            email_verified=True,
+            is_active=True,
+        )
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+
+        response = self.client.post(
+            f"/api/v1/auth/password-reset-confirm/{uidb64}/{token}/",
+            {
+                "new_password": "abcdefg1",
+                "confirm_password": "abcdefg1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("uppercase" in msg.lower() for msg in response.data["new_password"])
+        )
 
 
 class AccountsAuditInstrumentationTests(TestCase):
