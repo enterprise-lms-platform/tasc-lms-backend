@@ -1,9 +1,7 @@
 from django.urls import path, include
 from apps.accounts.views import invite_user
-from apps.common.views import PresignUploadView
 
 urlpatterns = [
-    path("uploads/presign/", PresignUploadView.as_view(), name="uploads-presign"),
     path("", include("apps.common.urls")),
     path("auth/", include("apps.accounts.urls")),
     path("admin/users/invite/", invite_user, name="admin-invite-user"),

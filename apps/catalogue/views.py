@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     Category, Course, Session, Tag
 )
-from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, IsCategoryManagerOrReadOnly
+from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
     SessionSerializer, SessionCreateSerializer,
@@ -45,10 +45,10 @@ class TagViewSet(viewsets.ReadOnlyModelViewSet):
     tags=['Catalogue - Categories'],
     description='Manage course categories with hierarchical structure',
 )
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for managing course categories."""
     queryset = Category.objects.filter(is_active=True)
-    permission_classes = [IsAuthenticated, IsCategoryManagerOrReadOnly]
+    permission_classes = [IsAuthenticated]
     pagination_class = CataloguePageNumberPagination
 
     def get_serializer_class(self):
@@ -95,14 +95,6 @@ class CategoryViewSet(viewsets.ModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
-
-    @extend_schema(
-        operation_id='catalogue_categories_create',
-        summary='Create Category',
-        description='Create a course category (root or subcategory). Only LMS Manager or TASC Admin.',
-    )
-    def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
 
 
 @extend_schema(

@@ -34,6 +34,114 @@ class CategoryDetailSerializer(CategorySerializer):
     class Meta(CategorySerializer.Meta):
         fields = CategorySerializer.Meta.fields + ['children']
 
+class CategoryCreateUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating and updating categories.
+    Used by LMS Managers.
+    """
+    
+    class Meta:
+        model = Category
+        fields = ['name', 'slug', 'description', 'icon', 'parent', 'is_active']
+        extra_kwargs = {
+            'slug': {'required': False, 'allow_blank': True},
+        }
+    
+    def validate_name(self, value):
+        """Validate that category name is unique (case-insensitive)"""
+        if Category.objects.filter(name__iexact=value).exists():
+            # Check if this is an update to the same category
+            if self.instance and self.instance.name.lower() == value.lower():
+                return value
+            raise serializers.ValidationError(
+                f"A category with name '{value}' already exists."
+            )
+        return value
+    
+    def validate_parent(self, value):
+        """Validate that parent is not self and doesn't create circular reference"""
+        if value and self.instance:
+            if value.id == self.instance.id:
+                raise serializers.ValidationError("A category cannot be its own parent.")
+            
+            # Check for circular reference
+            parent = value
+            while parent:
+                if parent.id == self.instance.id:
+                    raise serializers.ValidationError(
+                        "Circular reference detected. Cannot set a child as parent."
+                    )
+                parent = parent.parent
+        return value
+    
+    def validate(self, data):
+        """Auto-generate slug if not provided"""
+        if 'slug' not in data or not data.get('slug'):
+            name = data.get('name', self.instance.name if self.instance else '')
+            if name:
+                data['slug'] = slugify(name)
+        return data
+
+
+class CategoryTreeSerializer(serializers.ModelSerializer):
+    """
+    Serializer for hierarchical category tree view.
+    """
+    children = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'slug', 'description', 'icon', 'is_active', 'children']
+    
+    def get_children(self, obj):
+        children = obj.children.all().order_by('name')
+        return CategoryTreeSerializer(children, many=True).data
+
+
+class CategoryBulkActionSerializer(serializers.Serializer):
+    """
+    Serializer for bulk actions on categories.
+    """
+    ACTION_CHOICES = [
+        ('activate', 'Activate'),
+        ('deactivate', 'Deactivate'),
+        ('delete', 'Delete'),
+        ('move', 'Move to parent'),
+    ]
+    
+    action = serializers.ChoiceField(choices=ACTION_CHOICES)
+    category_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=False
+    )
+    target_parent_id = serializers.UUIDField(required=False, allow_null=True)
+    
+    def validate_category_ids(self, value):
+        """Validate that all category IDs exist"""
+        existing_ids = set(Category.objects.filter(id__in=value).values_list('id', flat=True))
+        if len(existing_ids) != len(value):
+            missing = set(value) - existing_ids
+            raise serializers.ValidationError(
+                f"Categories not found: {', '.join(str(id) for id in missing)}"
+            )
+        return value
+    
+    def validate(self, data):
+        """Validate based on action"""
+        if data['action'] == 'move' and not data.get('target_parent_id'):
+            raise serializers.ValidationError(
+                "target_parent_id is required for move action"
+            )
+        return data
+
+
+class CategorySimpleSerializer(serializers.ModelSerializer):
+    """
+    Ultra-simple serializer for dropdowns and selects.
+    """
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'slug', 'is_active']
 
 class SessionSerializer(serializers.ModelSerializer):
     """Serializer for Session model."""
@@ -179,7 +287,7 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'price', 'currency', 'discount_percentage',
             'duration_hours', 'duration_minutes', 'duration_weeks', 'total_sessions',
             'instructor',
-            'thumbnail', 'banner', 'trailer_video_url',
+            'thumbnail', 'trailer_video_url',
             'prerequisites', 'learning_objectives', 'target_audience',
             'status', 'featured', 'access_duration', 'allow_self_enrollment',
             'meta_title', 'meta_description', 'meta_keywords'

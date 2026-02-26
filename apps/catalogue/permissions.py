@@ -1,5 +1,6 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 from django.contrib.auth import get_user_model
+from rest_framework import permissions
 
 User = get_user_model()
 
@@ -41,14 +42,46 @@ class CanDeleteCourse(BasePermission):
         role = getattr(request.user, 'role', None)
         return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
 
-
-class IsCategoryManagerOrReadOnly(BasePermission):
+class IsLMSManager(permissions.BasePermission):
     """
-    Allows SAFE_METHODS for everyone who reaches the endpoint.
-    For write methods (POST, PUT, PATCH, DELETE) allows only LMS_MANAGER, TASC_ADMIN.
+    Permission to only allow LMS Managers and Admins.
     """
+    
     def has_permission(self, request, view):
-        if request.method in SAFE_METHODS:
+        # Check if user is authenticated
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Check user role - adjust based on your User model
+        # This assumes your User model has a 'role' field
+        allowed_roles = ['lms_manager', 'tasc_admin', 'super_admin']
+        user_role = getattr(request.user, 'role', '').lower()
+        
+        return user_role in allowed_roles
+    
+    def has_object_permission(self, request, view, obj):
+        # Same permission for object-level
+        allowed_roles = ['lms_manager', 'tasc_admin', 'super_admin']
+        user_role = getattr(request.user, 'role', '').lower()
+        
+        return user_role in allowed_roles
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Custom permission to only allow admins to edit.
+    """
+    
+    def has_permission(self, request, view):
+        # Allow read-only for everyone
+        if request.method in permissions.SAFE_METHODS:
             return True
-        role = getattr(request.user, 'role', None)
-        return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
+        
+        # Write permissions only for authenticated users with proper role
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        allowed_roles = ['lms_manager', 'super_admin']
+        user_role = getattr(request.user, 'role', '').lower()
+        
+        return user_role in allowed_roles
