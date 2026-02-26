@@ -226,6 +226,83 @@ class PasswordPolicyValidationTests(TestCase):
         )
 
 
+class RegisterFlowBehaviorTests(TestCase):
+    """Tests for re-register behavior and register transaction safety."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.register_url = "/api/v1/auth/register/"
+        self.base_payload = {
+            "email": "x@test.com",
+            "password": "StrongPass1!",
+            "confirm_password": "StrongPass1!",
+            "first_name": "Test",
+            "last_name": "User",
+            "phone_number": "",
+            "country": "",
+            "timezone": "",
+            "accept_terms": True,
+            "marketing_opt_in": False,
+        }
+
+    def test_reregister_unverified_inactive_user_returns_verify_message(self):
+        User.objects.create_user(
+            username="pendinguser",
+            email="x@test.com",
+            password="StrongPass1!",
+            is_active=False,
+            email_verified=False,
+        )
+
+        response = self.client.post(self.register_url, self.base_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("not verified", response.data["email"][0].lower())
+        self.assertNotIn("already registered", response.data["email"][0].lower())
+
+    def test_reregister_verified_active_user_returns_already_registered(self):
+        User.objects.create_user(
+            username="activeuser",
+            email="x@test.com",
+            password="StrongPass1!",
+            is_active=True,
+            email_verified=True,
+        )
+
+        response = self.client.post(self.register_url, self.base_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already registered", response.data["email"][0].lower())
+
+    @patch("apps.accounts.auth_views.send_tasc_email")
+    def test_register_sends_email_only_after_commit_and_not_on_atomic_failure(
+        self, mock_send_tasc_email
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self.register_url,
+                {**self.base_payload, "email": "commit-ok@test.com"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(mock_send_tasc_email.call_count, 1)
+
+        mock_send_tasc_email.reset_mock()
+        with self.captureOnCommitCallbacks(execute=True):
+            with patch(
+                "apps.accounts.auth_views.email_verification_token.make_token",
+                side_effect=Exception("token generation failed"),
+            ):
+                with self.assertRaises(Exception):
+                    self.client.post(
+                        self.register_url,
+                        {**self.base_payload, "email": "rollback@test.com"},
+                        format="json",
+                    )
+        self.assertEqual(mock_send_tasc_email.call_count, 0)
+        self.assertFalse(User.objects.filter(email__iexact="rollback@test.com").exists())
+
+
 class AccountsAuditInstrumentationTests(TestCase):
     """Tests for US-027 Phase 2A audit instrumentation in accounts views."""
 

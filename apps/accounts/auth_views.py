@@ -8,6 +8,7 @@ from django.utils.encoding import force_bytes, force_str
 #from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.db import transaction
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.conf import settings
@@ -382,36 +383,40 @@ class RegisterView(APIView):
         ],
     )
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            serializer = RegisterSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
 
-        user = serializer.save()
+            user = serializer.save()
 
-        # Force unverified + inactive until verified
-        if hasattr(user, "email_verified"):
-            user.email_verified = False
-        user.is_active = False
-        user.save(
-            update_fields=["is_active"]
-            + (["email_verified"] if hasattr(user, "email_verified") else [])
-        )
+            # Force unverified + inactive until verified
+            if hasattr(user, "email_verified"):
+                user.email_verified = False
+            user.is_active = False
+            user.save(
+                update_fields=["is_active"]
+                + (["email_verified"] if hasattr(user, "email_verified") else [])
+            )
 
-        # Build verification link
-        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-        token = email_verification_token.make_token(user)
+            # Build verification link
+            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+            token = email_verification_token.make_token(user)
 
-        frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
-        verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
+            frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+            verify_url = f"{frontend_base}/verify-email/{uidb64}/{token}"
 
-        send_tasc_email(
-            subject="Verify your TASC LMS account",
-            to=[user.email],
-            template="emails/auth/verify_email.html",
-            context={
-                "user": user,
-                "verify_url": verify_url,
-            },
-        )
+            def _send_verification_email():
+                send_tasc_email(
+                    subject="Verify your TASC LMS account",
+                    to=[user.email],
+                    template="emails/auth/verify_email.html",
+                    context={
+                        "user": user,
+                        "verify_url": verify_url,
+                    },
+                )
+
+            transaction.on_commit(_send_verification_email)
 
 
         return Response(

@@ -167,8 +167,21 @@ class RegisterSerializer(serializers.Serializer):
                 {"accept_terms": "You must accept the Terms and Privacy Policy."}
             )
 
-        if User.objects.filter(email__iexact=attrs["email"]).exists():
-            raise serializers.ValidationError({"email": "Email is already registered."})
+        existing = User.objects.filter(email__iexact=attrs["email"]).first()
+        if existing:
+            verified = getattr(existing, "email_verified", False)
+            active = getattr(existing, "is_active", False)
+            if verified or active:
+                raise serializers.ValidationError(
+                    {"email": ["Email is already registered."]}
+                )
+            raise serializers.ValidationError(
+                {
+                    "email": [
+                        "Account exists but email is not verified. Please verify your email or request a new verification link."
+                    ]
+                }
+            )
 
         return attrs
 
