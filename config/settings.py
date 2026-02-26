@@ -129,8 +129,8 @@ DEFAULT_FROM_EMAIL = env(
 AUTH_USER_MODEL = "accounts.User"
 
 # Login lockout (US-015)
-MAX_LOGIN_ATTEMPTS = 5
-ACCOUNT_LOCK_MINUTES = 15
+MAX_LOGIN_ATTEMPTS = env.int("MAX_LOGIN_ATTEMPTS", default=5)
+ACCOUNT_LOCK_MINUTES = env.int("ACCOUNT_LOCK_MINUTES", default=15)
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # admin login
@@ -199,8 +199,15 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
     "PAGE_SIZE": 20,
     "DEFAULT_THROTTLE_RATES": {
+        "login": "10/minute",
+        "google_login": "10/minute",
+        "google_link": "5/minute",
+        "google_unlink": "5/minute",
         "otp_verify": "10/minute",
         "otp_resend": "10/minute",
     },

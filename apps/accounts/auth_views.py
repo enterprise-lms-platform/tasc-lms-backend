@@ -79,6 +79,8 @@ class LoginView(TokenObtainPairView):
     """
 
     serializer_class = EmailTokenObtainPairSerializer
+    throttle_scope = "login"
+    throttle_classes = [ScopedRateThrottle]
 
     @extend_schema(
         tags=["Accounts"],

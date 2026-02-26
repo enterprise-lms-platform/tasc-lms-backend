@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -427,11 +428,27 @@ class AccountsAuditInstrumentationTests(TestCase):
         self.assertIsNone(log.actor)
 
 
-@override_settings(GOOGLE_CLIENT_ID="test-client-id")
+@override_settings(
+    GOOGLE_CLIENT_ID="test-client-id",
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "google_link": "1000/minute",
+            "google_login": "1000/minute",
+            "google_unlink": "1000/minute",
+            "login": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
 class GoogleOAuthLinkTests(TestCase):
     """Tests for POST /api/v1/auth/google/link/"""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="linkuser",
@@ -558,11 +575,119 @@ class GoogleOAuthLinkTests(TestCase):
         self.assertEqual(self.user.google_id, "another-google-id")
 
 
-@override_settings(MAX_LOGIN_ATTEMPTS=5, ACCOUNT_LOCK_MINUTES=15)
+@override_settings(
+    GOOGLE_CLIENT_ID="test-client-id",
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "google_link": "1000/minute",
+            "google_login": "1000/minute",
+            "google_unlink": "1000/minute",
+            "login": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
+class GoogleOAuthLoginTests(TestCase):
+    """Tests for POST /api/v1/auth/google/login/"""
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.url = "/api/v1/auth/google/login/"
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    def test_google_login_blocks_unverified_existing_user(self, mock_get):
+        user = User.objects.create_user(
+            username="googleunverified",
+            email="google-unverified@example.com",
+            password="testpass123",
+            email_verified=False,
+            is_active=True,
+        )
+
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-unverified",
+                    "email": user.email,
+                    "email_verified": True,
+                    "given_name": "Google",
+                    "family_name": "User",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Email not verified", response.data["error"])
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    def test_google_login_links_verified_active_existing_user_and_returns_tokens(
+        self, mock_get
+    ):
+        user = User.objects.create_user(
+            username="googleverified",
+            email="google-verified@example.com",
+            password="testpass123",
+            email_verified=True,
+            is_active=True,
+        )
+        self.assertIsNone(user.google_id)
+
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-verified",
+                    "email": user.email,
+                    "email_verified": True,
+                    "given_name": "Google",
+                    "family_name": "Verified",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertFalse(response.data["is_new_user"])
+
+        user.refresh_from_db()
+        self.assertEqual(user.google_id, "google-sub-verified")
+
+
+@override_settings(
+    MAX_LOGIN_ATTEMPTS=5,
+    ACCOUNT_LOCK_MINUTES=15,
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "login": "1000/minute",
+            "google_login": "1000/minute",
+            "google_link": "1000/minute",
+            "google_unlink": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
 class LoginLockoutTests(TestCase):
     """Tests for login lockout after failed attempts (US-015)."""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.login_url = "/api/v1/auth/login/"
         self.user = User.objects.create_user(
@@ -649,6 +774,30 @@ class LoginLockoutTests(TestCase):
         self.assertEqual(mock_send.call_count, 1)
         self.assertEqual(mock_send.call_args[0][0].pk, self.user.pk)
 
+    def test_login_is_rate_limited_after_threshold(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        with patch.dict(ScopedRateThrottle.THROTTLE_RATES, {"login": "2/minute"}):
+            response1 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+            response2 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+            response3 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+
+        self.assertEqual(response1.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response2.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response3.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
     @patch("apps.accounts.auth_views.send_login_otp_email")
     def test_successful_password_returns_mfa_required(self, mock_send_otp):
         """Correct password returns mfa_required with challenge_id, not tokens."""
@@ -669,10 +818,26 @@ class LoginLockoutTests(TestCase):
         self.assertEqual(len(mock_send_otp.call_args[0][1]), 6)
 
 
+@override_settings(
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "login": "1000/minute",
+            "google_login": "1000/minute",
+            "google_link": "1000/minute",
+            "google_unlink": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    }
+)
 class LoginOTPTests(TestCase):
     """Tests for email OTP login flow (verify-otp, resend-otp)."""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="otpuser",
