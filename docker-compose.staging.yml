@@ -35,3 +35,10 @@ services:
 volumes:
   pgdata:
   staticfiles:
+
+mailpit:
+  image: axllent/mailpit:latest
+  restart: unless-stopped
+  ports:
+    - "8025:8025"
+    - "1025:1025"
