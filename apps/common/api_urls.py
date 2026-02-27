@@ -1,5 +1,5 @@
 from django.urls import path, include
-from apps.accounts.views import invite_user
+from apps.accounts.views import invite_user, promote_user_role
 from apps.common.views import PresignUploadView
 
 urlpatterns = [
@@ -7,6 +7,7 @@ urlpatterns = [
     path("", include("apps.common.urls")),
     path("auth/", include("apps.accounts.urls")),
     path("admin/users/invite/", invite_user, name="admin-invite-user"),
+    path("admin/users/<int:user_id>/promote/", promote_user_role, name="admin-user-promote"),
     path("superadmin/", include("apps.audit.urls")),
     path("public/", include("apps.catalogue.urls_public")),
     path("catalogue/", include("apps.catalogue.urls")),
