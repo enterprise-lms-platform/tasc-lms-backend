@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal, InvalidOperation
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -144,9 +145,17 @@ class Course(models.Model):
 
     @property
     def discounted_price(self):
-        if self.discount_percentage > 0:
-            return self.price * (1 - self.discount_percentage / 100)
-        return self.price
+        price = self.price if self.price is not None else Decimal("0")
+        try:
+            discount = Decimal(str(self.discount_percentage or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            discount = Decimal("0")
+
+        if discount <= Decimal("0"):
+            return price
+
+        discount_factor = Decimal("1") - (discount / Decimal("100"))
+        return price * discount_factor
 
     @property
     def enrollment_count(self):
