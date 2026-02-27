@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from decimal import Decimal
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -44,6 +45,31 @@ def _minimal_payload(**overrides):
     }
     base.update(overrides)
     return base
+
+
+class CourseDiscountedPriceTest(TestCase):
+    def test_discounted_price_uses_decimal_math(self):
+        course = Course(
+            title="Discount Course",
+            slug="discount-course",
+            description="desc",
+            price=Decimal("100.00"),
+            discount_percentage=10,
+        )
+        self.assertEqual(course.discounted_price, Decimal("90.00"))
+
+    def test_discounted_price_none_or_zero_discount_returns_price(self):
+        base_kwargs = {
+            "title": "No Discount Course",
+            "slug": "no-discount-course",
+            "description": "desc",
+            "price": Decimal("100.00"),
+        }
+        course_none = Course(discount_percentage=None, **base_kwargs)
+        self.assertEqual(course_none.discounted_price, Decimal("100.00"))
+
+        course_zero = Course(discount_percentage=0, **base_kwargs)
+        self.assertEqual(course_zero.discounted_price, Decimal("100.00"))
 
 
 # ---------------------------------------------------------------------------
