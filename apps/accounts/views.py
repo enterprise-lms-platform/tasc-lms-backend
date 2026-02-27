@@ -12,8 +12,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from django.shortcuts import get_object_or_404
 
 from .tokens import email_verification_token
+from .rbac import is_admin_like
 
 from apps.notifications.services import send_tasc_email
 
@@ -241,4 +243,67 @@ def invite_user(request):
     return Response(
         {"detail": "Invitation sent successfully", "email": user.email},
         status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    tags=["Admin"],
+    summary="Promote user to instructor",
+    description="Promote a target user to instructor. Allowed for TASC Admin and LMS Manager.",
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "user_id": {"type": "integer"},
+                "new_role": {"type": "string"},
+            },
+        },
+        403: {"type": "object", "properties": {"detail": {"type": "string"}}},
+        404: {"type": "object", "properties": {"detail": {"type": "string"}}},
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def promote_user_role(request, user_id: int):
+    if not is_admin_like(request.user):
+        return Response(
+            {"detail": "Only TASC Admins and LMS Managers can promote users."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    target_user = get_object_or_404(User, pk=user_id)
+    old_role = target_user.role
+    new_role = User.Role.INSTRUCTOR
+
+    if old_role != new_role:
+        target_user.role = new_role
+        target_user.save(update_fields=["role"])
+
+    from apps.audit.services import log_event
+
+    log_event(
+        action="updated",
+        resource="user",
+        resource_id=str(target_user.id),
+        actor=request.user,
+        request=request,
+        details=(
+            f"User role promoted via admin endpoint: {target_user.email} "
+            f"(role={old_role} -> {new_role}) by {request.user.email}"
+        ),
+    )
+
+    message = (
+        "User is already an instructor."
+        if old_role == new_role
+        else "User promoted to instructor successfully."
+    )
+    return Response(
+        {
+            "message": message,
+            "user_id": target_user.id,
+            "new_role": User.Role.INSTRUCTOR,
+        },
+        status=status.HTTP_200_OK,
     )

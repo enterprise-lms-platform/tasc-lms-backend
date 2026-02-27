@@ -16,6 +16,7 @@ from apps.accounts.models import LoginOTPChallenge
 from apps.accounts.tokens import email_verification_token
 from apps.accounts.utils import hash_otp
 from apps.audit.models import AuditLog
+from apps.livestream.permissions import IsInstructorOrReadOnly
 
 User = get_user_model()
 
@@ -977,3 +978,103 @@ class LoginOTPTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["expires_in"], 420)
+
+
+class AdminPromoteUserRoleTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.target_user = User.objects.create_user(
+            username="targetlearner",
+            email="targetlearner@example.com",
+            password="testpass123",
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.admin_user = User.objects.create_user(
+            username="promoteadmin",
+            email="promoteadmin@example.com",
+            password="testpass123",
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        self.manager_user = User.objects.create_user(
+            username="promotemanager",
+            email="promotemanager@example.com",
+            password="testpass123",
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_user = User.objects.create_user(
+            username="noprivlearner",
+            email="noprivlearner@example.com",
+            password="testpass123",
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.url = f"/api/v1/admin/users/{self.target_user.id}/promote/"
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def test_tasc_admin_can_promote_learner_to_instructor(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.admin_user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.INSTRUCTOR)
+        self.assertEqual(response.data["new_role"], User.Role.INSTRUCTOR)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="updated",
+                resource="user",
+                resource_id=str(self.target_user.id),
+                actor=self.admin_user,
+            ).exists()
+        )
+
+    def test_lms_manager_can_promote_learner_to_instructor(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.manager_user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.INSTRUCTOR)
+        self.assertEqual(response.data["new_role"], User.Role.INSTRUCTOR)
+
+    def test_learner_cannot_promote_user(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.learner_user))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.LEARNER)
+
+
+class LivestreamPermissionAdminLikeTests(TestCase):
+    def test_tasc_admin_passes_instructor_or_read_only_permission(self):
+        permission = IsInstructorOrReadOnly()
+        admin_user = User.objects.create_user(
+            username="livetascadmin",
+            email="livetascadmin@example.com",
+            password="testpass123",
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        instructor_user = User.objects.create_user(
+            username="liveinstructor",
+            email="liveinstructor@example.com",
+            password="testpass123",
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+
+        request = MagicMock()
+        request.method = "PATCH"
+        request.user = admin_user
+
+        session_like_obj = MagicMock()
+        session_like_obj.instructor = instructor_user
+
+        self.assertTrue(permission.has_object_permission(request, None, session_like_obj))
