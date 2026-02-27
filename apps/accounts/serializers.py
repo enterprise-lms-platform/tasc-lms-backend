@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
@@ -155,6 +156,9 @@ class RegisterSerializer(serializers.Serializer):
     marketing_opt_in = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
+        email = (attrs.get("email") or "").strip().lower()
+        attrs["email"] = email
+
         if attrs["password"] != attrs["confirm_password"]:
             raise serializers.ValidationError(
                 {"confirm_password": "Passwords do not match."}
@@ -168,7 +172,7 @@ class RegisterSerializer(serializers.Serializer):
                 {"accept_terms": "You must accept the Terms and Privacy Policy."}
             )
 
-        existing = User.objects.filter(email__iexact=attrs["email"]).first()
+        existing = User.objects.filter(email__iexact=email).first()
         if existing:
             verified = getattr(existing, "email_verified", False)
             active = getattr(existing, "is_active", False)
@@ -215,7 +219,12 @@ class RegisterSerializer(serializers.Serializer):
         if hasattr(user, "role") and not getattr(user, "role", None):
             user.role = "learner"
 
-        user.save()
+        try:
+            user.save()
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": ["A user with this email already exists."]}
+            )
         return user
 
 

@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
+from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -306,6 +307,17 @@ class RegisterFlowBehaviorTests(TestCase):
         self.assertEqual(mock_send_tasc_email.call_count, 0)
         self.assertFalse(User.objects.filter(email__iexact="rollback@test.com").exists())
 
+    @patch("apps.accounts.serializers.User.save", side_effect=IntegrityError("unique_violation"))
+    def test_register_integrity_error_returns_clean_email_error(self, _mock_user_save):
+        response = self.client.post(
+            self.register_url,
+            {**self.base_payload, "email": "collision@test.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
+
 
 class AccountsAuditInstrumentationTests(TestCase):
     """Tests for US-027 Phase 2A audit instrumentation in accounts views."""
@@ -402,6 +414,31 @@ class AccountsAuditInstrumentationTests(TestCase):
                 actor=admin_user,
             ).exists()
         )
+
+    @patch("apps.accounts.views.User.objects.create", side_effect=IntegrityError("unique_violation"))
+    def test_invite_user_integrity_error_returns_clean_email_error(self, _mock_user_create):
+        admin_user = User.objects.create_user(
+            username="invitecollisionadmin",
+            email="invitecollisionadmin@example.com",
+            password="testpass123",
+            role="tasc_admin",
+            email_verified=True,
+            is_active=True,
+        )
+        response = self.client.post(
+            "/api/v1/admin/users/invite/",
+            {
+                "email": "invite-collision@example.com",
+                "first_name": "Invited",
+                "last_name": "Collision",
+                "role": "instructor",
+            },
+            format="json",
+            **self._auth_header(admin_user),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
 
     def test_verify_email_persists_activation_and_creates_audit_log(self):
         user = User.objects.create_user(
@@ -665,6 +702,32 @@ class GoogleOAuthLoginTests(TestCase):
 
         user.refresh_from_db()
         self.assertEqual(user.google_id, "google-sub-verified")
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    @patch("apps.accounts.google_auth_views.User.objects.create_user")
+    def test_google_login_create_collision_returns_400_email_error(
+        self, mock_create_user, mock_get
+    ):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-new-user",
+                    "email": "collision-google@example.com",
+                    "email_verified": True,
+                    "given_name": "Collision",
+                    "family_name": "User",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+        mock_create_user.side_effect = IntegrityError("unique_violation")
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
 
 
 @override_settings(

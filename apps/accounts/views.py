@@ -1,3 +1,5 @@
+import logging
+
 from drf_spectacular.utils import extend_schema, OpenApiExample
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -13,6 +15,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.db import IntegrityError, transaction
 
 from .tokens import email_verification_token
 from .rbac import is_admin_like
@@ -20,6 +23,7 @@ from .rbac import is_admin_like
 from apps.notifications.services import send_tasc_email
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -166,78 +170,90 @@ def invite_user(request):
     last_name = serializer.validated_data["last_name"]
     role = serializer.validated_data["role"]
 
-    # Create or update user - find by case-insensitive email
     try:
-        user = User.objects.get(email__iexact=email)
-        created = False
-    except User.DoesNotExist:
-        # Generate unique username
-        base_username = email.split("@")[0][:25]
-        username = base_username
-        i = 1
-        while User.objects.filter(username=username).exists():
-            i += 1
-            username = f"{base_username}{i}"
-        
-        user = User.objects.create(
-            email=email,
-            username=username,
-            first_name=first_name,
-            last_name=last_name,
-            role=role,
-            email_verified=True,
-            must_set_password=True,
-            is_active=True,
-        )
-        created = True
+        with transaction.atomic():
+            # Create or update user - find by case-insensitive email
+            try:
+                user = User.objects.get(email__iexact=email)
+                created = False
+            except User.DoesNotExist:
+                # Generate unique username
+                base_username = email.split("@")[0][:25]
+                username = base_username
+                i = 1
+                while User.objects.filter(username=username).exists():
+                    i += 1
+                    username = f"{base_username}{i}"
 
-    if not created:
-        # Update existing user
-        user.first_name = first_name
-        user.last_name = last_name
-        user.role = role
-        user.email_verified = True
-        user.must_set_password = True
-        user.is_active = True
-        user.save(update_fields=["first_name", "last_name", "role", "email_verified", "must_set_password", "is_active"])
+                user = User.objects.create(
+                    email=email,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                    role=role,
+                    email_verified=True,
+                    must_set_password=True,
+                    is_active=True,
+                )
+                created = True
 
-    # Generate token
-    uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-    token = default_token_generator.make_token(user)
+            if not created:
+                # Update existing user
+                user.first_name = first_name
+                user.last_name = last_name
+                user.role = role
+                user.email_verified = True
+                user.must_set_password = True
+                user.is_active = True
+                user.save(update_fields=["first_name", "last_name", "role", "email_verified", "must_set_password", "is_active"])
 
-    # Build frontend set-password URL
-    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
-    set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
+            # Generate token
+            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
 
-    # Send invitation email
-    send_tasc_email(
-        subject="You've been invited to TASC LMS",
-        to=[user.email],
-        template="emails/auth/user_invitation.html",
-        context={
-            "user": user,
-            "inviter": request.user,
-            "set_password_url": set_password_url,
-        },
-    )
+            # Build frontend set-password URL
+            frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+            set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
 
-    if created:
-        log_event(
-            action="created",
-            resource="user",
-            resource_id=str(user.id),
-            actor=request.user,
-            request=request,
-            details=f"Invited user created: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
-        )
-    else:
-        log_event(
-            action="updated",
-            resource="user",
-            resource_id=str(user.id),
-            actor=request.user,
-            request=request,
-            details=f"Invited user updated: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
+            def _send_invite_email() -> None:
+                try:
+                    send_tasc_email(
+                        subject="You've been invited to TASC LMS",
+                        to=[user.email],
+                        template="emails/auth/user_invitation.html",
+                        context={
+                            "user": user,
+                            "inviter": request.user,
+                            "set_password_url": set_password_url,
+                        },
+                    )
+                except Exception:
+                    logger.exception("Failed to send invite email", extra={"email": user.email})
+
+            transaction.on_commit(_send_invite_email)
+
+            if created:
+                log_event(
+                    action="created",
+                    resource="user",
+                    resource_id=str(user.id),
+                    actor=request.user,
+                    request=request,
+                    details=f"Invited user created: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
+                )
+            else:
+                log_event(
+                    action="updated",
+                    resource="user",
+                    resource_id=str(user.id),
+                    actor=request.user,
+                    request=request,
+                    details=f"Invited user updated: {user.email} (role={user.role}) | email_verified=True | must_set_password=True | is_active=True",
+                )
+    except IntegrityError:
+        return Response(
+            {"email": ["A user with this email already exists."]},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     return Response(
