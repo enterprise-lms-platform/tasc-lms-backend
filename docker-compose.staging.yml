@@ -12,6 +12,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
 
   web:
     build: .
@@ -36,9 +42,3 @@ volumes:
   pgdata:
   staticfiles:
 
-mailpit:
-  image: axllent/mailpit:latest
-  restart: unless-stopped
-  ports:
-    - "8025:8025"
-    - "1025:1025"
