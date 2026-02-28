@@ -1,26 +1,33 @@
 services:
   db:
     image: postgres:16
+    container_name: tasc_staging_db
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_staging:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
+
   mailpit:
     image: axllent/mailpit:latest
+    container_name: tasc_staging_mailpit
     restart: unless-stopped
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "8025:8025"   # Web UI (team access)
+    # SMTP stays internal (Django connects to mailpit:1025 inside Docker network)
+    # Do NOT publish 1025 to the internet.
 
   web:
     build: .
+    container_name: tasc_staging_web
+    restart: unless-stopped
     env_file:
       - .env
     depends_on:
@@ -32,13 +39,11 @@ services:
       python manage.py collectstatic --noinput &&
       gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
       "
-    # IMPORTANT: bind to localhost only (Nginx on host will proxy to it)
     ports:
-      - "127.0.0.1:8002:8000"
+      - "127.0.0.1:8002:8000"   # only reachable from the server (Nginx will proxy)
     volumes:
-      - staticfiles:/app/staticfiles
+      - staticfiles_staging:/app/staticfiles
 
 volumes:
-  pgdata:
-  staticfiles:
-
+  pgdata_staging:
+  staticfiles_staging:
