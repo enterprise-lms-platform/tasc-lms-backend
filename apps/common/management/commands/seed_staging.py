@@ -2,7 +2,7 @@ import random
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
@@ -12,37 +12,90 @@ from apps.learning.models import Certificate, Enrollment, SessionProgress
 
 User = get_user_model()
 
+SEED_COURSE_TITLES = [
+    "ISO INTERGRATED MANAGEMENT SYSTEMS-LEAD IMPLEMENTER COURSE",
+    "MANUAL HANDLING",
+    "WORK AT HEIGHT SAFETY",
+    "ROAD SAFETY AWARENESS",
+    "COSHH",
+    "ISO INTERGRATED MANAGEMENT SYSTEM-INTERNAL AUDITOR",
+    "LEADERSHIP",
+    "FIRE SAFETY",
+    "FIRST AID",
+    "WATER SAFETY TRAINING",
+    "HYDROGEN SULPHIDE AWARENESS",
+    "ENVIRONMENTAL AWARENESS",
+    "CRITICAL THINKING",
+    "FALL PROTECTION COURSE",
+    "FOLK LIFT OPERATOR",
+    "ENGINEER LEAD ASSESSMENT",
+    "TESTING AND REPAIRS ASSOCIATE ASSESSMENT",
+    "NDT/QC PRE-ASSESSMENT",
+    "WELDING INSTRUCTOR'S PRE-ASSESSMENT",
+    "WELDING COURSE",
+]
+
+TAG_NAME_POOL = [
+    "Safety",
+    "ISO",
+    "Compliance",
+    "Quality",
+    "Leadership",
+    "Operations",
+    "Risk Management",
+    "Technical Skills",
+    "Assessment",
+    "Workplace Readiness",
+]
+
+SESSION_TOPIC_POOL = [
+    "Foundations",
+    "Core Principles",
+    "Applied Practice",
+    "Risk Controls",
+    "Operational Excellence",
+    "Case Study Review",
+    "Implementation Workshop",
+    "Assessment Preparation",
+]
+
 
 class Command(BaseCommand):
     help = "Seed predictable staging data for users and optional catalogue/learning."
 
     def add_arguments(self, parser):
-        parser.add_argument("--learners", type=int, default=50)
-        parser.add_argument("--instructors", type=int, default=15)
-        parser.add_argument("--lms_managers", type=int, default=5)
-        parser.add_argument("--finance", type=int, default=3)
-        parser.add_argument("--tasc_admins", type=int, default=2)
-        parser.add_argument("--org_admins", type=int, default=2)
+        parser.add_argument("--profile", choices=["staging", "demo"], default="staging")
+        parser.add_argument("--learners", type=int, default=None)
+        parser.add_argument("--instructors", type=int, default=None)
+        parser.add_argument("--lms_managers", type=int, default=None)
+        parser.add_argument("--finance", type=int, default=None)
+        parser.add_argument("--tasc_admins", type=int, default=None)
+        parser.add_argument("--org_admins", type=int, default=None)
         parser.add_argument("--password", type=str, default="Pass12345!")
+        parser.add_argument("--instructor-emails", type=str, default=None)
 
-        parser.add_argument("--with-catalogue", action="store_true")
+        parser.add_argument("--with-catalogue", action="store_true", default=None)
         parser.add_argument("--categories", type=int, default=16)
         parser.add_argument("--tags", type=int, default=35)
-        parser.add_argument("--courses", type=int, default=120)
+        parser.add_argument("--courses", type=int, default=None)
         parser.add_argument("--published-ratio", type=float, default=0.7)
         parser.add_argument("--sessions-min", type=int, default=4)
         parser.add_argument("--sessions-max", type=int, default=12)
 
-        parser.add_argument("--with-enrollments", action="store_true")
-        parser.add_argument("--enrollments-min", type=int, default=3)
-        parser.add_argument("--enrollments-max", type=int, default=10)
+        parser.add_argument("--with-enrollments", action="store_true", default=None)
+        parser.add_argument("--enrollments-min", type=int, default=None)
+        parser.add_argument("--enrollments-max", type=int, default=None)
         parser.add_argument("--with-progress", action="store_true")
         parser.add_argument("--with-certificates", action="store_true")
 
         parser.add_argument("--reset", action="store_true")
 
     def handle(self, *args, **options):
+        options = self._resolve_profile_defaults(options)
+        self.profile = options["profile"]
+        self.slug_prefix = "stg-seed-" if self.profile == "staging" else "demo-seed-"
         self.rng = random.Random(42)
+        self.demo_instructor_emails = []
         self.summary = {
             "users_created": 0,
             "users_updated": 0,
@@ -64,9 +117,22 @@ class Command(BaseCommand):
         }
 
         if options["reset"]:
-            self._reset_seed_data()
+            self._reset_seed_data(options)
 
-        user_index = self._seed_users(options)
+        if self.profile == "demo":
+            user_index = {
+                "learners": [],
+                "instructors": [],
+                "lms_managers": [],
+                "finance": [],
+                "tasc_admins": [],
+                "org_admins": [],
+            }
+            instructors = self._get_demo_instructors(options["instructor_emails"])
+            self.demo_instructor_emails = [u.email for u in instructors]
+        else:
+            user_index = self._seed_users(options)
+            instructors = user_index["instructors"]
 
         if options["with_catalogue"]:
             categories = self._seed_categories(options["categories"])
@@ -75,15 +141,16 @@ class Command(BaseCommand):
                 count=options["courses"],
                 categories=categories,
                 tags=tags,
-                instructors=user_index["instructors"],
-                published_ratio=options["published_ratio"],
+                instructors=instructors,
                 sessions_min=options["sessions_min"],
                 sessions_max=options["sessions_max"],
             )
         else:
-            courses = list(Course.objects.filter(slug__startswith="seed-").order_by("id"))
+            courses = list(
+                Course.objects.filter(slug__startswith=f"{self.slug_prefix}course-").order_by("id")
+            )
 
-        if options["with_enrollments"]:
+        if self.profile == "staging" and options["with_enrollments"]:
             self._seed_enrollments_and_progress(
                 learners=user_index["learners"],
                 courses=courses,
@@ -95,40 +162,180 @@ class Command(BaseCommand):
 
         self._print_summary()
 
-    def _reset_seed_data(self):
-        self.stdout.write(self.style.WARNING("Resetting seed data (safe scope only)..."))
+    def _resolve_profile_defaults(self, options):
+        profile_defaults = {
+            "staging": {
+                "learners": 5,
+                "instructors": 2,
+                "lms_managers": 2,
+                "finance": 2,
+                "tasc_admins": 2,
+                "org_admins": 2,
+                "courses": 20,
+                "with_catalogue": True,
+                "with_enrollments": True,
+                "enrollments_min": 3,
+                "enrollments_max": 6,
+            },
+            "demo": {
+                "learners": 0,
+                "instructors": 0,
+                "lms_managers": 0,
+                "finance": 0,
+                "tasc_admins": 0,
+                "org_admins": 0,
+                "courses": 20,
+                "with_catalogue": True,
+                "with_enrollments": False,
+                "enrollments_min": 3,
+                "enrollments_max": 6,
+            },
+        }
+        fallback_defaults = {
+            "learners": 50,
+            "instructors": 15,
+            "lms_managers": 5,
+            "finance": 3,
+            "tasc_admins": 2,
+            "org_admins": 2,
+            "courses": 120,
+            "enrollments_min": 3,
+            "enrollments_max": 10,
+            "with_catalogue": True,
+            "with_enrollments": True,
+        }
+
+        selected = profile_defaults[options["profile"]]
+        for key, fallback in fallback_defaults.items():
+            if options.get(key) is None:
+                options[key] = selected.get(key, fallback)
+
+        # Demo must never seed users or enrollments.
+        if options["profile"] == "demo":
+            options["learners"] = 0 if options.get("learners") is None else options["learners"]
+            options["instructors"] = 0 if options.get("instructors") is None else options["instructors"]
+            options["lms_managers"] = 0 if options.get("lms_managers") is None else options["lms_managers"]
+            options["finance"] = 0 if options.get("finance") is None else options["finance"]
+            options["tasc_admins"] = 0 if options.get("tasc_admins") is None else options["tasc_admins"]
+            options["org_admins"] = 0 if options.get("org_admins") is None else options["org_admins"]
+            options["with_enrollments"] = False
+
+        return options
+
+    def _get_demo_instructors(self, emails_csv):
+        raw = (emails_csv or "").strip()
+        if not raw:
+            raise CommandError(
+                "profile=demo requires --instructor-emails with comma-separated existing instructor emails."
+            )
+
+        requested = [email.strip().lower() for email in raw.split(",") if email.strip()]
+        if not requested:
+            raise CommandError(
+                "No valid emails found in --instructor-emails. Example: --instructor-emails=a@test.com,b@test.com"
+            )
+
+        missing = []
+        wrong_role = []
+        instructors = []
+        for email in requested:
+            user = User.objects.filter(email__iexact=email).first()
+            if not user:
+                missing.append(email)
+                continue
+            if user.role != User.Role.INSTRUCTOR:
+                wrong_role.append(f"{email} (role={user.role})")
+                continue
+            instructors.append(user)
+
+        if missing or wrong_role:
+            problems = []
+            if missing:
+                problems.append(f"Missing users: {', '.join(missing)}")
+            if wrong_role:
+                problems.append(
+                    "Users with non-instructor role: "
+                    + ", ".join(wrong_role)
+                    + f" (expected {User.Role.INSTRUCTOR})"
+                )
+            raise CommandError(
+                "Invalid --instructor-emails for demo profile. "
+                + " | ".join(problems)
+                + " | Create/fix these users and rerun."
+            )
+        return instructors
+
+    def _reset_seed_data(self, options):
+        self.stdout.write(
+            self.style.WARNING(
+                f"Resetting seed data for profile={self.profile}, prefix='{self.slug_prefix}'..."
+            )
+        )
         with transaction.atomic():
-            course_qs = Course.objects.filter(slug__startswith="seed-")
+            course_qs = Course.objects.filter(slug__startswith=f"{self.slug_prefix}course-")
             deleted_courses, _ = course_qs.delete()
-            users_qs = User.objects.filter(email__iendswith="@test.com")
-            deleted_users, _ = users_qs.delete()
-            Category.objects.filter(slug__startswith="seed-cat-").delete()
-            Tag.objects.filter(slug__startswith="seed-tag-").delete()
+            deleted_categories, _ = Category.objects.filter(
+                slug__startswith=f"{self.slug_prefix}cat-"
+            ).delete()
+            deleted_tags, _ = Tag.objects.filter(
+                slug__startswith=f"{self.slug_prefix}tag-"
+            ).delete()
+            deleted_users = 0
+
+            if self.profile == "staging":
+                staged_user_emails = self._staging_user_emails(options)
+                if staged_user_emails:
+                    deleted_users, _ = User.objects.filter(email__in=staged_user_emails).delete()
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Reset complete: deleted {deleted_courses} course-related rows, {deleted_users} user-related rows."
+                "Reset complete: "
+                f"{deleted_courses} course-related rows, "
+                f"{deleted_categories} categories, "
+                f"{deleted_tags} tags, "
+                f"{deleted_users} users."
             )
         )
 
+    def _staging_user_emails(self, options):
+        cohorts = [
+            ("stg-learner", options["learners"]),
+            ("stg-instructor", options["instructors"]),
+            ("stg-manager", options["lms_managers"]),
+            ("stg-finance", options["finance"]),
+            ("stg-admin", options["tasc_admins"]),
+            ("stg-orgadmin", options["org_admins"]),
+        ]
+        emails = []
+        for prefix, count in cohorts:
+            for i in range(1, max(0, count) + 1):
+                emails.append(f"{prefix}{i}@test.com")
+        return emails
+
     def _seed_users(self, options):
         cohorts = [
-            ("learner", "learners", options["learners"], User.Role.LEARNER),
-            ("instructor", "instructors", options["instructors"], User.Role.INSTRUCTOR),
-            ("manager", "lms_managers", options["lms_managers"], User.Role.LMS_MANAGER),
-            ("finance", "finance", options["finance"], User.Role.FINANCE),
-            ("admin", "tasc_admins", options["tasc_admins"], User.Role.TASC_ADMIN),
-            ("orgadmin", "org_admins", options["org_admins"], User.Role.ORG_ADMIN),
+            ("stg-learner", "stglearner", "learners", options["learners"], User.Role.LEARNER),
+            (
+                "stg-instructor",
+                "stginstructor",
+                "instructors",
+                options["instructors"],
+                User.Role.INSTRUCTOR,
+            ),
+            ("stg-manager", "stgmanager", "lms_managers", options["lms_managers"], User.Role.LMS_MANAGER),
+            ("stg-finance", "stgfinance", "finance", options["finance"], User.Role.FINANCE),
+            ("stg-admin", "stgadmin", "tasc_admins", options["tasc_admins"], User.Role.TASC_ADMIN),
+            ("stg-orgadmin", "stgorgadmin", "org_admins", options["org_admins"], User.Role.ORG_ADMIN),
         ]
         password = options["password"]
-        index = {k: [] for _, k, _, _ in cohorts}
+        index = {k: [] for _, _, k, _, _ in cohorts}
 
         with transaction.atomic():
-            for prefix, key, count, role in cohorts:
+            for email_prefix, username_prefix, key, count, role in cohorts:
                 for i in range(1, max(0, count) + 1):
-                    email = f"{prefix}{i}@test.com"
-                    username = f"{prefix}{i}"
-                    first_name = prefix.capitalize()
+                    email = f"{email_prefix}{i}@test.com"
+                    username = f"{username_prefix}{i}"
+                    first_name = key.rstrip("s").replace("_", " ").title()
                     last_name = str(i)
 
                     user = User.objects.filter(email__iexact=email).first()
@@ -178,17 +385,25 @@ class Command(BaseCommand):
         child_target = max(0, count - parent_count)
         categories = []
         parents = []
+        parent_names = ["Safety", "Quality", "Leadership", "Operations", "Compliance", "Technical Skills"]
+        child_names = [
+            "Foundations",
+            "Practitioner",
+            "Advanced",
+            "Assessment",
+            "Implementation",
+            "Best Practices",
+        ]
 
         with transaction.atomic():
-            # Parents
             for i in range(1, parent_count + 1):
-                slug = f"seed-cat-p{i}"
-                name = f"Seed Category Parent {i}"
+                slug = f"{self.slug_prefix}cat-p{i}"
+                name = parent_names[(i - 1) % len(parent_names)]
                 cat, created = Category.objects.update_or_create(
                     slug=slug,
                     defaults={
                         "name": name,
-                        "description": f"Seed parent category {i}",
+                        "description": f"{name} learning tracks and professional development paths.",
                         "is_active": True,
                         "parent": None,
                     },
@@ -200,18 +415,20 @@ class Command(BaseCommand):
                 else:
                     self.summary["categories_updated"] += 1
 
-            # Children
             child_idx = 1
             parent_idx = 0
             while child_idx <= child_target:
                 parent = parents[parent_idx % len(parents)]
-                slug = f"seed-cat-p{parent_idx % len(parents) + 1}-c{(child_idx - 1) // len(parents) + 1}"
-                name = f"Seed Category Child {child_idx}"
+                parent_number = parent_idx % len(parents) + 1
+                child_number = (child_idx - 1) // len(parents) + 1
+                slug = f"{self.slug_prefix}cat-p{parent_number}-c{child_number}"
+                base = child_names[(child_idx - 1) % len(child_names)]
+                name = f"{parent.name} - {base}"
                 cat, created = Category.objects.update_or_create(
                     slug=slug,
                     defaults={
                         "name": name,
-                        "description": f"Seed child category {child_idx}",
+                        "description": f"{name} courses for practical capability building.",
                         "is_active": True,
                         "parent": parent,
                     },
@@ -231,8 +448,10 @@ class Command(BaseCommand):
         tags = []
         with transaction.atomic():
             for i in range(1, count + 1):
-                slug = f"seed-tag-{i}"
-                name = f"Seed Tag {i}"
+                slug = f"{self.slug_prefix}tag-{i:03d}"
+                name = TAG_NAME_POOL[(i - 1) % len(TAG_NAME_POOL)]
+                if i > len(TAG_NAME_POOL):
+                    name = f"{name} {i}"
                 tag, created = Tag.objects.update_or_create(slug=slug, defaults={"name": name})
                 tags.append(tag)
                 if created:
@@ -248,7 +467,6 @@ class Command(BaseCommand):
         categories,
         tags,
         instructors,
-        published_ratio,
         sessions_min,
         sessions_max,
     ):
@@ -270,21 +488,21 @@ class Command(BaseCommand):
         all_courses = []
         with transaction.atomic():
             for i in range(1, count + 1):
-                slug = f"seed-course-{i:04d}"
-                title = f"Seed Course {i:04d}"
+                slug = f"{self.slug_prefix}course-{i:04d}"
+                title = self._course_title_for(i)
                 category = categories[(i - 1) % len(categories)]
                 instructor = instructors[(i - 1) % len(instructors)]
-                is_published = self.rng.random() < published_ratio
+                is_published = i <= min(12, count)
                 objectives = [
-                    f"Understand core concept {j} for {title}"
+                    f"Apply {title.lower()} principle {j} in workplace scenarios."
                     for j in range(1, 5)
                 ]
                 defaults = {
                     "title": title,
-                    "subtitle": f"Production-like seed course {i}",
-                    "description": f"Seeded long-form description for {title}.",
-                    "short_description": f"Short summary for {title}.",
-                    "subcategory": f"seed-subcategory-{(i % 8) + 1}",
+                    "subtitle": f"Professional training pathway #{i}",
+                    "description": f"Comprehensive training content for {title}.",
+                    "short_description": f"Practical overview and outcomes for {title}.",
+                    "subcategory": f"track-{(i % 8) + 1}",
                     "category": category,
                     "level": self.rng.choice(
                         [Course.Level.BEGINNER, Course.Level.INTERMEDIATE, Course.Level.ADVANCED]
@@ -296,8 +514,6 @@ class Command(BaseCommand):
                     "duration_minutes": self.rng.randint(0, 59),
                     "duration_weeks": self.rng.randint(1, 12),
                     "total_sessions": 0,  # updated after session seeding
-                    "instructor": instructor,
-                    "created_by": instructor,
                     "thumbnail": f"https://cdn.example.com/seed/{slug}.jpg"
                     if is_published
                     else None,
@@ -306,10 +522,9 @@ class Command(BaseCommand):
                     "prerequisites": "Basic foundational knowledge.",
                     "learning_objectives": "\n".join(objectives),
                     "learning_objectives_list": objectives,
-                    "target_audience": "Professionals and learners in staging demos.",
+                    "target_audience": "Professionals and learners seeking certified capability growth.",
                     "status": Course.Status.PUBLISHED if is_published else Course.Status.DRAFT,
                     "featured": self.rng.random() < 0.2,
-                    "published_at": timezone.now() if is_published else None,
                     "access_duration": "lifetime",
                     "allow_self_enrollment": True,
                     "is_public": is_published,
@@ -322,8 +537,12 @@ class Command(BaseCommand):
                     "grading_config": {},
                     "meta_title": f"{title} | Seed",
                     "meta_description": f"Meta description for {title}",
-                    "meta_keywords": "seed,staging,course",
+                    "meta_keywords": "training,safety,quality,professional",
                 }
+                if hasattr(Course, "instructor"):
+                    defaults["instructor"] = instructor
+                if hasattr(Course, "created_by"):
+                    defaults["created_by"] = instructor
                 course, created = Course.objects.update_or_create(slug=slug, defaults=defaults)
                 all_courses.append(course)
                 if created:
@@ -331,7 +550,16 @@ class Command(BaseCommand):
                 else:
                     self.summary["courses_updated"] += 1
 
-                tag_count = self.rng.randint(3, min(8, len(tags)))
+                if is_published and course.published_at is None:
+                    course.published_at = timezone.now()
+                    course.save(update_fields=["published_at"])
+                elif not is_published and course.published_at is not None:
+                    course.published_at = None
+                    course.save(update_fields=["published_at"])
+
+                min_tags = 1
+                max_tags = min(8, len(tags))
+                tag_count = self.rng.randint(min_tags, max_tags)
                 course.tags.set(self.rng.sample(tags, tag_count))
 
                 session_count = self.rng.randint(sessions_min, sessions_max)
@@ -339,11 +567,17 @@ class Command(BaseCommand):
 
         return all_courses
 
+    def _course_title_for(self, index):
+        if index <= len(SEED_COURSE_TITLES):
+            return SEED_COURSE_TITLES[index - 1]
+        return f"TASC Course {index:03d}"
+
     def _seed_sessions_for_course(self, course, session_count):
         for order in range(1, session_count + 1):
+            topic = SESSION_TOPIC_POOL[(order - 1) % len(SESSION_TOPIC_POOL)]
             defaults = {
-                "title": f"{course.title} - Session {order}",
-                "description": f"Seed session {order} for {course.title}",
+                "title": f"Module {order}: {topic}",
+                "description": f"{topic} module for {course.title}.",
                 "session_type": Session.SessionType.VIDEO,
                 "status": Session.Status.PUBLISHED
                 if course.status == Course.Status.PUBLISHED
@@ -384,10 +618,12 @@ class Command(BaseCommand):
         if not learners:
             self.stdout.write(self.style.WARNING("No learners found; skipping enrollment seeding."))
             return
-        # Enrollments should mimic production behavior by targeting only published
-        # seed courses, even if the incoming `courses` list contains drafts.
+
         published_courses = list(
-            Course.objects.filter(slug__startswith="seed-", status=Course.Status.PUBLISHED).order_by("id")
+            Course.objects.filter(
+                slug__startswith=f"{self.slug_prefix}course-",
+                status=Course.Status.PUBLISHED,
+            ).order_by("id")
         )
         if not published_courses:
             self.stdout.write(
@@ -500,6 +736,11 @@ class Command(BaseCommand):
     def _print_summary(self):
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("Seeding complete. Summary:"))
+        self.stdout.write(f"  - profile: {self.profile}")
+        self.stdout.write(f"  - prefix: {self.slug_prefix}")
+        if self.profile == "demo":
+            used = ", ".join(self.demo_instructor_emails) if self.demo_instructor_emails else "(none)"
+            self.stdout.write(f"  - demo_instructors: {used}")
         for key in [
             "users_created",
             "users_updated",
