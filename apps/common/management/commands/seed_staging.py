@@ -78,7 +78,6 @@ class Command(BaseCommand):
         parser.add_argument("--categories", type=int, default=16)
         parser.add_argument("--tags", type=int, default=35)
         parser.add_argument("--courses", type=int, default=None)
-        parser.add_argument("--published-ratio", type=float, default=0.7)
         parser.add_argument("--sessions-min", type=int, default=4)
         parser.add_argument("--sessions-max", type=int, default=12)
 
@@ -483,7 +482,6 @@ class Command(BaseCommand):
 
         sessions_min = max(1, sessions_min)
         sessions_max = max(sessions_min, sessions_max)
-        published_ratio = min(max(0.0, published_ratio), 1.0)
 
         all_courses = []
         with transaction.atomic():
@@ -492,7 +490,7 @@ class Command(BaseCommand):
                 title = self._course_title_for(i)
                 category = categories[(i - 1) % len(categories)]
                 instructor = instructors[(i - 1) % len(instructors)]
-                is_published = i <= min(12, count)
+                is_published = i <= 12
                 objectives = [
                     f"Apply {title.lower()} principle {j} in workplace scenarios."
                     for j in range(1, 5)
