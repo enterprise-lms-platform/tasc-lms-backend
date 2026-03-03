@@ -22,6 +22,29 @@ from apps.livestream.permissions import IsInstructorOrReadOnly
 User = get_user_model()
 
 
+class UserManagerSuperuserDefaultsTests(TestCase):
+    def test_create_superuser_sets_role_and_flags(self):
+        user = User.objects.create_superuser(
+            username="su1",
+            email="su1@example.com",
+            password="Testpass123!",
+        )
+        self.assertEqual(user.role, User.Role.TASC_ADMIN)
+        self.assertIs(user.email_verified, True)
+        self.assertIs(user.is_active, True)
+        self.assertIs(user.is_staff, True)
+        self.assertIs(user.is_superuser, True)
+
+    def test_create_superuser_coerces_wrong_role(self):
+        user = User.objects.create_superuser(
+            username="su2",
+            email="su2@example.com",
+            password="Testpass123!",
+            role=User.Role.LEARNER,
+        )
+        self.assertEqual(user.role, User.Role.TASC_ADMIN)
+
+
 class MeEndpointTests(TestCase):
     """Tests for GET and PATCH /api/v1/auth/me/"""
 

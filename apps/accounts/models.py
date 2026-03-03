@@ -1,8 +1,18 @@
 import uuid
 
 from django.conf import settings
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
+
+
+class AccountUserManager(UserManager):
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields["role"] = self.model.Role.TASC_ADMIN
+        extra_fields["email_verified"] = True
+        extra_fields["is_active"] = True
+        return super().create_superuser(
+            username, email=email, password=password, **extra_fields
+        )
 
 
 class User(AbstractUser):
@@ -49,6 +59,7 @@ class User(AbstractUser):
     # login lockout (US-015)
     failed_login_attempts = models.PositiveSmallIntegerField(default=0)
     account_locked_until = models.DateTimeField(null=True, blank=True)
+    objects = AccountUserManager()
 
     def save(self, *args, **kwargs):
         # Ensure Django superusers are always treated as platform super admins
