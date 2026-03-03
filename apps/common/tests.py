@@ -88,3 +88,21 @@ class UploadPresignApiTest(APITestCase):
         )
         self.assertEqual(bad_content_type.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("content_type", bad_content_type.data)
+
+
+class SwaggerRedirectRoutingTests(APITestCase):
+    def test_invalid_non_api_non_admin_path_redirects_to_documentation(self):
+        response = self.client.get("/this-does-not-exist", follow=False)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(response.headers.get("Location"), "/documentation/")
+
+    def test_invalid_api_path_returns_404_without_documentation_redirect(self):
+        response = self.client.get("/api/v1/this-does-not-exist", follow=False)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_admin_path_is_not_redirected_to_documentation(self):
+        response = self.client.get("/admin/this-does-not-exist", follow=False)
+        if response.status_code in {301, 302, 307, 308}:
+            self.assertNotEqual(response.headers.get("Location"), "/documentation/")
+        else:
+            self.assertIn(response.status_code, {status.HTTP_404_NOT_FOUND, status.HTTP_200_OK})

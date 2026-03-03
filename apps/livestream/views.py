@@ -29,6 +29,7 @@ from .serializers import (
 from .services.zoom_service import ZoomService, ZoomWebhookHandler
 from .services.calendar_service import CalendarService, TimezoneService
 from  .permissions import IsInstructorOrReadOnly
+from apps.accounts.rbac import is_admin_like, is_instructor
 
 
 @extend_schema(tags=['Livestream Sessions'])
@@ -103,7 +104,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         
         # For learners, only show relevant sessions
         user = self.request.user
-        if not hasattr(user, 'role') or user.role not in ['instructor', 'admin', 'super_admin']:
+        if not hasattr(user, 'role') or (not is_instructor(user) and not is_admin_like(user)):
             # Show sessions for courses they're enrolled in
             enrolled_courses = user.course_enrollments.filter(
                 status='active'
@@ -438,7 +439,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         
         # Only instructor or admin can view attendance
-        if request.user != session.instructor and not request.user.role in ['admin', 'super_admin']:
+        if request.user != session.instructor and not is_admin_like(request.user):
             return Response(
                 {'error': 'Only the instructor can view attendance'},
                 status=status.HTTP_403_FORBIDDEN
@@ -469,7 +470,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         
         # Only instructor or admin can view reports
-        if request.user != session.instructor and not request.user.role in ['admin', 'super_admin']:
+        if request.user != session.instructor and not is_admin_like(request.user):
             return Response(
                 {'error': 'Only the instructor can view attendance reports'},
                 status=status.HTTP_403_FORBIDDEN
@@ -541,7 +542,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         """Check if user has access to session recording"""
         if user == session.instructor:
             return True
-        if user.role in ['admin', 'super_admin']:
+        if is_admin_like(user):
             return True
         # Check if enrolled in course
         return user.course_enrollments.filter(
@@ -572,7 +573,7 @@ class LivestreamAttendanceViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(session_id=session_id)
         
         # Instructors see all, learners see only their own
-        if not user.role in ['instructor', 'admin', 'super_admin']:
+        if not is_instructor(user) and not is_admin_like(user):
             queryset = queryset.filter(learner=user)
         
         return queryset

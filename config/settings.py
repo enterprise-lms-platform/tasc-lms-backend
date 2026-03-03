@@ -18,7 +18,7 @@ env = environ.Env(
 environ.Env.read_env(BASE_DIR / ".env")
 
 SECRET_KEY = env("DJANGO_SECRET_KEY")
-DEBUG = env("DJANGO_DEBUG")
+DEBUG = env.bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS").split(",")
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -113,6 +113,7 @@ else:
 
 DJANGO_EMAIL_ENABLED = env.bool("DJANGO_EMAIL_ENABLED", default=True)
 
+EMAIL_PROVIDER = env("EMAIL_PROVIDER", default=("console" if DEBUG else "auto"))
 SENDGRID_API_KEY = env("SENDGRID_API_KEY", default="")  # keep empty in dev
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="support@tasclms.com")
 
@@ -120,6 +121,12 @@ EMAIL_SUBJECT_PREFIX = env("EMAIL_SUBJECT_PREFIX", default="[TASC LMS] ")
 DEFAULT_FROM_EMAIL = env(
     "DEFAULT_FROM_EMAIL", default="TASC LMS <no-reply@tasclms.com>"
 )
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=25)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 
 
 # ----------------------------------------
@@ -128,8 +135,8 @@ DEFAULT_FROM_EMAIL = env(
 AUTH_USER_MODEL = "accounts.User"
 
 # Login lockout (US-015)
-MAX_LOGIN_ATTEMPTS = 5
-ACCOUNT_LOCK_MINUTES = 15
+MAX_LOGIN_ATTEMPTS = env.int("MAX_LOGIN_ATTEMPTS", default=5)
+ACCOUNT_LOCK_MINUTES = env.int("ACCOUNT_LOCK_MINUTES", default=15)
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # admin login
@@ -164,7 +171,11 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
     },
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {"NAME": "apps.accounts.validators.PasswordComplexityValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -194,12 +205,27 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
     "PAGE_SIZE": 20,
     "DEFAULT_THROTTLE_RATES": {
+        "login": "10/minute",
+        "google_login": "10/minute",
+        "google_link": "5/minute",
+        "google_unlink": "5/minute",
         "otp_verify": "10/minute",
         "otp_resend": "10/minute",
     },
 }
+
+# ----------------------------------------
+# Login OTP (MFA)
+# ----------------------------------------
+LOGIN_OTP_LENGTH = env.int("LOGIN_OTP_LENGTH", default=6)
+LOGIN_OTP_TTL_SECONDS = env.int("LOGIN_OTP_TTL_SECONDS", default=300)
+LOGIN_OTP_MAX_ATTEMPTS = env.int("LOGIN_OTP_MAX_ATTEMPTS", default=5)
+LOGIN_OTP_MAX_RESENDS = env.int("LOGIN_OTP_MAX_RESENDS", default=3)
 
 # ----------------------------------------
 # Simple JWT

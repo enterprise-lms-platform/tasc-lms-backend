@@ -2,6 +2,9 @@ from unittest.mock import patch, MagicMock
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
+from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.utils.encoding import force_bytes
@@ -10,10 +13,36 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts.models import LoginOTPChallenge
 from apps.accounts.tokens import email_verification_token
+from apps.accounts.utils import hash_otp
 from apps.audit.models import AuditLog
+from apps.livestream.permissions import IsInstructorOrReadOnly
 
 User = get_user_model()
+
+
+class UserManagerSuperuserDefaultsTests(TestCase):
+    def test_create_superuser_sets_role_and_flags(self):
+        user = User.objects.create_superuser(
+            username="su1",
+            email="su1@example.com",
+            password="Testpass123!",
+        )
+        self.assertEqual(user.role, User.Role.TASC_ADMIN)
+        self.assertIs(user.email_verified, True)
+        self.assertIs(user.is_active, True)
+        self.assertIs(user.is_staff, True)
+        self.assertIs(user.is_superuser, True)
+
+    def test_create_superuser_coerces_wrong_role(self):
+        user = User.objects.create_superuser(
+            username="su2",
+            email="su2@example.com",
+            password="Testpass123!",
+            role=User.Role.LEARNER,
+        )
+        self.assertEqual(user.role, User.Role.TASC_ADMIN)
 
 
 class MeEndpointTests(TestCase):
@@ -140,6 +169,179 @@ class MeEndpointTests(TestCase):
         self.assertEqual(response.data["email"], self.user.email)
 
 
+class PasswordPolicyValidationTests(TestCase):
+    """Regression tests for password-policy enforcement and error key mapping."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_register_rejects_weak_password_under_password_key(self):
+        payload = {
+            "email": "newuser@example.com",
+            "password": "abcdefg1",
+            "confirm_password": "abcdefg1",
+            "first_name": "New",
+            "last_name": "User",
+            "phone_number": "",
+            "country": "",
+            "timezone": "",
+            "accept_terms": True,
+            "marketing_opt_in": False,
+        }
+
+        response = self.client.post("/api/v1/auth/register/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("uppercase" in msg.lower() for msg in response.data["password"])
+        )
+        self.assertTrue(
+            any("special character" in msg.lower() for msg in response.data["password"])
+        )
+
+    def test_change_password_rejects_short_password_under_new_password_key(self):
+        user = User.objects.create_user(
+            username="changepwduser",
+            email="changepwd@example.com",
+            password="StrongPass1!",
+            email_verified=True,
+            is_active=True,
+        )
+        token = RefreshToken.for_user(user)
+
+        response = self.client.post(
+            "/api/v1/auth/change-password/",
+            {
+                "old_password": "StrongPass1!",
+                "new_password": "Ab1!",
+                "confirm_password": "Ab1!",
+            },
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {token.access_token}",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("at least 8" in msg.lower() for msg in response.data["new_password"])
+        )
+
+    def test_reset_confirm_rejects_weak_password_under_new_password_key(self):
+        user = User.objects.create_user(
+            username="resetpwduser",
+            email="resetpwd@example.com",
+            password="StrongPass1!",
+            email_verified=True,
+            is_active=True,
+        )
+        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+
+        response = self.client.post(
+            f"/api/v1/auth/password-reset-confirm/{uidb64}/{token}/",
+            {
+                "new_password": "abcdefg1",
+                "confirm_password": "abcdefg1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.assertTrue(
+            any("uppercase" in msg.lower() for msg in response.data["new_password"])
+        )
+
+
+class RegisterFlowBehaviorTests(TestCase):
+    """Tests for re-register behavior and register transaction safety."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.register_url = "/api/v1/auth/register/"
+        self.base_payload = {
+            "email": "x@test.com",
+            "password": "StrongPass1!",
+            "confirm_password": "StrongPass1!",
+            "first_name": "Test",
+            "last_name": "User",
+            "phone_number": "",
+            "country": "",
+            "timezone": "",
+            "accept_terms": True,
+            "marketing_opt_in": False,
+        }
+
+    def test_reregister_unverified_inactive_user_returns_verify_message(self):
+        User.objects.create_user(
+            username="pendinguser",
+            email="x@test.com",
+            password="StrongPass1!",
+            is_active=False,
+            email_verified=False,
+        )
+
+        response = self.client.post(self.register_url, self.base_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("not verified", response.data["email"][0].lower())
+        self.assertNotIn("already registered", response.data["email"][0].lower())
+
+    def test_reregister_verified_active_user_returns_already_registered(self):
+        User.objects.create_user(
+            username="activeuser",
+            email="x@test.com",
+            password="StrongPass1!",
+            is_active=True,
+            email_verified=True,
+        )
+
+        response = self.client.post(self.register_url, self.base_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already registered", response.data["email"][0].lower())
+
+    @patch("apps.accounts.auth_views.send_tasc_email")
+    def test_register_sends_email_only_after_commit_and_not_on_atomic_failure(
+        self, mock_send_tasc_email
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self.register_url,
+                {**self.base_payload, "email": "commit-ok@test.com"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(mock_send_tasc_email.call_count, 1)
+
+        mock_send_tasc_email.reset_mock()
+        with self.captureOnCommitCallbacks(execute=True):
+            with patch(
+                "apps.accounts.auth_views.email_verification_token.make_token",
+                side_effect=Exception("token generation failed"),
+            ):
+                with self.assertRaises(Exception):
+                    self.client.post(
+                        self.register_url,
+                        {**self.base_payload, "email": "rollback@test.com"},
+                        format="json",
+                    )
+        self.assertEqual(mock_send_tasc_email.call_count, 0)
+        self.assertFalse(User.objects.filter(email__iexact="rollback@test.com").exists())
+
+    @patch("apps.accounts.serializers.User.save", side_effect=IntegrityError("unique_violation"))
+    def test_register_integrity_error_returns_clean_email_error(self, _mock_user_save):
+        response = self.client.post(
+            self.register_url,
+            {**self.base_payload, "email": "collision@test.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
+
+
 class AccountsAuditInstrumentationTests(TestCase):
     """Tests for US-027 Phase 2A audit instrumentation in accounts views."""
 
@@ -236,6 +438,31 @@ class AccountsAuditInstrumentationTests(TestCase):
             ).exists()
         )
 
+    @patch("apps.accounts.views.User.objects.create", side_effect=IntegrityError("unique_violation"))
+    def test_invite_user_integrity_error_returns_clean_email_error(self, _mock_user_create):
+        admin_user = User.objects.create_user(
+            username="invitecollisionadmin",
+            email="invitecollisionadmin@example.com",
+            password="testpass123",
+            role="tasc_admin",
+            email_verified=True,
+            is_active=True,
+        )
+        response = self.client.post(
+            "/api/v1/admin/users/invite/",
+            {
+                "email": "invite-collision@example.com",
+                "first_name": "Invited",
+                "last_name": "Collision",
+                "role": "instructor",
+            },
+            format="json",
+            **self._auth_header(admin_user),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
+
     def test_verify_email_persists_activation_and_creates_audit_log(self):
         user = User.objects.create_user(
             username="verifyaudit",
@@ -262,11 +489,27 @@ class AccountsAuditInstrumentationTests(TestCase):
         self.assertIsNone(log.actor)
 
 
-@override_settings(GOOGLE_CLIENT_ID="test-client-id")
+@override_settings(
+    GOOGLE_CLIENT_ID="test-client-id",
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "google_link": "1000/minute",
+            "google_login": "1000/minute",
+            "google_unlink": "1000/minute",
+            "login": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
 class GoogleOAuthLinkTests(TestCase):
     """Tests for POST /api/v1/auth/google/link/"""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="linkuser",
@@ -393,11 +636,145 @@ class GoogleOAuthLinkTests(TestCase):
         self.assertEqual(self.user.google_id, "another-google-id")
 
 
-@override_settings(MAX_LOGIN_ATTEMPTS=5, ACCOUNT_LOCK_MINUTES=15)
+@override_settings(
+    GOOGLE_CLIENT_ID="test-client-id",
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "google_link": "1000/minute",
+            "google_login": "1000/minute",
+            "google_unlink": "1000/minute",
+            "login": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
+class GoogleOAuthLoginTests(TestCase):
+    """Tests for POST /api/v1/auth/google/login/"""
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.url = "/api/v1/auth/google/login/"
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    def test_google_login_blocks_unverified_existing_user(self, mock_get):
+        user = User.objects.create_user(
+            username="googleunverified",
+            email="google-unverified@example.com",
+            password="testpass123",
+            email_verified=False,
+            is_active=True,
+        )
+
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-unverified",
+                    "email": user.email,
+                    "email_verified": True,
+                    "given_name": "Google",
+                    "family_name": "User",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Email not verified", response.data["error"])
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    def test_google_login_links_verified_active_existing_user_and_returns_tokens(
+        self, mock_get
+    ):
+        user = User.objects.create_user(
+            username="googleverified",
+            email="google-verified@example.com",
+            password="testpass123",
+            email_verified=True,
+            is_active=True,
+        )
+        self.assertIsNone(user.google_id)
+
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-verified",
+                    "email": user.email,
+                    "email_verified": True,
+                    "given_name": "Google",
+                    "family_name": "Verified",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertFalse(response.data["is_new_user"])
+
+        user.refresh_from_db()
+        self.assertEqual(user.google_id, "google-sub-verified")
+
+    @patch("apps.accounts.google_auth_views.requests.get")
+    @patch("apps.accounts.google_auth_views.User.objects.create_user")
+    def test_google_login_create_collision_returns_400_email_error(
+        self, mock_create_user, mock_get
+    ):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(
+                return_value={
+                    "sub": "google-sub-new-user",
+                    "email": "collision-google@example.com",
+                    "email_verified": True,
+                    "given_name": "Collision",
+                    "family_name": "User",
+                    "picture": "https://example.com/pic.jpg",
+                    "aud": "test-client-id",
+                }
+            ),
+        )
+        mock_create_user.side_effect = IntegrityError("unique_violation")
+
+        response = self.client.post(self.url, {"id_token": "valid-token"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+        self.assertIn("already exists", response.data["email"][0].lower())
+
+
+@override_settings(
+    MAX_LOGIN_ATTEMPTS=5,
+    ACCOUNT_LOCK_MINUTES=15,
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "login": "1000/minute",
+            "google_login": "1000/minute",
+            "google_link": "1000/minute",
+            "google_unlink": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    },
+)
 class LoginLockoutTests(TestCase):
     """Tests for login lockout after failed attempts (US-015)."""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.login_url = "/api/v1/auth/login/"
         self.user = User.objects.create_user(
@@ -484,6 +861,30 @@ class LoginLockoutTests(TestCase):
         self.assertEqual(mock_send.call_count, 1)
         self.assertEqual(mock_send.call_args[0][0].pk, self.user.pk)
 
+    def test_login_is_rate_limited_after_threshold(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        with patch.dict(ScopedRateThrottle.THROTTLE_RATES, {"login": "2/minute"}):
+            response1 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+            response2 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+            response3 = self.client.post(
+                self.login_url,
+                {"email": "lock@example.com", "password": "wrong"},
+                format="json",
+            )
+
+        self.assertEqual(response1.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response2.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response3.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
     @patch("apps.accounts.auth_views.send_login_otp_email")
     def test_successful_password_returns_mfa_required(self, mock_send_otp):
         """Correct password returns mfa_required with challenge_id, not tokens."""
@@ -504,10 +905,26 @@ class LoginLockoutTests(TestCase):
         self.assertEqual(len(mock_send_otp.call_args[0][1]), 6)
 
 
+@override_settings(
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.ScopedRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "login": "1000/minute",
+            "google_login": "1000/minute",
+            "google_link": "1000/minute",
+            "google_unlink": "1000/minute",
+            "otp_verify": "1000/minute",
+            "otp_resend": "1000/minute",
+        },
+    }
+)
 class LoginOTPTests(TestCase):
     """Tests for email OTP login flow (verify-otp, resend-otp)."""
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="otpuser",
@@ -533,6 +950,22 @@ class LoginOTPTests(TestCase):
         return challenge_id, otp_sent
 
     @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_login_returns_503_when_otp_email_send_fails_and_rolls_back_challenge(
+        self, mock_send_otp
+    ):
+        mock_send_otp.side_effect = Exception("email service unavailable")
+
+        response = self.client.post(
+            self.login_url,
+            {"email": "otp@example.com", "password": "testpass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn("Failed to send OTP email", response.data["detail"])
+        self.assertFalse(LoginOTPChallenge.objects.filter(user=self.user).exists())
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
     def test_verify_otp_returns_tokens_and_marks_challenge_used(self, mock_send_otp):
         """Successful OTP verification returns JWT tokens and marks challenge used."""
         challenge_id, otp = self._login_get_challenge_id(mock_send_otp)
@@ -547,8 +980,6 @@ class LoginOTPTests(TestCase):
         self.assertIn("refresh", response.data)
         self.assertIn("user", response.data)
         self.assertEqual(response.data["user"]["email"], self.user.email)
-
-        from apps.accounts.models import LoginOTPChallenge
 
         challenge = LoginOTPChallenge.objects.get(id=challenge_id)
         self.assertTrue(challenge.is_used)
@@ -598,3 +1029,138 @@ class LoginOTPTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
         self.assertIn("Maximum resend", response.data["detail"])
+
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_resend_returns_503_and_does_not_increment_send_count_on_email_failure(
+        self, mock_send_otp
+    ):
+        challenge = LoginOTPChallenge.objects.create(
+            user=self.user,
+            otp_hash=hash_otp("123456"),
+            expires_at=timezone.now() + timedelta(minutes=5),
+            attempts=0,
+            send_count=1,
+            last_sent_at=timezone.now(),
+            is_used=False,
+        )
+        mock_send_otp.side_effect = Exception("smtp down")
+
+        response = self.client.post(
+            self.resend_url,
+            {"challenge_id": str(challenge.id)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.send_count, 1)
+
+    @override_settings(LOGIN_OTP_TTL_SECONDS=420)
+    @patch("apps.accounts.auth_views.send_login_otp_email")
+    def test_login_response_uses_configured_otp_ttl(self, mock_send_otp):
+        response = self.client.post(
+            self.login_url,
+            {"email": "otp@example.com", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["expires_in"], 420)
+
+
+class AdminPromoteUserRoleTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.target_user = User.objects.create_user(
+            username="targetlearner",
+            email="targetlearner@example.com",
+            password="testpass123",
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.admin_user = User.objects.create_user(
+            username="promoteadmin",
+            email="promoteadmin@example.com",
+            password="testpass123",
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        self.manager_user = User.objects.create_user(
+            username="promotemanager",
+            email="promotemanager@example.com",
+            password="testpass123",
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_user = User.objects.create_user(
+            username="noprivlearner",
+            email="noprivlearner@example.com",
+            password="testpass123",
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.url = f"/api/v1/admin/users/{self.target_user.id}/promote/"
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def test_tasc_admin_can_promote_learner_to_instructor(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.admin_user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.INSTRUCTOR)
+        self.assertEqual(response.data["new_role"], User.Role.INSTRUCTOR)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action="updated",
+                resource="user",
+                resource_id=str(self.target_user.id),
+                actor=self.admin_user,
+            ).exists()
+        )
+
+    def test_lms_manager_can_promote_learner_to_instructor(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.manager_user))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.INSTRUCTOR)
+        self.assertEqual(response.data["new_role"], User.Role.INSTRUCTOR)
+
+    def test_learner_cannot_promote_user(self):
+        response = self.client.post(self.url, format="json", **self._auth_header(self.learner_user))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, User.Role.LEARNER)
+
+
+class LivestreamPermissionAdminLikeTests(TestCase):
+    def test_tasc_admin_passes_instructor_or_read_only_permission(self):
+        permission = IsInstructorOrReadOnly()
+        admin_user = User.objects.create_user(
+            username="livetascadmin",
+            email="livetascadmin@example.com",
+            password="testpass123",
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        instructor_user = User.objects.create_user(
+            username="liveinstructor",
+            email="liveinstructor@example.com",
+            password="testpass123",
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+
+        request = MagicMock()
+        request.method = "PATCH"
+        request.user = admin_user
+
+        session_like_obj = MagicMock()
+        session_like_obj.instructor = instructor_user
+
+        self.assertTrue(permission.has_object_permission(request, None, session_like_obj))

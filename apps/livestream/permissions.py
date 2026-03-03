@@ -1,4 +1,5 @@
 from rest_framework import permissions
+from apps.accounts.rbac import is_admin_like
 
 
 class IsInstructorOrReadOnly(permissions.BasePermission):
@@ -11,8 +12,8 @@ class IsInstructorOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         
-        # Write permissions only to the instructor or admin
-        return obj.instructor == request.user or getattr(request.user, 'role', '') in ['admin', 'super_admin']
+        # Write permissions only to the instructor or platform admins
+        return obj.instructor == request.user or is_admin_like(request.user)
 
 
 class IsEnrolledOrInstructor(permissions.BasePermission):

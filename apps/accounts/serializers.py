@@ -1,5 +1,8 @@
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
@@ -12,6 +15,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 User = get_user_model()
 
 from .models import Organization, Membership
+
+
+def raise_password_validation_error(password: str, *, user=None, field_name: str):
+    try:
+        validate_password(password, user=user)
+    except DjangoValidationError as e:
+        raise serializers.ValidationError({field_name: list(e.messages)})
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -129,8 +139,8 @@ class AuthTokensSerializer(serializers.Serializer):
 class RegisterSerializer(serializers.Serializer):
     # Step 1
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, min_length=5)
-    confirm_password = serializers.CharField(write_only=True, min_length=5)
+    password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
 
     # Step 2
     first_name = serializers.CharField(max_length=150)
@@ -146,18 +156,37 @@ class RegisterSerializer(serializers.Serializer):
     marketing_opt_in = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
+        email = (attrs.get("email") or "").strip().lower()
+        attrs["email"] = email
+
         if attrs["password"] != attrs["confirm_password"]:
             raise serializers.ValidationError(
                 {"confirm_password": "Passwords do not match."}
             )
+        raise_password_validation_error(
+            attrs["password"], user=None, field_name="password"
+        )
 
         if not attrs.get("accept_terms"):
             raise serializers.ValidationError(
                 {"accept_terms": "You must accept the Terms and Privacy Policy."}
             )
 
-        if User.objects.filter(email__iexact=attrs["email"]).exists():
-            raise serializers.ValidationError({"email": "Email is already registered."})
+        existing = User.objects.filter(email__iexact=email).first()
+        if existing:
+            verified = getattr(existing, "email_verified", False)
+            active = getattr(existing, "is_active", False)
+            if verified or active:
+                raise serializers.ValidationError(
+                    {"email": ["Email is already registered."]}
+                )
+            raise serializers.ValidationError(
+                {
+                    "email": [
+                        "Account exists but email is not verified. Please verify your email or request a new verification link."
+                    ]
+                }
+            )
 
         return attrs
 
@@ -190,7 +219,12 @@ class RegisterSerializer(serializers.Serializer):
         if hasattr(user, "role") and not getattr(user, "role", None):
             user.role = "learner"
 
-        user.save()
+        try:
+            user.save()
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {"email": ["A user with this email already exists."]}
+            )
         return user
 
 
@@ -205,17 +239,14 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     uidb64 = serializers.CharField()
     token = serializers.CharField()
-    new_password = serializers.CharField(write_only=True)
-    confirm_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
 
     def validate(self, attrs):
         if attrs["new_password"] != attrs["confirm_password"]:
             raise serializers.ValidationError(
                 {"confirm_password": "Passwords do not match."}
             )
-
-        # Validate strength using Django validators
-        validate_password(attrs["new_password"])
 
         # Resolve user
         try:
@@ -226,6 +257,10 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError({"token": "Invalid or expired token."})
+
+        raise_password_validation_error(
+            attrs["new_password"], user=user, field_name="new_password"
+        )
 
         attrs["user"] = user
         return attrs
@@ -241,8 +276,8 @@ class ResendVerificationEmailSerializer(serializers.Serializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True)
-    confirm_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
 
     def validate(self, attrs):
         if attrs["new_password"] != attrs["confirm_password"]:
@@ -250,8 +285,11 @@ class ChangePasswordSerializer(serializers.Serializer):
                 {"confirm_password": "Passwords do not match."}
             )
 
-        # Django's built-in password strength validators
-        validate_password(attrs["new_password"])
+        request = self.context.get("request")
+        user = request.user if request else None
+        raise_password_validation_error(
+            attrs["new_password"], user=user, field_name="new_password"
+        )
 
         return attrs
 
@@ -281,7 +319,17 @@ class InviteUserSerializer(serializers.Serializer):
 
 class VerifyOTPSerializer(serializers.Serializer):
     challenge_id = serializers.UUIDField()
-    otp = serializers.CharField(min_length=6, max_length=6)
+    otp = serializers.CharField()
+
+    def validate_otp(self, value):
+        expected_length = int(getattr(settings, "LOGIN_OTP_LENGTH", 6))
+        if len(value) != expected_length:
+            raise serializers.ValidationError(
+                f"OTP must be exactly {expected_length} digits."
+            )
+        if not value.isdigit():
+            raise serializers.ValidationError("OTP must contain digits only.")
+        return value
 
 
 class ResendOTPSerializer(serializers.Serializer):

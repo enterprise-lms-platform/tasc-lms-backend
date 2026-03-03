@@ -2,11 +2,13 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
 
@@ -68,6 +70,7 @@ User = get_user_model()
 )
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_login(request):
     """
     Google OAuth Login Endpoint.
@@ -132,50 +135,62 @@ def google_oauth_login(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if user exists with this Google ID
+        # Check if user exists with this Google ID, then link/create atomically.
         user = None
         is_new_user = False
         try:
-            user = User.objects.get(google_id=google_id)
-        except User.DoesNotExist:
-            # Check if user exists with this email
-            try:
-                user = User.objects.get(email__iexact=email)
-                # Link Google account to existing user
-                user.google_id = google_id
-                user.google_picture = picture
-                if not user.avatar:
-                    user.avatar = picture
-                user.save()
-            except User.DoesNotExist:
-                # Create new user
-                # Generate username from email
-                base_username = email.split('@')[0][:25]
-                username = base_username
-                i = 1
-                while User.objects.filter(username=username).exists():
-                    i += 1
-                    username = f"{base_username}{i}"
-                
-                user = User.objects.create_user(
-                    username=username,
-                    email=email,
-                    first_name=given_name,
-                    last_name=family_name,
-                    google_id=google_id,
-                    google_picture=picture,
-                    avatar=picture,
-                    email_verified=True,
-                    is_active=True,
-                    role='learner',  # Default role for new users
-                )
-                is_new_user = True
+            with transaction.atomic():
+                try:
+                    user = User.objects.get(google_id=google_id)
+                except User.DoesNotExist:
+                    # Check if user exists with this email
+                    try:
+                        user = User.objects.get(email__iexact=email)
+                        # Link Google account to existing user
+                        user.google_id = google_id
+                        user.google_picture = picture
+                        if not user.avatar:
+                            user.avatar = picture
+                        user.save()
+                    except User.DoesNotExist:
+                        # Create new user
+                        # Generate username from email
+                        base_username = email.split('@')[0][:25]
+                        username = base_username
+                        i = 1
+                        while User.objects.filter(username=username).exists():
+                            i += 1
+                            username = f"{base_username}{i}"
+
+                        user = User.objects.create_user(
+                            username=username,
+                            email=email.strip().lower(),
+                            first_name=given_name,
+                            last_name=family_name,
+                            google_id=google_id,
+                            google_picture=picture,
+                            avatar=picture,
+                            email_verified=True,
+                            is_active=True,
+                            role='learner',  # Default role for new users
+                        )
+                        is_new_user = True
+        except IntegrityError:
+            return Response(
+                {"email": ["A user with this email already exists."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
-        # Ensure user is active
+        # Enforce consistent account state checks across auth methods
         if not user.is_active:
             return Response(
                 {'error': 'Account is inactive'},
                 status=status.HTTP_403_FORBIDDEN
+            )
+        if hasattr(user, "email_verified") and not user.email_verified:
+            return Response(
+                {"error": "Email not verified."},
+                status=status.HTTP_403_FORBIDDEN,
             )
         
         # Generate JWT tokens
@@ -195,9 +210,10 @@ def google_oauth_login(request):
             'is_new_user': is_new_user,
         }, status=status.HTTP_200_OK)
     
-    except Exception as e:
+    except Exception:
+        logger.exception("Google OAuth login failed")
         return Response(
-            {'error': f'Authentication failed: {str(e)}'},
+            {'error': 'Authentication failed. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -222,6 +238,7 @@ def google_oauth_login(request):
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_link(request):
     """
     Link Google Account Endpoint.
@@ -311,6 +328,7 @@ def google_oauth_link(request):
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
 def google_oauth_unlink(request):
     """
     Unlink Google Account Endpoint.
@@ -390,3 +408,8 @@ def google_oauth_status(request):
         'google_id': user.google_id,
         'google_picture': user.google_picture,
     }, status=status.HTTP_200_OK)
+
+
+google_oauth_login.cls.throttle_scope = "google_login"
+google_oauth_link.cls.throttle_scope = "google_link"
+google_oauth_unlink.cls.throttle_scope = "google_unlink"

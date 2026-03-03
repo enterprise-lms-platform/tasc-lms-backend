@@ -5,12 +5,14 @@ Plain OTP is never stored; only hashes are persisted.
 
 import secrets
 
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 
 
 def generate_otp() -> str:
-    """Generate a 6-digit OTP using secrets.randbelow (zero-padded)."""
-    return f"{secrets.randbelow(1_000_000):06d}"
+    """Generate a numeric OTP using configured length (zero-padded)."""
+    length = max(1, int(getattr(settings, "LOGIN_OTP_LENGTH", 6)))
+    return f"{secrets.randbelow(10 ** length):0{length}d}"
 
 
 def hash_otp(otp: str) -> str:

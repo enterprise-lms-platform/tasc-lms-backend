@@ -1,5 +1,6 @@
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
+from django.views.generic.base import RedirectView
 from drf_spectacular.renderers import OpenApiJsonRenderer
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -21,7 +22,16 @@ urlpatterns = [
         SpectacularSwaggerView.as_view(url_name="schema"),
         name="swagger-ui",
     ),
+    path(
+        "documentation/",
+        SpectacularSwaggerView.as_view(url_name="schema"),
+        name="documentation",
+    ),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     # Versioned API
     path("api/v1/", include("apps.common.api_urls")),
+    re_path(
+        r"^(?!api/)(?!admin/)(?!documentation/).*$",
+        RedirectView.as_view(pattern_name="documentation", permanent=False),
+    ),
 ]

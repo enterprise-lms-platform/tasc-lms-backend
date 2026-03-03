@@ -9,6 +9,7 @@ from apps.livestream.models import (
     LivestreamSession, LivestreamAttendance,
     LivestreamRecording
 )
+from apps.accounts.rbac import is_admin_like
 from apps.livestream.services.calendar_service import TimezoneService
 
 
@@ -147,7 +148,7 @@ class LivestreamSessionCreateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if request and request.user:
             if value.instructor != request.user:
-                if not getattr(request.user, 'role', '') in ['admin', 'super_admin']:
+                if not is_admin_like(request.user):
                     raise serializers.ValidationError(
                         "You are not the instructor of this course"
                     )
