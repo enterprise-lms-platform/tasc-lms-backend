@@ -31,6 +31,8 @@ class LivestreamSession(models.Model):
     PLATFORM_CHOICES = [
         ('zoom', 'Zoom'),
         ('custom', 'Custom RTMP'),
+        ('google_meet', 'Google Meet'),
+        ('teams', 'Microsoft Teams'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -282,6 +282,21 @@ ZOOM_API_SECRET = os.getenv('ZOOM_API_SECRET', '')
 ZOOM_ACCOUNT_ID = os.getenv('ZOOM_ACCOUNT_ID', '')
 ZOOM_WEBHOOK_SECRET = os.getenv('ZOOM_WEBHOOK_SECRET', '')
 
+# Google Meet Integration
+GOOGLE_APPLICATION_CREDENTIALS = os.path.join(
+    BASE_DIR, 
+    os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'config/credentials/google-service-account.json')
+)
+GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID', 'primary')
+
+# Validate credentials exist
+if not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
+    import warnings
+    warnings.warn(
+        f"Google service account credentials not found at {GOOGLE_APPLICATION_CREDENTIALS}. "
+        "Google Meet integration will not work."
+    )
+
 # Site settings
 SITE_DOMAIN = os.getenv('SITE_DOMAIN', 'localhost:8000')
 SITE_URL = os.getenv('SITE_URL', 'http://localhost:8000')
