@@ -45,6 +45,8 @@ class SessionSerializer(serializers.ModelSerializer):
             'id', 'course', 'title', 'description', 'session_type', 'status',
             'order', 'video_duration_seconds', 'duration_minutes',
             'video_url', 'content_text',
+            'asset_object_key', 'asset_bucket', 'asset_mime_type',
+            'asset_size_bytes', 'asset_original_filename',
             'is_free_preview', 'is_mandatory',
             'created_at', 'updated_at'
         ]
@@ -59,7 +61,10 @@ class SessionCreateSerializer(serializers.ModelSerializer):
         fields = [
             'course', 'title', 'description', 'session_type', 'status',
             'order', 'video_duration_seconds',
-            'video_url', 'content_text', 'is_free_preview', 'is_mandatory'
+            'video_url', 'content_text',
+            'asset_object_key', 'asset_bucket', 'asset_mime_type',
+            'asset_size_bytes', 'asset_original_filename',
+            'is_free_preview', 'is_mandatory'
         ]
 
 

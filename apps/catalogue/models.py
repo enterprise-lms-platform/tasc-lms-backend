@@ -196,6 +196,13 @@ class Session(models.Model):
     video_url = models.URLField(blank=True, null=True)
     content_text = models.TextField(blank=True)
 
+    # Uploaded asset metadata (videos, PDFs, SCORM zips)
+    asset_object_key = models.CharField(max_length=512, blank=True, null=True)
+    asset_bucket = models.CharField(max_length=128, blank=True, null=True)
+    asset_mime_type = models.CharField(max_length=100, blank=True, null=True)
+    asset_size_bytes = models.BigIntegerField(blank=True, null=True)
+    asset_original_filename = models.CharField(max_length=255, blank=True, null=True)
+
     # Settings
     is_free_preview = models.BooleanField(default=False)
     is_mandatory = models.BooleanField(default=True)

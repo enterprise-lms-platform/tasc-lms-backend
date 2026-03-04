@@ -9,5 +9,5 @@ def create_boto3_client():
         region_name=settings.DO_SPACES_REGION,     # lon1
         aws_access_key_id=settings.DO_SPACES_ACCESS_KEY_ID,
         aws_secret_access_key=settings.DO_SPACES_SECRET_ACCESS_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
     )

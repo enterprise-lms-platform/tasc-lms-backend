@@ -30,7 +30,7 @@ services:
       gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
       "
     ports:
-      - "127.0.0.1:9002:8000"   # only reachable from the server (Nginx will proxy)
+      - "127.0.0.1:9003:8000"   # only reachable from the server (Nginx will proxy)
     volumes:
       - staticfiles_demo:/app/staticfiles
 
