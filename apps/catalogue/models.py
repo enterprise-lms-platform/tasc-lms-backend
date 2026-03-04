@@ -166,6 +166,11 @@ class Session(models.Model):
     """
     Session represents an individual learning session within a course.
     """
+    class ContentSource(models.TextChoices):
+        INLINE = 'inline', 'Inline'
+        UPLOAD = 'upload', 'Uploaded Asset'
+        EXTERNAL = 'external', 'External Video'
+
     class SessionType(models.TextChoices):
         VIDEO      = 'video',      'Video'
         TEXT       = 'text',       'Text'
@@ -193,8 +198,16 @@ class Session(models.Model):
     video_duration_seconds = models.PositiveIntegerField(null=True, blank=True)
 
     # Content
+    content_source = models.CharField(
+        max_length=20, choices=ContentSource.choices, blank=True, null=True
+    )
     video_url = models.URLField(blank=True, null=True)
     content_text = models.TextField(blank=True)
+
+    # External video (YouTube, Vimeo, Loom)
+    external_video_url = models.URLField(blank=True, null=True)
+    external_video_provider = models.CharField(max_length=50, blank=True, null=True)
+    external_video_embed_url = models.URLField(blank=True, null=True)
 
     # Uploaded asset metadata (videos, PDFs, SCORM zips)
     asset_object_key = models.CharField(max_length=512, blank=True, null=True)

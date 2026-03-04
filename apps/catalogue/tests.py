@@ -471,6 +471,139 @@ class SessionAssetUrlTest(APITestCase):
 
 
 # ---------------------------------------------------------------------------
+# D3) External video embedding (US-0415)
+# ---------------------------------------------------------------------------
+
+class ExternalVideoEmbeddingTest(APITestCase):
+    """External video embedding: YouTube, Vimeo, Loom via content_source + external_video_*."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_ext')
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='External Video Course',
+            description='desc',
+            slug='external-video-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+
+    def _create_session(self, **payload):
+        base = {
+            'course': self.course.id,
+            'title': 'Lesson',
+            'session_type': 'video',
+            'order': 1,
+        }
+        base.update(payload)
+        return self.client.post(
+            SESSIONS_URL,
+            base,
+            format='json',
+            **_auth(self.instructor),
+        )
+
+    def _patch_session(self, session_id, **payload):
+        return self.client.patch(
+            f'{SESSIONS_URL}{session_id}/',
+            payload,
+            format='json',
+            **_auth(self.instructor),
+        )
+
+    def test_external_youtube_watch_url_converts_to_embed(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='https://www.youtube.com/watch?v=abc123XYZ09',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['external_video_provider'], 'youtube')
+        self.assertEqual(
+            response.data['external_video_embed_url'],
+            'https://www.youtube.com/embed/abc123XYZ09',
+        )
+
+    def test_external_youtu_be_converts(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='https://youtu.be/xyz789ABC',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['external_video_provider'], 'youtube')
+        self.assertEqual(
+            response.data['external_video_embed_url'],
+            'https://www.youtube.com/embed/xyz789ABC',
+        )
+
+    def test_external_vimeo_converts(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='https://vimeo.com/123456789',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['external_video_provider'], 'vimeo')
+        self.assertEqual(
+            response.data['external_video_embed_url'],
+            'https://player.vimeo.com/video/123456789',
+        )
+
+    def test_external_loom_converts(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='https://www.loom.com/share/abc123xyz',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['external_video_provider'], 'loom')
+        self.assertEqual(
+            response.data['external_video_embed_url'],
+            'https://www.loom.com/embed/abc123xyz',
+        )
+
+    def test_external_rejects_http(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='http://www.youtube.com/watch?v=abc123',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('external_video_url', response.data)
+        self.assertIn('https', str(response.data['external_video_url']).lower())
+
+    def test_external_rejects_unknown_domain(self):
+        response = self._create_session(
+            content_source='external',
+            external_video_url='https://evil.com/video',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('external_video_url', response.data)
+        self.assertIn('Unsupported', str(response.data['external_video_url']))
+
+    def test_switch_to_external_autoclears_asset_fields(self):
+        session = Session.objects.create(
+            course=self.course,
+            title='Upload Session',
+            order=1,
+            session_type='video',
+            content_source='upload',
+            asset_object_key='session-assets/course_1/session_1/intro.mp4',
+            asset_bucket='tasc-private',
+        )
+        response = self._patch_session(
+            session.id,
+            content_source='external',
+            external_video_url='https://www.youtube.com/watch?v=test123',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data.get('asset_object_key'))
+        self.assertEqual(response.data['external_video_provider'], 'youtube')
+        self.assertEqual(
+            response.data['external_video_embed_url'],
+            'https://www.youtube.com/embed/test123',
+        )
+
+
+# ---------------------------------------------------------------------------
 # E) Settings fields stored and returned
 # ---------------------------------------------------------------------------
 
