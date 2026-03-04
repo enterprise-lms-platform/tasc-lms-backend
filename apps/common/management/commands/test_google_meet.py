@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
-from .services.google_meet_service import GoogleMeetService
+from ....livestream.services.google_meet_service import GoogleMeetService
 
 
 class Command(BaseCommand):
