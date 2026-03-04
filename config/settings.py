@@ -314,6 +314,8 @@ GOOGLE_APPLICATION_CREDENTIALS = os.path.join(
     os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'config/credentials/google-service-account.json')
 )
 GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID', 'primary')
+GOOGLE_MEET_SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_MEET_SERVICE_ACCOUNT_FILE', 'config/credentials/google-service-account.json')
+GOOGLE_MEET_DELEGATED_USER = os.getenv('GOOGLE_MEET_DELEGATED_USER', '')  # Optional: email of user to impersonate for calendar access
 
 # Validate credentials exist
 if not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):

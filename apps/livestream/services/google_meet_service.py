@@ -5,10 +5,14 @@ Creates Google Meet meetings via the Google Calendar API using a service account
 import logging
 import os
 import traceback
+import json
 from datetime import datetime, timedelta
 from django.conf import settings
+from django.db import models
 from django.utils import timezone
 from typing import Dict, Any, Optional, List, Union
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +212,150 @@ class GoogleMeetService:
                 f"Failed to build calendar service: {str(e)}"
             ) from e
 
+    def check_calendar_conference_support(self) -> Dict[str, Any]:
+        """
+        Check if the calendar supports Google Meet conferences.
+        
+        Returns:
+            dict: Calendar information and supported conference types
+            
+        Raises:
+            GoogleMeetServiceError: If check fails
+        """
+        try:
+            service = self._build_calendar_service()
+            
+            # Get calendar details
+            calendar = service.calendars().get(calendarId=self.calendar_id).execute()
+            
+            # Get conference properties
+            conference_props = calendar.get('conferenceProperties', {})
+            allowed_types = conference_props.get('allowedConferenceSolutionTypes', [])
+            
+            result = {
+                'calendar_id': self.calendar_id,
+                'calendar_summary': calendar.get('summary', 'Unknown'),
+                'calendar_description': calendar.get('description', ''),
+                'time_zone': calendar.get('timeZone', 'UTC'),
+                'allowed_conference_types': allowed_types,
+                'supports_meet': 'hangoutsMeet' in allowed_types,
+                'access_role': calendar.get('accessRole', 'unknown'),
+                'success': True
+            }
+            
+            logger.info(f"Calendar '{result['calendar_summary']}' supports: {allowed_types}")
+            
+            if not result['supports_meet']:
+                logger.warning(
+                    f"⚠️ Calendar does NOT support Google Meet conferences!\n"
+                    f"This usually means you're using a free Gmail account.\n"
+                    f"You need a Google Workspace account with Meet enabled."
+                )
+            
+            return result
+            
+        except HttpError as e:
+            logger.error(f"Failed to check calendar: {e}")
+            status_code = e.resp.status if hasattr(e, 'resp') else 500
+            
+            if status_code == 404:
+                raise GoogleMeetServiceError(
+                    f"Calendar not found: {self.calendar_id}. "
+                    f"Please check that this calendar exists and is shared with the service account."
+                ) from e
+            elif status_code == 403:
+                raise GoogleMeetServiceError(
+                    f"Permission denied accessing calendar: {self.calendar_id}. "
+                    f"Ensure the calendar is shared with the service account email: {self._get_service_account_email()}"
+                ) from e
+            else:
+                raise GoogleMeetServiceError(
+                    f"Failed to check calendar (HTTP {status_code}): {e}"
+                ) from e
+        except Exception as e:
+            logger.error(f"Unexpected error checking calendar: {e}")
+            logger.error(traceback.format_exc())
+            raise GoogleMeetServiceError(
+                f"Failed to check calendar: {str(e)}"
+            ) from e
+
+    def _get_service_account_email(self) -> str:
+        """Extract service account email from credentials file."""
+        try:
+            with open(self.service_account_file, 'r') as f:
+                data = json.load(f)
+                return data.get('client_email', 'unknown')
+        except:
+            return 'unknown'
+
+    def diagnose_calendar_access(self) -> Dict[str, Any]:
+        """
+        Comprehensive diagnostic of calendar access and permissions.
+        
+        Returns:
+            dict: Detailed diagnostic information
+        """
+        diagnostics = {
+            'configuration': {
+                'service_account_file': self.service_account_file,
+                'file_exists': os.path.exists(self.service_account_file),
+                'delegated_user': self.delegated_user,
+                'calendar_id': self.calendar_id,
+            },
+            'checks': {},
+            'errors': []
+        }
+        
+        # Check file exists
+        if not diagnostics['configuration']['file_exists']:
+            diagnostics['errors'].append("Service account file not found")
+        
+        # Try to load credentials
+        try:
+            credentials = self._get_credentials()
+            diagnostics['checks']['credentials_loaded'] = True
+            diagnostics['checks']['service_account_email'] = self._get_service_account_email()
+        except Exception as e:
+            diagnostics['checks']['credentials_loaded'] = False
+            diagnostics['errors'].append(f"Failed to load credentials: {str(e)}")
+            return diagnostics
+        
+        # Try to build service
+        try:
+            service = self._build_calendar_service()
+            diagnostics['checks']['service_built'] = True
+        except Exception as e:
+            diagnostics['checks']['service_built'] = False
+            diagnostics['errors'].append(f"Failed to build service: {str(e)}")
+            return diagnostics
+        
+        # Check calendar access
+        try:
+            calendar_info = self.check_calendar_conference_support()
+            diagnostics['checks']['calendar_access'] = True
+            diagnostics['calendar_info'] = calendar_info
+        except Exception as e:
+            diagnostics['checks']['calendar_access'] = False
+            diagnostics['errors'].append(f"Failed to access calendar: {str(e)}")
+        
+        # Try to list upcoming events (tests read permission)
+        try:
+            now = datetime.utcnow().isoformat() + 'Z'
+            events = service.events().list(
+                calendarId=self.calendar_id,
+                timeMin=now,
+                maxResults=5,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+            diagnostics['checks']['can_list_events'] = True
+            diagnostics['sample_events'] = len(events.get('items', []))
+        except Exception as e:
+            diagnostics['checks']['can_list_events'] = False
+            diagnostics['errors'].append(f"Cannot list events: {str(e)}")
+        
+        return diagnostics
+
     def _validate_session_data(self, session_data: Dict[str, Any]) -> None:
         """
         Validate session data before creating/updating a meeting.
@@ -303,7 +451,8 @@ class GoogleMeetService:
                 end_time = timezone.make_aware(end_time)
 
             # Generate unique request ID
-            request_id = f"tasc-lms-{start_time.strftime('%Y%m%d%H%M%S')}-{os.urandom(4).hex()}"
+            import uuid
+            request_id = str(uuid.uuid4())  # Using UUID for guaranteed uniqueness
             
             event_body = {
                 'summary': session_data.get('topic', 'Livestream Session')[:200],
@@ -343,7 +492,13 @@ class GoogleMeetService:
 
             # Create the event
             logger.info(f"Creating Google Calendar event: {event_body['summary']} at {start_time}")
-            
+
+            logger.info("=" * 50)
+            logger.info("DEBUG: Conference Data Structure")
+            logger.info(f"Request ID: {request_id}")
+            logger.info(f"ConferenceSolutionKey type: {event_body['conferenceData']['createRequest']['conferenceSolutionKey']['type']}")
+            logger.info("=" * 50)
+
             event = service.events().insert(
                 calendarId=self.calendar_id,
                 body=event_body,
