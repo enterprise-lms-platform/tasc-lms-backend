@@ -5,9 +5,14 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+
+from apps.accounts.rbac import is_admin_like
+from apps.common.spaces import create_boto3_client
+from apps.learning.models import Enrollment
 
 from .models import (
     Category, Course, Session, Tag
@@ -493,3 +498,81 @@ class SessionViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Get presigned URL for session asset',
+        description='Returns a short-lived presigned GET URL for the session private asset in Spaces.',
+        responses={
+            200: OpenApiResponse(
+                description='Presigned URL',
+                response=dict,
+                examples=[OpenApiExample(
+                    'Asset URL response',
+                    value={'url': 'https://bucket.region.digitaloceanspaces.com/key?X-Amz-...', 'expires_in': 300, 'method': 'GET'},
+                    response_only=True,
+                )],
+            ),
+            403: OpenApiResponse(description='Not allowed to access this session asset'),
+            404: OpenApiResponse(description='Session has no asset or session not found'),
+            503: OpenApiResponse(description='Spaces not configured'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='asset-url')
+    def asset_url(self, request, pk=None):
+        session = get_object_or_404(Session, pk=pk)
+        user = request.user
+
+        # Access control: LMS_MANAGER and TASC_ADMIN always; INSTRUCTOR if course owner; LEARNER if enrolled
+        if is_admin_like(user):
+            pass
+        elif user.role == User.Role.INSTRUCTOR:
+            if session.course.instructor_id != user.id:
+                return Response(
+                    {'detail': 'You do not have permission to access this session asset.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        elif user.role == User.Role.LEARNER:
+            if not Enrollment.objects.filter(user=user, course=session.course).exists():
+                return Response(
+                    {'detail': 'You must be enrolled in this course to access session assets.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            return Response(
+                {'detail': 'You do not have permission to access this session asset.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not (session.asset_object_key or '').strip():
+            return Response(
+                {'detail': 'This session has no uploaded asset.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        bucket = (session.asset_bucket or '').strip() or getattr(settings, 'DO_SPACES_PRIVATE_BUCKET', None)
+        if not bucket:
+            return Response(
+                {'detail': 'Spaces private bucket is not configured.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        required = ('DO_SPACES_ENDPOINT', 'DO_SPACES_ACCESS_KEY_ID', 'DO_SPACES_SECRET_ACCESS_KEY')
+        if not all(getattr(settings, k, None) for k in required):
+            return Response(
+                {'detail': 'Spaces is not configured for presigned URLs.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        expires_in = getattr(settings, 'DO_SPACES_PRESIGN_EXPIRY_SECONDS', 300)
+        s3_client = create_boto3_client()
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': session.asset_object_key},
+            ExpiresIn=expires_in,
+        )
+
+        return Response({
+            'url': url,
+            'expires_in': expires_in,
+            'method': 'GET',
+        })

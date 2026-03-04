@@ -331,6 +331,8 @@ FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:5173")
 # DigitalOcean Spaces (presigned uploads)
 DO_SPACES_REGION = env("DO_SPACES_REGION", default="")
 DO_SPACES_BUCKET = env("DO_SPACES_BUCKET", default="")
+DO_SPACES_PUBLIC_BUCKET = env("DO_SPACES_PUBLIC_BUCKET", default=DO_SPACES_BUCKET)
+DO_SPACES_PRIVATE_BUCKET = env("DO_SPACES_PRIVATE_BUCKET", default="")
 DO_SPACES_ENDPOINT = env(
     "DO_SPACES_ENDPOINT",
     default=(f"https://{DO_SPACES_REGION}.digitaloceanspaces.com" if DO_SPACES_REGION else ""),

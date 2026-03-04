@@ -1,9 +1,13 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from decimal import Decimal
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from apps.learning.models import Enrollment
 
 from .models import Category, Course, Session, Tag
 
@@ -348,6 +352,122 @@ class SessionTypeTest(TestCase):
             with self.subTest(session_type=stype):
                 response = self._create_session(stype, order)
                 self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# D2) Session asset presigned GET URL (US-043)
+# ---------------------------------------------------------------------------
+
+SESSION_ASSET_URL_SETTINGS = {
+    'DO_SPACES_REGION': 'lon1',
+    'DO_SPACES_PRIVATE_BUCKET': 'tasc-private',
+    'DO_SPACES_ENDPOINT': 'https://lon1.digitaloceanspaces.com',
+    'DO_SPACES_ACCESS_KEY_ID': 'key',
+    'DO_SPACES_SECRET_ACCESS_KEY': 'secret',
+    'DO_SPACES_PRESIGN_EXPIRY_SECONDS': 300,
+}
+
+
+@override_settings(**SESSION_ASSET_URL_SETTINGS)
+class SessionAssetUrlTest(APITestCase):
+    """GET /api/v1/catalogue/sessions/<id>/asset-url/ access control and behaviour."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = User.objects.create_user(
+            username='asset_instructor',
+            email='asset_instructor@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.other_instructor = User.objects.create_user(
+            username='other_inst',
+            email='other_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner = User.objects.create_user(
+            username='asset_learner',
+            email='asset_learner@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.other_learner = User.objects.create_user(
+            username='other_learner',
+            email='other_learner@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Asset Test Course',
+            description='desc',
+            slug='asset-test-course',
+            status='published',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.session = Session.objects.create(
+            course=self.course,
+            title='Session With Asset',
+            order=1,
+            asset_object_key='session-assets/course_1/session_1/abc/intro.mp4',
+            asset_bucket='tasc-private',
+            asset_mime_type='video/mp4',
+        )
+        Enrollment.objects.create(user=self.learner, course=self.course, status=Enrollment.Status.ACTIVE)
+
+    def _asset_url(self, user):
+        return self.client.get(
+            f'{SESSIONS_URL}{self.session.id}/asset-url/',
+            **_auth(user),
+        )
+
+    @patch('apps.catalogue.views.create_boto3_client')
+    def test_enrolled_learner_gets_200(self, mock_factory):
+        mock_client = mock_factory.return_value
+        mock_client.generate_presigned_url.return_value = 'https://presigned.example/asset.mp4'
+        response = self._asset_url(self.learner)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['method'], 'GET')
+        self.assertIn('url', response.data)
+        self.assertEqual(response.data['expires_in'], 300)
+
+    @patch('apps.catalogue.views.create_boto3_client')
+    def test_non_enrolled_learner_gets_403(self, mock_factory):
+        response = self._asset_url(self.other_learner)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('detail', response.data)
+
+    @patch('apps.catalogue.views.create_boto3_client')
+    def test_course_instructor_gets_200(self, mock_factory):
+        mock_client = mock_factory.return_value
+        mock_client.generate_presigned_url.return_value = 'https://presigned.example/asset.mp4'
+        response = self._asset_url(self.instructor)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('url', response.data)
+
+    @patch('apps.catalogue.views.create_boto3_client')
+    def test_other_instructor_gets_403(self, mock_factory):
+        response = self._asset_url(self.other_instructor)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('detail', response.data)
+
+    def test_missing_asset_object_key_returns_404(self):
+        self.session.asset_object_key = None
+        self.session.save(update_fields=['asset_object_key'])
+        response = self._asset_url(self.learner)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn('detail', response.data)
+        self.assertIn('no uploaded asset', response.data['detail'].lower())
 
 
 # ---------------------------------------------------------------------------
