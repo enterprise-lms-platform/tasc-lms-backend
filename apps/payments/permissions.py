@@ -23,6 +23,26 @@ def user_has_active_subscription(user):
     ).exists()
 
 
+def get_best_active_subscription(user):
+    """
+    Return the best active UserSubscription for the user, or None.
+    Selection: prefer end_date null (never expires), else latest end_date.
+    """
+    if not user or not user.is_authenticated:
+        return None
+    qs = UserSubscription.objects.filter(
+        user=user,
+        status=UserSubscription.Status.ACTIVE,
+    ).filter(
+        Q(end_date__isnull=True) | Q(end_date__gt=timezone.now())
+    ).select_related('subscription')
+    # Prefer null end_date, then order by end_date descending
+    with_null = qs.filter(end_date__isnull=True).first()
+    if with_null:
+        return with_null
+    return qs.filter(end_date__isnull=False).order_by('-end_date').first()
+
+
 class HasActiveSubscription(BasePermission):
     """
     Allow access only if user has an active subscription.

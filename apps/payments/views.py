@@ -1,6 +1,7 @@
 from django.shortcuts import render
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -18,9 +19,66 @@ from .serializers import (
     InvoiceItemSerializer, TransactionSerializer,
     PaymentMethodSerializer, PaymentMethodCreateSerializer,
     SubscriptionSerializer, UserSubscriptionSerializer, UserSubscriptionCreateSerializer,
+    SubscriptionStatusSerializer,
     PaymentSerializer, CreatePaymentSerializer, PaymentConfirmationSerializer,
     PaymentWebhookSerializer, PaymentStatusSerializer
 )
+from .permissions import user_has_active_subscription, get_best_active_subscription
+
+
+@extend_schema(
+    tags=['Payments - Subscriptions'],
+    summary='Get my subscription status',
+    description='Returns the current user\'s subscription status for content access.',
+    responses={
+        200: SubscriptionStatusSerializer,
+    },
+)
+class SubscriptionMeView(APIView):
+    """GET /api/v1/payments/subscription/me/ - current user's subscription status."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        has_active = user_has_active_subscription(user)
+        us = get_best_active_subscription(user) if has_active else None
+
+        if not us:
+            data = {
+                'has_active_subscription': False,
+                'status': 'none',
+                'is_trial': False,
+                'start_date': None,
+                'end_date': None,
+                'days_remaining': 0,
+                'plan': None,
+            }
+        else:
+            now = timezone.now()
+            days_remaining = None
+            if us.end_date:
+                delta = us.end_date - now
+                days_remaining = max(0, delta.days)
+
+            plan = us.subscription
+            data = {
+                'has_active_subscription': True,
+                'status': us.status,
+                'is_trial': us.is_trial,
+                'start_date': us.start_date,
+                'end_date': us.end_date,
+                'days_remaining': days_remaining,
+                'plan': {
+                    'id': plan.id,
+                    'name': plan.name,
+                    'price': str(plan.price),
+                    'currency': plan.currency,
+                    'billing_cycle': plan.billing_cycle,
+                },
+            }
+
+        return Response(data)
 
 
 @extend_schema(
