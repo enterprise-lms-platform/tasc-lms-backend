@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     WebhookView,
+    SubscriptionMeView,
     InvoiceViewSet,
     TransactionViewSet,
     PaymentMethodViewSet,
@@ -19,6 +20,7 @@ router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-s
 
 
 urlpatterns = [
+    path('subscription/me/', SubscriptionMeView.as_view(), name='subscription-me'),
     path('', include(router.urls)),
     # FIX: Updated action mapping to 'flutterwave_webhook'
     # Reason: The ViewSet defines flutterwave_webhook() as the @action method.
