@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from django.utils import timezone
 from datetime import timedelta
 from .models import (
@@ -70,15 +71,24 @@ class EnrollmentCreateSerializer(serializers.ModelSerializer):
         if is_admin_like(user) or is_instructor(user):
             return attrs
         if not user_has_active_subscription(user):
-            raise serializers.ValidationError({
-                'subscription': 'An active subscription is required to enroll in courses.'
-            })
+            raise PermissionDenied('An active subscription is required to enroll in courses.')
         return attrs
 
     def create(self, validated_data):
         user = self.context['request'].user
-        validated_data['user'] = user
-        return super().create(validated_data)
+        course = validated_data['course']
+        defaults = {
+            'organization': validated_data.get('organization'),
+            'paid_amount': validated_data.get('paid_amount', 0),
+            'currency': validated_data.get('currency', 'USD'),
+        }
+        enrollment, created = Enrollment.objects.get_or_create(
+            user=user,
+            course=course,
+            defaults=defaults,
+        )
+        self._created = created
+        return enrollment
 
 
 class SessionProgressSerializer(serializers.ModelSerializer):

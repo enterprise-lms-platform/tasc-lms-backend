@@ -77,16 +77,16 @@ class EnrollmentSubscriptionGateTest(APITestCase):
             created_by=None,
         )
 
-    def test_learner_without_subscription_gets_400(self):
+    def test_learner_without_subscription_gets_403(self):
         response = self.client.post(
             ENROLLMENTS_URL,
             {'course': self.course.id},
             format='json',
             **_auth(self.learner),
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('subscription', response.data)
-        self.assertIn('active subscription', str(response.data['subscription']).lower())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('detail', response.data)
+        self.assertIn('active subscription', str(response.data['detail']).lower())
 
     def test_learner_with_subscription_gets_201(self):
         _grant_subscription(self.learner)
@@ -98,6 +98,28 @@ class EnrollmentSubscriptionGateTest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['course'], self.course.id)
+
+    def test_duplicate_enroll_idempotent_returns_200(self):
+        """Repeated POST for same course returns 200 with existing enrollment (no IntegrityError)."""
+        _grant_subscription(self.learner)
+        first = self.client.post(
+            ENROLLMENTS_URL,
+            {'course': self.course.id},
+            format='json',
+            **_auth(self.learner),
+        )
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        enrollment_id = first.data['id']
+
+        second = self.client.post(
+            ENROLLMENTS_URL,
+            {'course': self.course.id},
+            format='json',
+            **_auth(self.learner),
+        )
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.data['id'], enrollment_id)
+        self.assertEqual(second.data['course'], self.course.id)
 
     def test_instructor_can_enroll_without_subscription(self):
         inst = User.objects.filter(role=User.Role.INSTRUCTOR).first()
