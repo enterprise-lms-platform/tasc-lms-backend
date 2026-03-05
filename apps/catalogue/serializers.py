@@ -280,8 +280,12 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
             'duration_hours', 'duration_minutes', 'duration_weeks', 'total_sessions',
             'instructor',
             'thumbnail', 'banner', 'trailer_video_url',
-            'prerequisites', 'learning_objectives', 'target_audience',
+            'prerequisites', 'learning_objectives', 'learning_objectives_list',
+            'target_audience',
             'status', 'featured', 'access_duration', 'allow_self_enrollment',
+            'is_public', 'certificate_on_completion', 'enable_discussions',
+            'sequential_learning', 'enrollment_limit', 'start_date', 'end_date',
+            'grading_config',
             'meta_title', 'meta_description', 'meta_keywords'
         ]
 
