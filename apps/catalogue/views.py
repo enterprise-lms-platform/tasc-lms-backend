@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 
 from apps.accounts.rbac import is_admin_like
 from apps.common.spaces import create_boto3_client
+from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
@@ -462,7 +463,13 @@ class SessionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing course sessions."""
     queryset = Session.objects.all()
     permission_classes = [IsAuthenticated]
-    
+
+    def get_permissions(self):
+        perms = list(super().get_permissions())
+        if self.action == 'asset_url':
+            perms.append(HasActiveSubscription())
+        return perms
+
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return SessionCreateSerializer

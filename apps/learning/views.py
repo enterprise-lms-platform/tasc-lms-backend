@@ -2,6 +2,8 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiRespon
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+
+from apps.payments.permissions import HasActiveSubscription
 from rest_framework.response import Response
 
 from .models import (
@@ -111,7 +113,7 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 class SessionProgressViewSet(viewsets.ModelViewSet):
     """ViewSet for managing session progress."""
     queryset = SessionProgress.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action in ['update', 'partial_update']:
@@ -204,7 +206,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 class DiscussionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing discussions."""
     queryset = Discussion.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action == 'create':
@@ -248,7 +250,7 @@ class DiscussionViewSet(viewsets.ModelViewSet):
 class DiscussionReplyViewSet(viewsets.ModelViewSet):
     """ViewSet for managing discussion replies."""
     queryset = DiscussionReply.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action == 'create':

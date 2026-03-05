@@ -7,9 +7,36 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from datetime import timedelta
+from django.utils import timezone
+
 from apps.learning.models import Enrollment
+from apps.payments.models import Subscription, UserSubscription
 
 from .models import Category, Course, Session, Tag
+
+
+def _grant_subscription(user, days=180):
+    """Grant active subscription to user for testing."""
+    plan = Subscription.objects.filter(status=Subscription.Status.ACTIVE).first()
+    if not plan:
+        plan = Subscription.objects.create(
+            name="6-Month Test",
+            description="Test plan",
+            price=Decimal("0.00"),
+            currency="USD",
+            billing_cycle="yearly",
+            status=Subscription.Status.ACTIVE,
+        )
+    UserSubscription.objects.create(
+        user=user,
+        subscription=plan,
+        status=UserSubscription.Status.ACTIVE,
+        start_date=timezone.now(),
+        end_date=timezone.now() + timedelta(days=days),
+        price=plan.price,
+        currency=plan.currency,
+    )
 
 User = get_user_model()
 
@@ -424,6 +451,7 @@ class SessionAssetUrlTest(APITestCase):
             asset_mime_type='video/mp4',
         )
         Enrollment.objects.create(user=self.learner, course=self.course, status=Enrollment.Status.ACTIVE)
+        _grant_subscription(self.learner)  # Required for asset_url access
 
     def _asset_url(self, user):
         return self.client.get(
@@ -443,9 +471,25 @@ class SessionAssetUrlTest(APITestCase):
 
     @patch('apps.catalogue.views.create_boto3_client')
     def test_non_enrolled_learner_gets_403(self, mock_factory):
+        _grant_subscription(self.other_learner)  # Has subscription but not enrolled
         response = self._asset_url(self.other_learner)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn('detail', response.data)
+
+    @patch('apps.catalogue.views.create_boto3_client')
+    def test_learner_without_subscription_gets_403(self, mock_factory):
+        """Enrolled learner without active subscription is denied by HasActiveSubscription."""
+        learner_no_sub = User.objects.create_user(
+            username='learner_no_sub',
+            email='learner_no_sub@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        Enrollment.objects.create(user=learner_no_sub, course=self.course, status=Enrollment.Status.ACTIVE)
+        response = self._asset_url(learner_no_sub)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     @patch('apps.catalogue.views.create_boto3_client')
     def test_course_instructor_gets_200(self, mock_factory):
@@ -885,3 +929,27 @@ class TagPaginationTest(APITestCase):
         self.assertEqual(len(response.data['results']), 10)
         self.assertIsNotNone(response.data['next'])
         self.assertIsNotNone(response.data['previous'])
+
+
+# ---------------------------------------------------------------------------
+# I) Subscription gating + public catalog
+# ---------------------------------------------------------------------------
+
+class PublicCatalogAccessTest(APITestCase):
+    """Public catalog remains accessible without authentication or subscription."""
+
+    def setUp(self):
+        self.client = APIClient()
+        category = _make_category()
+        Course.objects.create(
+            title='Public Course',
+            description='desc',
+            slug='public-course',
+            status='published',
+            instructor=_make_instructor(suffix='_pub'),
+            created_by=None,
+        )
+
+    def test_public_courses_list_no_auth_returns_200(self):
+        response = self.client.get('/api/v1/public/courses/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
