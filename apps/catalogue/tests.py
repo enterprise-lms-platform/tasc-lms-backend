@@ -515,6 +515,73 @@ class SessionAssetUrlTest(APITestCase):
 
 
 # ---------------------------------------------------------------------------
+# D2b) Session delete cleans up Spaces asset
+# ---------------------------------------------------------------------------
+
+@override_settings(**SESSION_ASSET_URL_SETTINGS)
+class SessionDeleteAssetCleanupTest(APITestCase):
+    """DELETE /api/v1/catalogue/sessions/<id>/ removes the Spaces object best-effort."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = User.objects.create_user(
+            username='del_instructor',
+            email='del_instructor@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.course = Course.objects.create(
+            title='Delete Test Course',
+            description='desc',
+            slug='delete-test-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+
+    @patch('apps.catalogue.views.delete_spaces_object')
+    def test_delete_session_with_asset_calls_cleanup(self, mock_delete):
+        session = Session.objects.create(
+            course=self.course, title='With Asset', order=1,
+            asset_object_key='session-assets/course_1/session_1/file.pdf',
+            asset_bucket='tasc-private',
+        )
+        response = self.client.delete(
+            f'{SESSIONS_URL}{session.id}/', **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Session.objects.filter(pk=session.pk).exists())
+        mock_delete.assert_called_once_with('tasc-private', 'session-assets/course_1/session_1/file.pdf')
+
+    @patch('apps.catalogue.views.delete_spaces_object')
+    def test_delete_session_without_asset_skips_cleanup(self, mock_delete):
+        session = Session.objects.create(
+            course=self.course, title='No Asset', order=2,
+        )
+        response = self.client.delete(
+            f'{SESSIONS_URL}{session.id}/', **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Session.objects.filter(pk=session.pk).exists())
+        mock_delete.assert_not_called()
+
+    @patch('apps.catalogue.views.delete_spaces_object')
+    def test_delete_session_uses_private_bucket_fallback(self, mock_delete):
+        session = Session.objects.create(
+            course=self.course, title='Fallback Bucket', order=3,
+            asset_object_key='session-assets/key.mp4',
+            asset_bucket='',
+        )
+        response = self.client.delete(
+            f'{SESSIONS_URL}{session.id}/', **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        mock_delete.assert_called_once_with('tasc-private', 'session-assets/key.mp4')
+
+
+# ---------------------------------------------------------------------------
 # D3) External video embedding (US-0415)
 # ---------------------------------------------------------------------------
 
