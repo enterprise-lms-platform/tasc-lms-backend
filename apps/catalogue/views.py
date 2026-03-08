@@ -11,14 +11,14 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 
 from apps.accounts.rbac import is_admin_like
-from apps.common.spaces import create_boto3_client
+from apps.common.spaces import create_boto3_client, delete_spaces_object
 from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
     Category, Course, Session, Tag
 )
-from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, IsCategoryManagerOrReadOnly
+from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
     SessionSerializer, SessionCreateSerializer,
@@ -462,7 +462,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 class SessionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing course sessions."""
     queryset = Session.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditSessionCourse]
 
     def get_permissions(self):
         perms = list(super().get_permissions())
@@ -474,19 +474,45 @@ class SessionViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update']:
             return SessionCreateSerializer
         return SessionSerializer
-    
+
     def get_queryset(self):
         queryset = Session.objects.all()
         course = self.request.query_params.get('course', None)
         session_type = self.request.query_params.get('type', None)
-        
+
         if course:
             queryset = queryset.filter(course_id=course)
         if session_type:
             queryset = queryset.filter(session_type=session_type)
-        
+
+        if self.action in ('update', 'partial_update', 'destroy'):
+            role = getattr(self.request.user, 'role', None)
+            if role == User.Role.INSTRUCTOR:
+                queryset = queryset.filter(course__instructor_id=self.request.user.id)
+
         return queryset.order_by('order')
-    
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data.get('course')
+        user = self.request.user
+        role = getattr(user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != user.id:
+            raise PermissionDenied('You can only create sessions in your own courses.')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        old_key = (instance.asset_object_key or "").strip()
+        old_bucket = (instance.asset_bucket or "").strip()
+
+        serializer.save()
+
+        new_key = (instance.asset_object_key or "").strip()
+        if old_key and old_key != new_key:
+            bucket = old_bucket or getattr(settings, "DO_SPACES_PRIVATE_BUCKET", "")
+            if bucket:
+                delete_spaces_object(bucket, old_key)
+
     @extend_schema(
         summary='List sessions',
         description='Returns list of sessions with filtering by course and type',
@@ -502,9 +528,29 @@ class SessionViewSet(viewsets.ModelViewSet):
         summary='Create session',
         description='Create a new session for a course',
         request=SessionCreateSerializer,
+        responses={201: SessionSerializer},
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        read_serializer = SessionSerializer(serializer.instance)
+        headers = self.get_success_headers(read_serializer.data)
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+        return Response(SessionSerializer(serializer.instance).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
     @extend_schema(
         summary='Get presigned URL for session asset',
