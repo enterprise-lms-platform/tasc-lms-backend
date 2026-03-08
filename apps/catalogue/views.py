@@ -513,6 +513,17 @@ class SessionViewSet(viewsets.ModelViewSet):
             if bucket:
                 delete_spaces_object(bucket, old_key)
 
+    def perform_destroy(self, instance):
+        old_key = (instance.asset_object_key or "").strip()
+        old_bucket = (instance.asset_bucket or "").strip()
+
+        instance.delete()
+
+        if old_key:
+            bucket = old_bucket or getattr(settings, "DO_SPACES_PRIVATE_BUCKET", "")
+            if bucket:
+                delete_spaces_object(bucket, old_key)
+
     @extend_schema(
         summary='List sessions',
         description='Returns list of sessions with filtering by course and type',
