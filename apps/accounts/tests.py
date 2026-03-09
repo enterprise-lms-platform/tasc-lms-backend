@@ -95,7 +95,7 @@ class MeEndpointTests(TestCase):
         expected_fields = {
             "id", "name", "email", "username", "first_name", "last_name",
             "phone_number", "country", "timezone", "role", "google_picture",
-            "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
+            "avatar", "bio", "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
         }
         self.assertEqual(set(response.data.keys()), expected_fields)
 
@@ -124,7 +124,7 @@ class MeEndpointTests(TestCase):
         expected_fields = {
             "id", "name", "email", "username", "first_name", "last_name",
             "phone_number", "country", "timezone", "role", "google_picture",
-            "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
+            "avatar", "bio", "marketing_opt_in", "terms_accepted_at", "email_verified", "is_active",
         }
         self.assertEqual(set(response.data.keys()), expected_fields)
         self.assertEqual(response.data["first_name"], "UpdatedFirst")
