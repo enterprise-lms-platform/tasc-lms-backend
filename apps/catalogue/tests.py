@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.learning.models import Enrollment
 from apps.payments.models import Subscription, UserSubscription
 
-from .models import Category, Course, Module, Session, Tag
+from .models import Category, Course, Module, Quiz, QuizQuestion, Session, Tag
 
 
 def _grant_subscription(user, days=180):
@@ -380,6 +380,219 @@ class SessionTypeTest(TestCase):
             with self.subTest(session_type=stype):
                 response = self._create_session(stype, order)
                 self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# D1b) Quiz authoring API (Instructor Quiz Builder MVP)
+# ---------------------------------------------------------------------------
+
+class QuizApiTest(APITestCase):
+    """Quiz authoring endpoints: GET/PATCH /sessions/{id}/quiz/, PUT /sessions/{id}/quiz/questions/"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_quiz')
+        self.other_instructor = User.objects.create_user(
+            username='other_quiz_inst',
+            email='other_quiz@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Quiz Test Course',
+            description='desc',
+            slug='quiz-test-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.quiz_session = Session.objects.create(
+            course=self.course,
+            title='Module 1 Quiz',
+            session_type=Session.SessionType.QUIZ,
+            order=1,
+        )
+        self.video_session = Session.objects.create(
+            course=self.course,
+            title='Intro Video',
+            session_type=Session.SessionType.VIDEO,
+            order=2,
+        )
+
+    def test_quiz_get_creates_and_returns_quiz_detail(self):
+        """GET /sessions/{id}/quiz/ creates Quiz if needed and returns full detail."""
+        response = self.client.get(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('session', response.data)
+        self.assertIn('settings', response.data)
+        self.assertIn('questions', response.data)
+        self.assertEqual(response.data['session']['id'], self.quiz_session.id)
+        self.assertEqual(response.data['session']['title'], 'Module 1 Quiz')
+        self.assertEqual(response.data['settings'], {})
+        self.assertEqual(response.data['questions'], [])
+        self.assertTrue(Quiz.objects.filter(session=self.quiz_session).exists())
+
+    def test_quiz_patch_updates_settings_and_returns_merged(self):
+        """PATCH /sessions/{id}/quiz/ merges settings."""
+        quiz = Quiz.objects.create(session=self.quiz_session, settings={})
+        response = self.client.patch(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/',
+            {'settings': {'time_limit_minutes': 30, 'passing_score_percent': 70}},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['settings']['time_limit_minutes'], 30)
+        self.assertEqual(response.data['settings']['passing_score_percent'], 70)
+        quiz.refresh_from_db()
+        self.assertEqual(quiz.settings['time_limit_minutes'], 30)
+
+        response2 = self.client.patch(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/',
+            {'settings': {'max_attempts': 3}},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response2.data['settings']['time_limit_minutes'], 30)
+        self.assertEqual(response2.data['settings']['max_attempts'], 3)
+
+    def test_quiz_get_patch_return_404_for_non_quiz_session(self):
+        """GET and PATCH /quiz/ return 404 for video session."""
+        for method, url_suffix in [('get', ''), ('patch', '')]:
+            with self.subTest(method=method):
+                url = f'{SESSIONS_URL}{self.video_session.id}/quiz/'
+                if method == 'get':
+                    resp = self.client.get(url, **_auth(self.instructor))
+                else:
+                    resp = self.client.patch(url, {'settings': {}}, format='json', **_auth(self.instructor))
+                self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+                self.assertIn('detail', resp.data)
+
+    def test_quiz_questions_put_returns_404_for_non_quiz_session(self):
+        """PUT /quiz/questions/ returns 404 for video session."""
+        response = self.client.put(
+            f'{SESSIONS_URL}{self.video_session.id}/quiz/questions/',
+            {'questions': []},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_quiz_questions_put_creates_questions(self):
+        """PUT /quiz/questions/ creates new questions."""
+        response = self.client.put(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/questions/',
+            {
+                'questions': [
+                    {'order': 0, 'question_type': 'multiple-choice', 'question_text': 'Q1?', 'points': 10,
+                     'answer_payload': {'options': [{'text': 'A', 'isCorrect': True}]}},
+                    {'order': 1, 'question_type': 'true-false', 'question_text': 'Q2?', 'points': 5,
+                     'answer_payload': {'correctAnswer': True}},
+                ],
+            },
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['questions']), 2)
+        self.assertEqual(response.data['questions'][0]['question_text'], 'Q1?')
+        self.assertEqual(response.data['questions'][1]['question_type'], 'true-false')
+        quiz = Quiz.objects.get(session=self.quiz_session)
+        self.assertEqual(quiz.questions.count(), 2)
+
+    def test_quiz_questions_put_updates_creates_deletes(self):
+        """PUT replaces: update existing by id, create new without id, delete omitted."""
+        quiz = Quiz.objects.create(session=self.quiz_session, settings={})
+        q1 = QuizQuestion.objects.create(
+            quiz=quiz, order=0, question_type='multiple-choice',
+            question_text='Original Q1', points=10, answer_payload={},
+        )
+        q2 = QuizQuestion.objects.create(
+            quiz=quiz, order=1, question_type='true-false',
+            question_text='To be deleted', points=5, answer_payload={},
+        )
+        response = self.client.put(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/questions/',
+            {
+                'questions': [
+                    {'id': q1.id, 'order': 0, 'question_type': 'multiple-choice', 'question_text': 'Updated Q1',
+                     'points': 15, 'answer_payload': {}},
+                    {'order': 1, 'question_type': 'short-answer', 'question_text': 'New Q', 'points': 8,
+                     'answer_payload': {}},
+                ],
+            },
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['questions']), 2)
+        q1.refresh_from_db()
+        self.assertEqual(q1.question_text, 'Updated Q1')
+        self.assertEqual(q1.points, 15)
+        self.assertFalse(QuizQuestion.objects.filter(pk=q2.id).exists())
+        new_q = QuizQuestion.objects.get(quiz=quiz, question_text='New Q')
+        self.assertEqual(new_q.question_type, 'short-answer')
+
+    def test_instructor_cannot_edit_other_instructors_quiz(self):
+        """Instructor cannot GET/PATCH/PUT quiz for another instructor's session."""
+        other_course = Course.objects.create(
+            title='Other Course',
+            description='desc',
+            slug='other-quiz-course',
+            status='draft',
+            instructor=self.other_instructor,
+            created_by=self.other_instructor,
+        )
+        other_quiz_session = Session.objects.create(
+            course=other_course,
+            title='Other Quiz',
+            session_type=Session.SessionType.QUIZ,
+            order=1,
+        )
+        url = f'{SESSIONS_URL}{other_quiz_session.id}/quiz/'
+        get_resp = self.client.get(url, **_auth(self.instructor))
+        self.assertEqual(get_resp.status_code, status.HTTP_404_NOT_FOUND)
+        patch_resp = self.client.patch(url, {'settings': {}}, format='json', **_auth(self.instructor))
+        self.assertEqual(patch_resp.status_code, status.HTTP_404_NOT_FOUND)
+        put_resp = self.client.put(
+            f'{url}questions/', {'questions': []}, format='json', **_auth(self.instructor)
+        )
+        self.assertEqual(put_resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_question_type_returns_400(self):
+        """PUT with invalid question_type returns 400."""
+        response = self.client.put(
+            f'{SESSIONS_URL}{self.quiz_session.id}/quiz/questions/',
+            {'questions': [{'question_type': 'invalid', 'question_text': 'X', 'points': 10, 'answer_payload': {}}]},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('question_type', str(response.data).lower() or 'questions' in response.data)
+
+    def test_session_create_quiz_type_still_works(self):
+        """Existing session creation with session_type=quiz still works unchanged."""
+        response = self.client.post(
+            SESSIONS_URL,
+            {
+                'course': self.course.id,
+                'title': 'New Quiz',
+                'session_type': 'quiz',
+                'order': 10,
+            },
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['session_type'], 'quiz')
+        self.assertEqual(response.data['title'], 'New Quiz')
 
 
 # ---------------------------------------------------------------------------
