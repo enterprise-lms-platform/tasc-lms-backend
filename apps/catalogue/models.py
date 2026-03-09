@@ -291,6 +291,56 @@ class Session(models.Model):
         return 0
 
 
+class Quiz(models.Model):
+    """
+    Quiz stores authoring data for a Session with session_type='quiz'.
+    OneToOne with Session; created lazily on first quiz API access.
+    """
+    session = models.OneToOneField(
+        Session,
+        on_delete=models.CASCADE,
+        related_name='quiz',
+    )
+    settings = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Quiz for {self.session.title}"
+
+
+class QuizQuestion(models.Model):
+    """
+    A single question within a Quiz. Type-specific data stored in answer_payload.
+    """
+    class QuestionType(models.TextChoices):
+        MULTIPLE_CHOICE = 'multiple-choice', 'Multiple Choice'
+        TRUE_FALSE = 'true-false', 'True/False'
+        SHORT_ANSWER = 'short-answer', 'Short Answer'
+        ESSAY = 'essay', 'Essay'
+        MATCHING = 'matching', 'Matching'
+        FILL_BLANK = 'fill-blank', 'Fill in the Blank'
+
+    quiz = models.ForeignKey(
+        Quiz,
+        on_delete=models.CASCADE,
+        related_name='questions',
+    )
+    order = models.PositiveIntegerField(default=0)
+    question_type = models.CharField(max_length=32, choices=QuestionType.choices)
+    question_text = models.TextField()
+    points = models.PositiveIntegerField(default=10)
+    answer_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f"Q{self.order}: {self.question_text[:50]}..."
+
+
 class Tag(models.Model):
     """
     Tag represents keywords for categorizing courses.

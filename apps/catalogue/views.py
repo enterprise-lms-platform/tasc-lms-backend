@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -17,13 +18,15 @@ from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
-    Category, Course, Module, Session, Tag
+    Category, Course, Module, Quiz, QuizQuestion, Session, Tag
 )
 from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
     ModuleSerializer,
     SessionSerializer, SessionCreateSerializer,
+    QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
+    QuizSettingsUpdateSerializer,
     CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer
 )
 
@@ -554,12 +557,19 @@ class SessionViewSet(viewsets.ModelViewSet):
         if session_type:
             queryset = queryset.filter(session_type=session_type)
 
-        if self.action in ('update', 'partial_update', 'destroy'):
+        if self.action in ('update', 'partial_update', 'destroy', 'quiz', 'quiz_questions'):
             role = getattr(self.request.user, 'role', None)
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(course__instructor_id=self.request.user.id)
 
         return queryset.order_by('order')
+
+    def _get_or_create_quiz(self, session):
+        """Return Quiz for session. 404 if session_type != 'quiz'."""
+        if session.session_type != Session.SessionType.QUIZ:
+            return None
+        quiz, _ = Quiz.objects.get_or_create(session=session, defaults={'settings': {}})
+        return quiz
 
     def perform_create(self, serializer):
         course = serializer.validated_data.get('course')
@@ -708,4 +718,123 @@ class SessionViewSet(viewsets.ModelViewSet):
             'url': url,
             'expires_in': expires_in,
             'method': 'GET',
+        })
+
+    def _build_quiz_detail_response(self, session, quiz):
+        """Build QuizDetailSerializer payload for GET/PATCH responses."""
+        session_data = {
+            'id': session.id,
+            'title': session.title,
+            'description': session.description or '',
+            'status': session.status,
+        }
+        questions = quiz.questions.all().order_by('order', 'id')
+        return {
+            'session': session_data,
+            'settings': quiz.settings or {},
+            'questions': QuizQuestionSerializer(questions, many=True).data,
+        }
+
+    @extend_schema(
+        summary='Get or update quiz for a session',
+        description='GET: Returns quiz detail. PATCH: Merges settings. Only for session_type=quiz.',
+        request=QuizSettingsUpdateSerializer,
+        responses={
+            200: OpenApiResponse(description='Quiz detail'),
+            404: OpenApiResponse(description='Session not found or not a quiz session'),
+        },
+    )
+    @action(detail=True, methods=['get', 'patch'], url_path='quiz')
+    def quiz(self, request, pk=None):
+        session = self.get_object()
+        quiz = self._get_or_create_quiz(session)
+        if quiz is None:
+            return Response(
+                {'detail': 'Session is not a quiz session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if request.method == 'GET':
+            return Response(self._build_quiz_detail_response(session, quiz))
+        # PATCH
+        serializer = QuizSettingsUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        incoming = serializer.validated_data.get('settings', {})
+        if isinstance(incoming, dict):
+            current = dict(quiz.settings or {})
+            current.update(incoming)
+            quiz.settings = current
+            quiz.save(update_fields=['settings', 'updated_at'])
+        return Response(self._build_quiz_detail_response(session, quiz))
+
+    @extend_schema(
+        summary='Replace all quiz questions',
+        description='PUT: Replace all questions. Create new, update existing, delete omitted. Only for session_type=quiz.',
+        request=QuizQuestionListWriteSerializer,
+        responses={
+            200: OpenApiResponse(description='Updated questions list'),
+            404: OpenApiResponse(description='Session not found or not a quiz session'),
+        },
+    )
+    @action(detail=True, methods=['put'], url_path='quiz/questions')
+    def quiz_questions(self, request, pk=None):
+        session = self.get_object()
+        quiz = self._get_or_create_quiz(session)
+        if quiz is None:
+            return Response(
+                {'detail': 'Session is not a quiz session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = QuizQuestionListWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data['questions']
+        existing_ids = {q.id for q in quiz.questions.all()}
+        seen_ids = set()
+
+        with transaction.atomic():
+            for i, item in enumerate(payload):
+                qid = item.get('id')
+                order_val = item.get('order')
+                if order_val is None:
+                    order_val = i
+                qt = item.get('question_type', 'multiple-choice')
+                qtext = (item.get('question_text') or '').strip() or ''
+                pts = item.get('points', 10)
+                ap = item.get('answer_payload')
+                if ap is None:
+                    ap = {}
+
+                if qid is not None:
+                    qid = int(qid) if not isinstance(qid, int) else qid
+                    if qid not in existing_ids:
+                        raise ValidationError(
+                            {'questions': [f'Question id {qid} does not belong to this quiz.']}
+                        )
+                    if qid in seen_ids:
+                        raise ValidationError(
+                            {'questions': [f'Duplicate question id {qid} in payload.']}
+                        )
+                    seen_ids.add(qid)
+                    qobj = QuizQuestion.objects.get(quiz=quiz, id=qid)
+                    qobj.order = order_val
+                    qobj.question_type = qt
+                    qobj.question_text = qtext
+                    qobj.points = max(0, int(pts))
+                    qobj.answer_payload = ap if isinstance(ap, dict) else {}
+                    qobj.save()
+                else:
+                    QuizQuestion.objects.create(
+                        quiz=quiz,
+                        order=order_val,
+                        question_type=qt,
+                        question_text=qtext,
+                        points=max(0, int(pts)),
+                        answer_payload=ap if isinstance(ap, dict) else {},
+                    )
+            to_delete = existing_ids - seen_ids
+            if to_delete:
+                QuizQuestion.objects.filter(quiz=quiz, id__in=to_delete).delete()
+
+        questions = quiz.questions.all().order_by('order', 'id')
+        return Response({
+            'questions': QuizQuestionSerializer(questions, many=True).data,
         })

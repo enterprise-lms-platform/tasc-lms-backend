@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Category, Course, Module, Session, Tag
+from .models import Category, Course, Module, Quiz, QuizQuestion, Session, Tag
 from .utils.video_embed import validate_external_video_url
 
 
@@ -184,6 +184,104 @@ class SessionCreateSerializer(serializers.ModelSerializer):
                 })
 
         return attrs
+
+
+# ========================================
+# Quiz Authoring Serializers (session-scoped quiz API only)
+# ========================================
+
+QUIZ_QUESTION_TYPES = ['multiple-choice', 'true-false', 'short-answer', 'essay', 'matching', 'fill-blank']
+
+
+class QuizQuestionSerializer(serializers.ModelSerializer):
+    """Serializer for QuizQuestion in quiz detail and write payloads."""
+    class Meta:
+        model = QuizQuestion
+        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload']
+        read_only_fields = ['id']
+
+    def validate_question_type(self, value):
+        if value not in QUIZ_QUESTION_TYPES:
+            raise serializers.ValidationError(
+                f'Invalid question_type. Must be one of: {", ".join(QUIZ_QUESTION_TYPES)}'
+            )
+        return value
+
+    def validate_question_text(self, value):
+        if not (value and str(value).strip()):
+            raise serializers.ValidationError('question_text is required.')
+        return value
+
+    def validate_points(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('points must be >= 0.')
+        return value
+
+    def validate_answer_payload(self, value):
+        if value is not None and not isinstance(value, dict):
+            raise serializers.ValidationError('answer_payload must be a JSON object.')
+        return value or {}
+
+
+class QuizSettingsUpdateSerializer(serializers.Serializer):
+    """Accepts partial settings dict for PATCH."""
+    settings = serializers.JSONField(required=True)
+
+    def validate_settings(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('settings must be a JSON object.')
+        return value
+
+
+class QuizSessionSummarySerializer(serializers.Serializer):
+    """Minimal session info for quiz detail response."""
+    id = serializers.IntegerField(read_only=True)
+    title = serializers.CharField(read_only=True)
+    description = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+
+
+class QuizDetailSerializer(serializers.Serializer):
+    """Response shape for GET/PATCH /sessions/{id}/quiz/."""
+    session = QuizSessionSummarySerializer(read_only=True)
+    settings = serializers.JSONField(read_only=True)
+    questions = QuizQuestionSerializer(many=True, read_only=True)
+
+
+class QuizQuestionListWriteSerializer(serializers.Serializer):
+    """Input shape for PUT /sessions/{id}/quiz/questions/."""
+    questions = serializers.ListField(
+        child=serializers.DictField(),
+        required=True,
+    )
+
+    def validate_questions(self, value):
+        for i, q in enumerate(value):
+            if not isinstance(q, dict):
+                raise serializers.ValidationError(
+                    f'questions[{i}]: each item must be a JSON object.'
+                )
+            qt = q.get('question_type')
+            if qt and qt not in QUIZ_QUESTION_TYPES:
+                raise serializers.ValidationError(
+                    f'questions[{i}]: invalid question_type "{qt}". '
+                    f'Must be one of: {", ".join(QUIZ_QUESTION_TYPES)}'
+                )
+            if not (q.get('question_text') or str(q.get('question_text', '')).strip()):
+                raise serializers.ValidationError(
+                    f'questions[{i}]: question_text is required.'
+                )
+            pts = q.get('points')
+            if pts is not None and (not isinstance(pts, (int, float)) or pts < 0):
+                raise serializers.ValidationError(
+                    f'questions[{i}]: points must be >= 0.'
+                )
+            ap = q.get('answer_payload')
+            if ap is not None and not isinstance(ap, dict):
+                raise serializers.ValidationError(
+                    f'questions[{i}]: answer_payload must be a JSON object.'
+                )
+        return value
 
 
 class CourseListSerializer(serializers.ModelSerializer):
