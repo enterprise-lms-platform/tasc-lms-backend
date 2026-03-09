@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Category, Course, Session, Tag
+from .models import Category, Course, Module, Session, Tag
 from .utils.video_embed import validate_external_video_url
 
 
@@ -34,6 +34,19 @@ class CategoryDetailSerializer(CategorySerializer):
         fields = CategorySerializer.Meta.fields + ['children']
 
 
+class ModuleSerializer(serializers.ModelSerializer):
+    """Serializer for Module model."""
+
+    class Meta:
+        model = Module
+        fields = [
+            'id', 'course', 'title', 'description', 'status', 'icon',
+            'order', 'require_sequential', 'allow_preview',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 class SessionSerializer(serializers.ModelSerializer):
     """Serializer for Session model."""
     duration_minutes = serializers.ReadOnlyField()
@@ -41,7 +54,7 @@ class SessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Session
         fields = [
-            'id', 'course', 'title', 'description', 'session_type', 'status',
+            'id', 'course', 'module', 'title', 'description', 'session_type', 'status',
             'order', 'video_duration_seconds', 'duration_minutes',
             'content_source',
             'video_url', 'content_text',
@@ -60,7 +73,7 @@ class SessionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Session
         fields = [
-            'course', 'title', 'description', 'session_type', 'status',
+            'course', 'module', 'title', 'description', 'session_type', 'status',
             'order', 'video_duration_seconds',
             'content_source',
             'video_url', 'content_text',
@@ -159,6 +172,16 @@ class SessionCreateSerializer(serializers.ModelSerializer):
             attrs['external_video_url'] = None
             attrs['external_video_provider'] = None
             attrs['external_video_embed_url'] = None
+
+        # Validate module belongs to the same course as session
+        course = attrs.get('course') or (instance.course if instance else None)
+        module = attrs.get('module') or (instance.module if instance else None)
+        if course is not None and module is not None:
+            course_id = course.id if hasattr(course, 'id') else course
+            if module.course_id != course_id:
+                raise serializers.ValidationError({
+                    'module': 'Module must belong to the same course as the session.',
+                })
 
         return attrs
 

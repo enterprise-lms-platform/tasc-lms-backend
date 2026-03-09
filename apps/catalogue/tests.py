@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.learning.models import Enrollment
 from apps.payments.models import Subscription, UserSubscription
 
-from .models import Category, Course, Session, Tag
+from .models import Category, Course, Module, Session, Tag
 
 
 def _grant_subscription(user, days=180):
@@ -41,6 +41,7 @@ def _grant_subscription(user, days=180):
 User = get_user_model()
 
 COURSES_URL = '/api/v1/catalogue/courses/'
+MODULES_URL = '/api/v1/catalogue/modules/'
 SESSIONS_URL = '/api/v1/catalogue/sessions/'
 CATEGORIES_URL = '/api/v1/catalogue/categories/'
 TAGS_URL = '/api/v1/catalogue/tags/'
@@ -579,6 +580,183 @@ class SessionDeleteAssetCleanupTest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         mock_delete.assert_called_once_with('tasc-private', 'session-assets/key.mp4')
+
+
+# ---------------------------------------------------------------------------
+# D2c) Module CRUD and session-module validation
+# ---------------------------------------------------------------------------
+
+class ModuleCRUDTest(APITestCase):
+    """Module create, list, and instructor ownership."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_mod')
+        self.other_instructor = User.objects.create_user(
+            username='other_mod',
+            email='other_mod@example.com',
+            password='pass1234',
+            role='instructor',
+            email_verified=True,
+            is_active=True,
+        )
+        self.course = Course.objects.create(
+            title='Module Test Course',
+            description='desc',
+            slug='module-test-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.other_course = Course.objects.create(
+            title='Other Course',
+            description='desc',
+            slug='other-module-course',
+            status='draft',
+            instructor=self.other_instructor,
+            created_by=self.other_instructor,
+        )
+
+    def test_module_create_by_course_owner_succeeds(self):
+        response = self.client.post(
+            MODULES_URL,
+            {'course': self.course.id, 'title': 'Intro Module'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['title'], 'Intro Module')
+        self.assertEqual(response.data['course'], self.course.id)
+        self.assertEqual(response.data['order'], 0)
+        self.assertEqual(response.data['status'], 'draft')
+        self.assertEqual(response.data['require_sequential'], False)
+        self.assertEqual(response.data['allow_preview'], True)
+
+    def test_module_create_sequential_without_order_assigns_distinct_orders(self):
+        """Two modules created without sending order receive order 0 and 1."""
+        r1 = self.client.post(
+            MODULES_URL,
+            {'course': self.course.id, 'title': 'First'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r1.data['order'], 0)
+
+        r2 = self.client.post(
+            MODULES_URL,
+            {'course': self.course.id, 'title': 'Second'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r2.data['order'], 1)
+
+        self.assertNotEqual(r1.data['id'], r2.data['id'])
+        mods = list(Module.objects.filter(course=self.course).order_by('order'))
+        self.assertEqual(len(mods), 2)
+        self.assertEqual(mods[0].order, 0)
+        self.assertEqual(mods[1].order, 1)
+
+    def test_module_list_filtered_by_course_works(self):
+        Module.objects.create(course=self.course, title='M1', order=0)
+        Module.objects.create(course=self.course, title='M2', order=1)
+        Module.objects.create(course=self.other_course, title='M3', order=0)
+
+        response = self.client.get(
+            f'{MODULES_URL}?course={self.course.id}',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [m['id'] for m in response.data['results']]
+        self.assertEqual(len(ids), 2)
+        titles = [m['title'] for m in response.data['results']]
+        self.assertIn('M1', titles)
+        self.assertIn('M2', titles)
+        self.assertNotIn('M3', titles)
+
+    def test_module_create_for_non_owned_course_rejected_for_instructor(self):
+        response = self.client.post(
+            MODULES_URL,
+            {'course': self.other_course.id, 'title': 'Hijack Module'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('detail', response.data)
+
+    def test_delete_module_sets_related_sessions_module_to_null(self):
+        mod = Module.objects.create(course=self.course, title='To Delete', order=0)
+        sess = Session.objects.create(
+            course=self.course, title='Session In Module', order=0, module=mod,
+        )
+        self.assertEqual(sess.module_id, mod.id)
+
+        response = self.client.delete(
+            f'{MODULES_URL}{mod.id}/',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        sess.refresh_from_db()
+        self.assertIsNone(sess.module_id)
+
+    def test_session_create_rejects_module_from_different_course(self):
+        mod = Module.objects.create(course=self.other_course, title='Other Mod', order=0)
+
+        response = self.client.post(
+            SESSIONS_URL,
+            {
+                'course': self.course.id,
+                'module': mod.id,
+                'title': 'Session',
+                'session_type': 'video',
+                'order': 0,
+            },
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('module', response.data)
+        self.assertIn('same course', str(response.data['module']).lower())
+
+    def test_session_create_without_module_still_works(self):
+        response = self.client.post(
+            SESSIONS_URL,
+            {
+                'course': self.course.id,
+                'title': 'Standalone Session',
+                'session_type': 'video',
+                'order': 0,
+            },
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(response.data.get('module'))
+        sess = Session.objects.get(id=response.data['id'])
+        self.assertIsNone(sess.module_id)
+
+    def test_module_create_persists_modal_aligned_optional_fields(self):
+        response = self.client.post(
+            MODULES_URL,
+            {
+                'course': self.course.id,
+                'title': 'Full Module',
+                'description': 'A longer description',
+                'status': 'published',
+                'icon': 'trophy',
+                'require_sequential': True,
+                'allow_preview': False,
+            },
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['description'], 'A longer description')
+        self.assertEqual(response.data['status'], 'published')
+        self.assertEqual(response.data['icon'], 'trophy')
+        self.assertEqual(response.data['require_sequential'], True)
+        self.assertEqual(response.data['allow_preview'], False)
 
 
 # ---------------------------------------------------------------------------

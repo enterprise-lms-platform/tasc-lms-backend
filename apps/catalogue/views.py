@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
+from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -16,11 +17,12 @@ from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
-    Category, Course, Session, Tag
+    Category, Course, Module, Session, Tag
 )
-from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
+from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
+    ModuleSerializer,
     SessionSerializer, SessionCreateSerializer,
     CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer
 )
@@ -453,6 +455,73 @@ class CourseViewSet(viewsets.ModelViewSet):
             details=f"Course deleted: {instance.title} (status={instance.status})",
         )
         return super().destroy(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Catalogue - Modules'],
+    description='Manage course modules (groupings of sessions)',
+)
+class ModuleViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing course modules."""
+
+    queryset = Module.objects.all()
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditModuleCourse]
+    serializer_class = ModuleSerializer
+
+    def get_queryset(self):
+        queryset = Module.objects.all()
+        course = self.request.query_params.get('course', None)
+
+        if course:
+            queryset = queryset.filter(course_id=course)
+
+        if self.action in ('update', 'partial_update', 'destroy'):
+            role = getattr(self.request.user, 'role', None)
+            if role == User.Role.INSTRUCTOR:
+                queryset = queryset.filter(course__instructor_id=self.request.user.id)
+
+        return queryset.order_by('order')
+
+    def create(self, request, *args, **kwargs):
+        data = dict(request.data)
+        # Handle QueryDict list values (e.g. data['course'] = [1])
+        for key in list(data):
+            if isinstance(data[key], list) and len(data[key]) == 1:
+                data[key] = data[key][0]
+        # Auto-assign order when client omitted it. Overwrite with computed next_order
+        # to avoid unique constraint violation (model default 0 would collide).
+        if data.get('course') is not None:
+            course_id = data['course']
+            max_order = Module.objects.filter(course_id=course_id).aggregate(
+                max_order=Max('order')
+            )['max_order']
+            next_order = (max_order + 1) if max_order is not None else 0
+            # Overwrite order: client-sent order can cause unique violation when model
+            # default 0 is used; always use computed next_order for create.
+            data['order'] = next_order
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data.get('course')
+        user = self.request.user
+        role = getattr(user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != user.id:
+            raise PermissionDenied('You can only create modules in your own courses.')
+        serializer.save()
+
+    @extend_schema(
+        summary='List modules',
+        description='Returns list of modules with optional filtering by course',
+        parameters=[
+            OpenApiParameter(name='course', type=int, description='Filter by course ID'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
 
 @extend_schema(
