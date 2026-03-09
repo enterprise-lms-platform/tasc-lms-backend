@@ -162,6 +162,49 @@ class Course(models.Model):
         return self.enrollments.count()
 
 
+class Module(models.Model):
+    """
+    Module represents a grouping of sessions within a course.
+    Sessions may optionally belong to a module; existing sessions can remain unassigned.
+    """
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        PUBLISHED = 'published', 'Published'
+        HIDDEN = 'hidden', 'Hidden'
+
+    class Icon(models.TextChoices):
+        PLAY_CIRCLE = 'play-circle', 'Play Circle'
+        LAYER_GROUP = 'layer-group', 'Layers'
+        PUZZLE_PIECE = 'puzzle-piece', 'Puzzle'
+        SHARE_ALT = 'share-alt', 'Share'
+        TROPHY = 'trophy', 'Trophy'
+        BOOK = 'book', 'Book'
+        CODE = 'code', 'Code'
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='modules')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    icon = models.CharField(max_length=50, choices=Icon.choices, default=Icon.PLAY_CIRCLE, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    require_sequential = models.BooleanField(default=False)
+    allow_preview = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'order'], name='catalogue_module_course_order_unique'),
+        ]
+        indexes = [
+            models.Index(fields=['course', 'order']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.course.title})"
+
+
 class Session(models.Model):
     """
     Session represents an individual learning session within a course.
@@ -186,6 +229,13 @@ class Session(models.Model):
         PUBLISHED = 'published', 'Published'
 
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='sessions')
+    module = models.ForeignKey(
+        Module,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sessions',
+    )
 
     # Basic Information
     title = models.CharField(max_length=255)
