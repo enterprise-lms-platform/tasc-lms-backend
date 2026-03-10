@@ -18,16 +18,24 @@ from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
-    Category, Course, Module, Quiz, QuizQuestion, Session, Tag
+    BankQuestion, Category, Course, Module, Quiz, QuizQuestion,
+    QuestionCategory, Session, Tag
 )
-from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
+from .permissions import (
+    CanEditBankQuestion, CanEditQuestionCategory, CanEditCourse,
+    CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse,
+    IsCategoryManagerOrReadOnly, IsCourseWriter,
+)
 from .serializers import (
-    TagSerializer, CategorySerializer, CategoryDetailSerializer,
+    AddFromBankSerializer, BankQuestionListSerializer, BankQuestionSerializer,
+    CategoryDetailSerializer, CategorySerializer,
+    CourseCreateSerializer, CourseDetailSerializer, CourseListSerializer,
     ModuleSerializer,
-    SessionSerializer, SessionCreateSerializer,
+    QuestionCategorySerializer,
     QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
     QuizSettingsUpdateSerializer,
-    CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer
+    SessionCreateSerializer, SessionSerializer,
+    TagSerializer,
 )
 
 User = get_user_model()
@@ -50,6 +58,81 @@ class TagViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = CataloguePageNumberPagination
+
+
+@extend_schema(
+    tags=['Catalogue - Question Bank - Categories'],
+    description='Instructor-owned categories for organizing bank questions',
+)
+class QuestionCategoryViewSet(viewsets.ModelViewSet):
+    """ViewSet for question categories. Instructors see own; managers/admins see all."""
+    serializer_class = QuestionCategorySerializer
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditQuestionCategory]
+    pagination_class = CataloguePageNumberPagination
+
+    def get_queryset(self):
+        role = getattr(self.request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return QuestionCategory.objects.all()
+        return QuestionCategory.objects.filter(owner_id=self.request.user.id)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+
+@extend_schema(
+    tags=['Catalogue - Question Bank'],
+    description='Instructor-owned reusable questions for the question bank',
+)
+class BankQuestionViewSet(viewsets.ModelViewSet):
+    """ViewSet for bank questions. Instructors see own; managers/admins see all."""
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditBankQuestion]
+    pagination_class = CataloguePageNumberPagination
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return BankQuestionListSerializer
+        return BankQuestionSerializer
+
+    def get_queryset(self):
+        role = getattr(self.request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            qs = BankQuestion.objects.all()
+        else:
+            qs = BankQuestion.objects.filter(owner_id=self.request.user.id)
+        qs = qs.select_related('category').order_by('-created_at')
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        category = request.query_params.get('category')
+        if category is not None:
+            try:
+                cid = int(category)
+                queryset = queryset.filter(category_id=cid)
+            except (ValueError, TypeError):
+                pass
+        search = request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(question_text__icontains=search)
+        qtype = request.query_params.get('question_type', '').strip()
+        if qtype:
+            queryset = queryset.filter(question_type=qtype)
+        difficulty = request.query_params.get('difficulty', '').strip()
+        if difficulty:
+            queryset = queryset.filter(difficulty=difficulty)
+        tag = request.query_params.get('tags', '').strip()
+        if tag:
+            queryset = queryset.filter(tags__contains=[tag])
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 @extend_schema(
@@ -557,7 +640,7 @@ class SessionViewSet(viewsets.ModelViewSet):
         if session_type:
             queryset = queryset.filter(session_type=session_type)
 
-        if self.action in ('update', 'partial_update', 'destroy', 'quiz', 'quiz_questions'):
+        if self.action in ('list', 'update', 'partial_update', 'destroy', 'quiz', 'quiz_questions', 'add_from_bank'):
             role = getattr(self.request.user, 'role', None)
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(course__instructor_id=self.request.user.id)
@@ -835,6 +918,62 @@ class SessionViewSet(viewsets.ModelViewSet):
                 QuizQuestion.objects.filter(quiz=quiz, id__in=to_delete).delete()
 
         questions = quiz.questions.all().order_by('order', 'id')
+        return Response({
+            'questions': QuizQuestionSerializer(questions, many=True).data,
+        })
+
+    @extend_schema(
+        summary='Add bank questions to quiz',
+        description='POST: Copy bank questions into quiz as new QuizQuestion rows. Only for session_type=quiz.',
+        request=AddFromBankSerializer,
+        responses={
+            200: OpenApiResponse(description='List of newly added questions'),
+            404: OpenApiResponse(description='Session not found or not a quiz session'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='quiz/questions/add-from-bank')
+    def add_from_bank(self, request, pk=None):
+        session = self.get_object()
+        quiz = self._get_or_create_quiz(session)
+        if quiz is None:
+            return Response(
+                {'detail': 'Session is not a quiz session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = AddFromBankSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['bank_question_ids']
+        user = request.user
+        role = getattr(user, 'role', None)
+        if role == User.Role.INSTRUCTOR:
+            bank_questions = BankQuestion.objects.filter(id__in=ids, owner_id=user.id)
+        else:
+            bank_questions = BankQuestion.objects.filter(id__in=ids)
+        bank_questions = list(bank_questions)
+        if len(bank_questions) != len(ids):
+            seen = {bq.id for bq in bank_questions}
+            missing = [i for i in ids if i not in seen]
+            return Response(
+                {'detail': f'Bank question(s) not found or not accessible: {missing}'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        max_order = quiz.questions.aggregate(m=Max('order'))['m']
+        next_order = (max_order + 1) if max_order is not None else 0
+        created = []
+        with transaction.atomic():
+            for bq in bank_questions:
+                qq = QuizQuestion.objects.create(
+                    quiz=quiz,
+                    order=next_order,
+                    question_type=bq.question_type,
+                    question_text=bq.question_text,
+                    points=bq.points,
+                    answer_payload=dict(bq.answer_payload or {}),
+                    source_bank_question=bq,
+                )
+                created.append(qq)
+                next_order += 1
+        questions = quiz.questions.filter(id__in=[q.id for q in created]).order_by('order', 'id')
         return Response({
             'questions': QuizQuestionSerializer(questions, many=True).data,
         })
