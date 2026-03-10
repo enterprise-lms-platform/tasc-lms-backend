@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Category, Course, Module, Quiz, QuizQuestion, Session, Tag
+from .models import BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
 from .utils.video_embed import validate_external_video_url
 
 
@@ -282,6 +282,82 @@ class QuizQuestionListWriteSerializer(serializers.Serializer):
                     f'questions[{i}]: answer_payload must be a JSON object.'
                 )
         return value
+
+
+# ========================================
+# Question Bank Serializers
+# ========================================
+
+class AddFromBankSerializer(serializers.Serializer):
+    """Input shape for POST /sessions/{id}/quiz/questions/add-from-bank/."""
+    bank_question_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+    )
+
+
+class QuestionCategorySerializer(serializers.ModelSerializer):
+    """Serializer for QuestionCategory list/create/update."""
+    class Meta:
+        model = QuestionCategory
+        fields = ['id', 'name', 'order']
+        read_only_fields = ['id']
+
+
+class BankQuestionSerializer(serializers.ModelSerializer):
+    """Serializer for BankQuestion retrieve/create/update."""
+    class Meta:
+        model = BankQuestion
+        fields = [
+            'id', 'category', 'question_type', 'question_text', 'points',
+            'answer_payload', 'difficulty', 'tags', 'explanation',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_question_type(self, value):
+        if value not in QUIZ_QUESTION_TYPES:
+            raise serializers.ValidationError(
+                f'Invalid question_type. Must be one of: {", ".join(QUIZ_QUESTION_TYPES)}'
+            )
+        return value
+
+    def validate_question_text(self, value):
+        if not (value and str(value).strip()):
+            raise serializers.ValidationError('question_text is required.')
+        return value
+
+    def validate_points(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('points must be >= 0.')
+        return value
+
+    def validate_answer_payload(self, value):
+        if value is not None and not isinstance(value, dict):
+            raise serializers.ValidationError('answer_payload must be a JSON object.')
+        return value or {}
+
+    def validate_tags(self, value):
+        if value is not None and not isinstance(value, list):
+            raise serializers.ValidationError('tags must be a list.')
+        return value or []
+
+
+class BankQuestionListSerializer(serializers.ModelSerializer):
+    """Optimized serializer for BankQuestion list view."""
+    category = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BankQuestion
+        fields = [
+            'id', 'question_type', 'question_text', 'points', 'difficulty',
+            'tags', 'category', 'created_at',
+        ]
+
+    def get_category(self, obj):
+        if obj.category_id is None:
+            return None
+        return {'id': obj.category.id, 'name': obj.category.name}
 
 
 class CourseListSerializer(serializers.ModelSerializer):
