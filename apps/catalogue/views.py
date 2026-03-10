@@ -618,6 +618,7 @@ class SessionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing course sessions."""
     queryset = Session.objects.all()
     permission_classes = [IsAuthenticated, IsCourseWriter, CanEditSessionCourse]
+    pagination_class = CataloguePageNumberPagination
 
     def get_permissions(self):
         perms = list(super().get_permissions())
