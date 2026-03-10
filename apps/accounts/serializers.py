@@ -88,6 +88,8 @@ class UserMeSerializer(serializers.ModelSerializer):
             "timezone",
             "role",
             "google_picture",
+            "avatar",
+            "bio",
             "marketing_opt_in",
             "terms_accepted_at",
             "email_verified",

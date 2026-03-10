@@ -1,8 +1,10 @@
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply
@@ -20,21 +22,24 @@ from .serializers import (
     tags=['Learning - Enrollments'],
     description='Manage user course enrollments and progress',
 )
-class EnrollmentViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing user enrollments."""
+class EnrollmentViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """ViewSet for managing user enrollments. Supports list, create, retrieve, and generate_certificate only."""
     queryset = Enrollment.objects.all()
     permission_classes = [IsAuthenticated]
-    
+
     def get_serializer_class(self):
         if self.action == 'create':
             return EnrollmentCreateSerializer
-        elif self.action in ['update', 'partial_update']:
-            return SessionProgressUpdateSerializer
         return EnrollmentSerializer
-    
+
     def get_queryset(self):
         return Enrollment.objects.filter(user=self.request.user)
-    
+
     @extend_schema(
         summary='List my enrollments',
         description='Returns list of courses the authenticated user is enrolled in',
@@ -42,32 +47,24 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
-    
+
     @extend_schema(
         summary='Enroll in a course',
-        description='Enroll the authenticated user in a course',
+        description='Enroll the authenticated user in a course. Idempotent: repeated POST returns 200 with existing enrollment.',
         request=EnrollmentCreateSerializer,
-        responses={201: EnrollmentSerializer},
+        responses={
+            200: EnrollmentSerializer,
+            201: EnrollmentSerializer,
+            403: OpenApiResponse(description='Active subscription required'),
+        },
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
-    
-    @extend_schema(
-        summary='Get enrollment details',
-        description='Returns detailed enrollment information including progress',
-        responses={200: EnrollmentSerializer},
-    )
-    def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
-    
-    @extend_schema(
-        summary='Update enrollment progress',
-        description='Update enrollment progress and completion status',
-        request=EnrollmentSerializer,
-        responses={200: EnrollmentSerializer},
-    )
-    def update(self, request, *args, **kwargs):
-        return super().update(request, *args, **kwargs)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        response_serializer = EnrollmentSerializer(instance, context=self.get_serializer_context())
+        status_code = status.HTTP_201_CREATED if getattr(serializer, '_created', True) else status.HTTP_200_OK
+        return Response(response_serializer.data, status=status_code)
     
     @extend_schema(
         summary='Generate certificate',
@@ -111,7 +108,7 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 class SessionProgressViewSet(viewsets.ModelViewSet):
     """ViewSet for managing session progress."""
     queryset = SessionProgress.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action in ['update', 'partial_update']:
@@ -204,7 +201,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 class DiscussionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing discussions."""
     queryset = Discussion.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action == 'create':
@@ -248,7 +245,7 @@ class DiscussionViewSet(viewsets.ModelViewSet):
 class DiscussionReplyViewSet(viewsets.ModelViewSet):
     """ViewSet for managing discussion replies."""
     queryset = DiscussionReply.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     
     def get_serializer_class(self):
         if self.action == 'create':

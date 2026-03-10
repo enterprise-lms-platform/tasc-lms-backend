@@ -162,10 +162,58 @@ class Course(models.Model):
         return self.enrollments.count()
 
 
+class Module(models.Model):
+    """
+    Module represents a grouping of sessions within a course.
+    Sessions may optionally belong to a module; existing sessions can remain unassigned.
+    """
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        PUBLISHED = 'published', 'Published'
+        HIDDEN = 'hidden', 'Hidden'
+
+    class Icon(models.TextChoices):
+        PLAY_CIRCLE = 'play-circle', 'Play Circle'
+        LAYER_GROUP = 'layer-group', 'Layers'
+        PUZZLE_PIECE = 'puzzle-piece', 'Puzzle'
+        SHARE_ALT = 'share-alt', 'Share'
+        TROPHY = 'trophy', 'Trophy'
+        BOOK = 'book', 'Book'
+        CODE = 'code', 'Code'
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='modules')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    icon = models.CharField(max_length=50, choices=Icon.choices, default=Icon.PLAY_CIRCLE, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    require_sequential = models.BooleanField(default=False)
+    allow_preview = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'order'], name='catalogue_module_course_order_unique'),
+        ]
+        indexes = [
+            models.Index(fields=['course', 'order']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.course.title})"
+
+
 class Session(models.Model):
     """
     Session represents an individual learning session within a course.
     """
+    class ContentSource(models.TextChoices):
+        INLINE = 'inline', 'Inline'
+        UPLOAD = 'upload', 'Uploaded Asset'
+        EXTERNAL = 'external', 'External Video'
+
     class SessionType(models.TextChoices):
         VIDEO      = 'video',      'Video'
         TEXT       = 'text',       'Text'
@@ -181,6 +229,13 @@ class Session(models.Model):
         PUBLISHED = 'published', 'Published'
 
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='sessions')
+    module = models.ForeignKey(
+        Module,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sessions',
+    )
 
     # Basic Information
     title = models.CharField(max_length=255)
@@ -193,8 +248,23 @@ class Session(models.Model):
     video_duration_seconds = models.PositiveIntegerField(null=True, blank=True)
 
     # Content
+    content_source = models.CharField(
+        max_length=20, choices=ContentSource.choices, blank=True, null=True
+    )
     video_url = models.URLField(blank=True, null=True)
     content_text = models.TextField(blank=True)
+
+    # External video (YouTube, Vimeo, Loom)
+    external_video_url = models.URLField(blank=True, null=True)
+    external_video_provider = models.CharField(max_length=50, blank=True, null=True)
+    external_video_embed_url = models.URLField(blank=True, null=True)
+
+    # Uploaded asset metadata (videos, PDFs, SCORM zips)
+    asset_object_key = models.CharField(max_length=512, blank=True, null=True)
+    asset_bucket = models.CharField(max_length=128, blank=True, null=True)
+    asset_mime_type = models.CharField(max_length=100, blank=True, null=True)
+    asset_size_bytes = models.BigIntegerField(blank=True, null=True)
+    asset_original_filename = models.CharField(max_length=255, blank=True, null=True)
 
     # Settings
     is_free_preview = models.BooleanField(default=False)
@@ -219,6 +289,56 @@ class Session(models.Model):
         if self.video_duration_seconds:
             return self.video_duration_seconds // 60
         return 0
+
+
+class Quiz(models.Model):
+    """
+    Quiz stores authoring data for a Session with session_type='quiz'.
+    OneToOne with Session; created lazily on first quiz API access.
+    """
+    session = models.OneToOneField(
+        Session,
+        on_delete=models.CASCADE,
+        related_name='quiz',
+    )
+    settings = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Quiz for {self.session.title}"
+
+
+class QuizQuestion(models.Model):
+    """
+    A single question within a Quiz. Type-specific data stored in answer_payload.
+    """
+    class QuestionType(models.TextChoices):
+        MULTIPLE_CHOICE = 'multiple-choice', 'Multiple Choice'
+        TRUE_FALSE = 'true-false', 'True/False'
+        SHORT_ANSWER = 'short-answer', 'Short Answer'
+        ESSAY = 'essay', 'Essay'
+        MATCHING = 'matching', 'Matching'
+        FILL_BLANK = 'fill-blank', 'Fill in the Blank'
+
+    quiz = models.ForeignKey(
+        Quiz,
+        on_delete=models.CASCADE,
+        related_name='questions',
+    )
+    order = models.PositiveIntegerField(default=0)
+    question_type = models.CharField(max_length=32, choices=QuestionType.choices)
+    question_text = models.TextField()
+    points = models.PositiveIntegerField(default=10)
+    answer_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+
+    def __str__(self):
+        return f"Q{self.order}: {self.question_text[:50]}..."
 
 
 class Tag(models.Model):

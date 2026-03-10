@@ -42,6 +42,40 @@ class CanDeleteCourse(BasePermission):
         return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
 
 
+class CanEditSessionCourse(BasePermission):
+    """
+    Object-level: for write methods on a Session, checks that the user can edit
+    the session's parent course.  Admin/manager can edit any; instructors only
+    sessions belonging to their own courses.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = getattr(request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return True
+        if role == User.Role.INSTRUCTOR:
+            return obj.course.instructor_id == request.user.id
+        return False
+
+
+class CanEditModuleCourse(BasePermission):
+    """
+    Object-level: for write methods on a Module, checks that the user can edit
+    the module's parent course.  Admin/manager can edit any; instructors only
+    modules belonging to their own courses.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = getattr(request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return True
+        if role == User.Role.INSTRUCTOR:
+            return obj.course.instructor_id == request.user.id
+        return False
+
+
 class IsCategoryManagerOrReadOnly(BasePermission):
     """
     Allows SAFE_METHODS for everyone who reaches the endpoint.

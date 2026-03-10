@@ -307,6 +307,18 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
         return obj.subscription.name
 
 
+class SubscriptionStatusSerializer(serializers.Serializer):
+    """Lightweight serializer for GET /api/v1/payments/subscription/me/ response."""
+
+    has_active_subscription = serializers.BooleanField()
+    status = serializers.CharField()
+    is_trial = serializers.BooleanField()
+    start_date = serializers.DateTimeField(allow_null=True)
+    end_date = serializers.DateTimeField(allow_null=True)
+    days_remaining = serializers.IntegerField(allow_null=True)
+    plan = serializers.DictField(allow_null=True)
+
+
 class UserSubscriptionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating user subscriptions."""
     

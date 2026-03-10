@@ -5,17 +5,28 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.conf import settings
+from django.db import transaction
+from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
+from apps.accounts.rbac import is_admin_like
+from apps.common.spaces import create_boto3_client, delete_spaces_object
+from apps.payments.permissions import HasActiveSubscription
+from apps.learning.models import Enrollment
+
 from .models import (
-    Category, Course, Session, Tag
+    Category, Course, Module, Quiz, QuizQuestion, Session, Tag
 )
-from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, IsCategoryManagerOrReadOnly
+from .permissions import IsCourseWriter, CanEditCourse, CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse, IsCategoryManagerOrReadOnly
 from .serializers import (
     TagSerializer, CategorySerializer, CategoryDetailSerializer,
+    ModuleSerializer,
     SessionSerializer, SessionCreateSerializer,
+    QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
+    QuizSettingsUpdateSerializer,
     CourseListSerializer, CourseDetailSerializer, CourseCreateSerializer
 )
 
@@ -450,31 +461,148 @@ class CourseViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema(
+    tags=['Catalogue - Modules'],
+    description='Manage course modules (groupings of sessions)',
+)
+class ModuleViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing course modules."""
+
+    queryset = Module.objects.all()
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditModuleCourse]
+    serializer_class = ModuleSerializer
+
+    def get_queryset(self):
+        queryset = Module.objects.all()
+        course = self.request.query_params.get('course', None)
+
+        if course:
+            queryset = queryset.filter(course_id=course)
+
+        if self.action in ('update', 'partial_update', 'destroy'):
+            role = getattr(self.request.user, 'role', None)
+            if role == User.Role.INSTRUCTOR:
+                queryset = queryset.filter(course__instructor_id=self.request.user.id)
+
+        return queryset.order_by('order')
+
+    def create(self, request, *args, **kwargs):
+        data = dict(request.data)
+        # Handle QueryDict list values (e.g. data['course'] = [1])
+        for key in list(data):
+            if isinstance(data[key], list) and len(data[key]) == 1:
+                data[key] = data[key][0]
+        # Auto-assign order when client omitted it. Overwrite with computed next_order
+        # to avoid unique constraint violation (model default 0 would collide).
+        if data.get('course') is not None:
+            course_id = data['course']
+            max_order = Module.objects.filter(course_id=course_id).aggregate(
+                max_order=Max('order')
+            )['max_order']
+            next_order = (max_order + 1) if max_order is not None else 0
+            # Overwrite order: client-sent order can cause unique violation when model
+            # default 0 is used; always use computed next_order for create.
+            data['order'] = next_order
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data.get('course')
+        user = self.request.user
+        role = getattr(user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != user.id:
+            raise PermissionDenied('You can only create modules in your own courses.')
+        serializer.save()
+
+    @extend_schema(
+        summary='List modules',
+        description='Returns list of modules with optional filtering by course',
+        parameters=[
+            OpenApiParameter(name='course', type=int, description='Filter by course ID'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+
+@extend_schema(
     tags=['Catalogue - Sessions'],
     description='Manage course sessions (video, text, live)',
 )
 class SessionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing course sessions."""
     queryset = Session.objects.all()
-    permission_classes = [IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated, IsCourseWriter, CanEditSessionCourse]
+
+    def get_permissions(self):
+        perms = list(super().get_permissions())
+        if self.action == 'asset_url':
+            perms.append(HasActiveSubscription())
+        return perms
+
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return SessionCreateSerializer
         return SessionSerializer
-    
+
     def get_queryset(self):
         queryset = Session.objects.all()
         course = self.request.query_params.get('course', None)
         session_type = self.request.query_params.get('type', None)
-        
+
         if course:
             queryset = queryset.filter(course_id=course)
         if session_type:
             queryset = queryset.filter(session_type=session_type)
-        
+
+        if self.action in ('update', 'partial_update', 'destroy', 'quiz', 'quiz_questions'):
+            role = getattr(self.request.user, 'role', None)
+            if role == User.Role.INSTRUCTOR:
+                queryset = queryset.filter(course__instructor_id=self.request.user.id)
+
         return queryset.order_by('order')
-    
+
+    def _get_or_create_quiz(self, session):
+        """Return Quiz for session. 404 if session_type != 'quiz'."""
+        if session.session_type != Session.SessionType.QUIZ:
+            return None
+        quiz, _ = Quiz.objects.get_or_create(session=session, defaults={'settings': {}})
+        return quiz
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data.get('course')
+        user = self.request.user
+        role = getattr(user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != user.id:
+            raise PermissionDenied('You can only create sessions in your own courses.')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        old_key = (instance.asset_object_key or "").strip()
+        old_bucket = (instance.asset_bucket or "").strip()
+
+        serializer.save()
+
+        new_key = (instance.asset_object_key or "").strip()
+        if old_key and old_key != new_key:
+            bucket = old_bucket or getattr(settings, "DO_SPACES_PRIVATE_BUCKET", "")
+            if bucket:
+                delete_spaces_object(bucket, old_key)
+
+    def perform_destroy(self, instance):
+        old_key = (instance.asset_object_key or "").strip()
+        old_bucket = (instance.asset_bucket or "").strip()
+
+        instance.delete()
+
+        if old_key:
+            bucket = old_bucket or getattr(settings, "DO_SPACES_PRIVATE_BUCKET", "")
+            if bucket:
+                delete_spaces_object(bucket, old_key)
+
     @extend_schema(
         summary='List sessions',
         description='Returns list of sessions with filtering by course and type',
@@ -490,6 +618,223 @@ class SessionViewSet(viewsets.ModelViewSet):
         summary='Create session',
         description='Create a new session for a course',
         request=SessionCreateSerializer,
+        responses={201: SessionSerializer},
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        read_serializer = SessionSerializer(serializer.instance)
+        headers = self.get_success_headers(read_serializer.data)
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+        return Response(SessionSerializer(serializer.instance).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Get presigned URL for session asset',
+        description='Returns a short-lived presigned GET URL for the session private asset in Spaces.',
+        responses={
+            200: OpenApiResponse(
+                description='Presigned URL',
+                response=dict,
+                examples=[OpenApiExample(
+                    'Asset URL response',
+                    value={'url': 'https://bucket.region.digitaloceanspaces.com/key?X-Amz-...', 'expires_in': 300, 'method': 'GET'},
+                    response_only=True,
+                )],
+            ),
+            403: OpenApiResponse(description='Not allowed to access this session asset'),
+            404: OpenApiResponse(description='Session has no asset or session not found'),
+            503: OpenApiResponse(description='Spaces not configured'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='asset-url')
+    def asset_url(self, request, pk=None):
+        session = get_object_or_404(Session, pk=pk)
+        user = request.user
+
+        # Access control: LMS_MANAGER and TASC_ADMIN always; INSTRUCTOR if course owner; LEARNER if enrolled
+        if is_admin_like(user):
+            pass
+        elif user.role == User.Role.INSTRUCTOR:
+            if session.course.instructor_id != user.id:
+                return Response(
+                    {'detail': 'You do not have permission to access this session asset.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        elif user.role == User.Role.LEARNER:
+            if not Enrollment.objects.filter(user=user, course=session.course).exists():
+                return Response(
+                    {'detail': 'You must be enrolled in this course to access session assets.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            return Response(
+                {'detail': 'You do not have permission to access this session asset.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not (session.asset_object_key or '').strip():
+            return Response(
+                {'detail': 'This session has no uploaded asset.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        bucket = (session.asset_bucket or '').strip() or getattr(settings, 'DO_SPACES_PRIVATE_BUCKET', None)
+        if not bucket:
+            return Response(
+                {'detail': 'Spaces private bucket is not configured.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        required = ('DO_SPACES_ENDPOINT', 'DO_SPACES_ACCESS_KEY_ID', 'DO_SPACES_SECRET_ACCESS_KEY')
+        if not all(getattr(settings, k, None) for k in required):
+            return Response(
+                {'detail': 'Spaces is not configured for presigned URLs.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        expires_in = getattr(settings, 'DO_SPACES_PRESIGN_EXPIRY_SECONDS', 300)
+        s3_client = create_boto3_client()
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': session.asset_object_key},
+            ExpiresIn=expires_in,
+        )
+
+        return Response({
+            'url': url,
+            'expires_in': expires_in,
+            'method': 'GET',
+        })
+
+    def _build_quiz_detail_response(self, session, quiz):
+        """Build QuizDetailSerializer payload for GET/PATCH responses."""
+        session_data = {
+            'id': session.id,
+            'title': session.title,
+            'description': session.description or '',
+            'status': session.status,
+        }
+        questions = quiz.questions.all().order_by('order', 'id')
+        return {
+            'session': session_data,
+            'settings': quiz.settings or {},
+            'questions': QuizQuestionSerializer(questions, many=True).data,
+        }
+
+    @extend_schema(
+        summary='Get or update quiz for a session',
+        description='GET: Returns quiz detail. PATCH: Merges settings. Only for session_type=quiz.',
+        request=QuizSettingsUpdateSerializer,
+        responses={
+            200: OpenApiResponse(description='Quiz detail'),
+            404: OpenApiResponse(description='Session not found or not a quiz session'),
+        },
+    )
+    @action(detail=True, methods=['get', 'patch'], url_path='quiz')
+    def quiz(self, request, pk=None):
+        session = self.get_object()
+        quiz = self._get_or_create_quiz(session)
+        if quiz is None:
+            return Response(
+                {'detail': 'Session is not a quiz session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if request.method == 'GET':
+            return Response(self._build_quiz_detail_response(session, quiz))
+        # PATCH
+        serializer = QuizSettingsUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        incoming = serializer.validated_data.get('settings', {})
+        if isinstance(incoming, dict):
+            current = dict(quiz.settings or {})
+            current.update(incoming)
+            quiz.settings = current
+            quiz.save(update_fields=['settings', 'updated_at'])
+        return Response(self._build_quiz_detail_response(session, quiz))
+
+    @extend_schema(
+        summary='Replace all quiz questions',
+        description='PUT: Replace all questions. Create new, update existing, delete omitted. Only for session_type=quiz.',
+        request=QuizQuestionListWriteSerializer,
+        responses={
+            200: OpenApiResponse(description='Updated questions list'),
+            404: OpenApiResponse(description='Session not found or not a quiz session'),
+        },
+    )
+    @action(detail=True, methods=['put'], url_path='quiz/questions')
+    def quiz_questions(self, request, pk=None):
+        session = self.get_object()
+        quiz = self._get_or_create_quiz(session)
+        if quiz is None:
+            return Response(
+                {'detail': 'Session is not a quiz session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        serializer = QuizQuestionListWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data['questions']
+        existing_ids = {q.id for q in quiz.questions.all()}
+        seen_ids = set()
+
+        with transaction.atomic():
+            for i, item in enumerate(payload):
+                qid = item.get('id')
+                order_val = item.get('order')
+                if order_val is None:
+                    order_val = i
+                qt = item.get('question_type', 'multiple-choice')
+                qtext = (item.get('question_text') or '').strip() or ''
+                pts = item.get('points', 10)
+                ap = item.get('answer_payload')
+                if ap is None:
+                    ap = {}
+
+                if qid is not None:
+                    qid = int(qid) if not isinstance(qid, int) else qid
+                    if qid not in existing_ids:
+                        raise ValidationError(
+                            {'questions': [f'Question id {qid} does not belong to this quiz.']}
+                        )
+                    if qid in seen_ids:
+                        raise ValidationError(
+                            {'questions': [f'Duplicate question id {qid} in payload.']}
+                        )
+                    seen_ids.add(qid)
+                    qobj = QuizQuestion.objects.get(quiz=quiz, id=qid)
+                    qobj.order = order_val
+                    qobj.question_type = qt
+                    qobj.question_text = qtext
+                    qobj.points = max(0, int(pts))
+                    qobj.answer_payload = ap if isinstance(ap, dict) else {}
+                    qobj.save()
+                else:
+                    QuizQuestion.objects.create(
+                        quiz=quiz,
+                        order=order_val,
+                        question_type=qt,
+                        question_text=qtext,
+                        points=max(0, int(pts)),
+                        answer_payload=ap if isinstance(ap, dict) else {},
+                    )
+            to_delete = existing_ids - seen_ids
+            if to_delete:
+                QuizQuestion.objects.filter(quiz=quiz, id__in=to_delete).delete()
+
+        questions = quiz.questions.all().order_by('order', 'id')
+        return Response({
+            'questions': QuizQuestionSerializer(questions, many=True).data,
+        })
