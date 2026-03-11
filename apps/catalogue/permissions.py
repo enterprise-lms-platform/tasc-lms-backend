@@ -86,3 +86,33 @@ class IsCategoryManagerOrReadOnly(BasePermission):
             return True
         role = getattr(request.user, 'role', None)
         return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)
+
+
+class CanEditQuestionCategory(BasePermission):
+    """
+    Object-level: instructors can edit own categories; managers/admins can edit any.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = getattr(request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return True
+        if role == User.Role.INSTRUCTOR:
+            return obj.owner_id == request.user.id
+        return False
+
+
+class CanEditBankQuestion(BasePermission):
+    """
+    Object-level: instructors can edit own bank questions; managers/admins can edit any.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = getattr(request.user, 'role', None)
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return True
+        if role == User.Role.INSTRUCTOR:
+            return obj.owner_id == request.user.id
+        return False

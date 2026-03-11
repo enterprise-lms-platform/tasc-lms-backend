@@ -7,10 +7,14 @@ from .views import (
     CourseViewSet,
     ModuleViewSet,
     SessionViewSet,
+    QuestionCategoryViewSet,
+    BankQuestionViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'tags', TagViewSet, basename='tag')
+router.register(r'question-categories', QuestionCategoryViewSet, basename='question-category')
+router.register(r'bank-questions', BankQuestionViewSet, basename='bank-question')
 router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'courses', CourseViewSet, basename='course')
 router.register(r'modules', ModuleViewSet, basename='module')
