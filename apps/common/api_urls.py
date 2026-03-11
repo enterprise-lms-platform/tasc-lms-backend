@@ -9,8 +9,10 @@ urlpatterns = [
     path("admin/users/invite/", invite_user, name="admin-invite-user"),
     path("admin/users/<int:user_id>/promote/", promote_user_role, name="admin-user-promote"),
     path("superadmin/", include("apps.audit.urls")),
+    path("superadmin/", include("apps.accounts.urls_superadmin")),
     path("public/", include("apps.catalogue.urls_public")),
     path("catalogue/", include("apps.catalogue.urls")),
     path("learning/", include("apps.learning.urls")),
     path("payments/", include("apps.payments.urls")),
+    path("livestream/", include("apps.livestream.urls")),
 ]
