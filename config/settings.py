@@ -325,6 +325,15 @@ if not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
         "Google Meet integration will not work."
     )
 
+# Google Meet service reads GOOGLE_MEET_CALENDAR_ID from settings
+GOOGLE_MEET_CALENDAR_ID = GOOGLE_CALENDAR_ID
+
+# Microsoft Teams Integration
+TEAMS_TENANT_ID = os.getenv('TEAMS_TENANT_ID', '')
+TEAMS_CLIENT_ID = os.getenv('TEAMS_CLIENT_ID', '')
+TEAMS_CLIENT_SECRET = os.getenv('TEAMS_CLIENT_SECRET', '')
+TEAMS_ORGANIZER_USER_ID = os.getenv('TEAMS_ORGANIZER_USER_ID', '')
+
 # Site settings
 SITE_DOMAIN = os.getenv('SITE_DOMAIN', 'localhost:8000')
 SITE_URL = os.getenv('SITE_URL', 'http://localhost:8000')

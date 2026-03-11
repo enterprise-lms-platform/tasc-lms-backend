@@ -344,7 +344,7 @@ class TeamsWebhookHandler:
         Returns:
             dict: Processing result
         """
-        from livestream.models import LivestreamSession
+        from apps.livestream.models import LivestreamSession
 
         # Extract meeting ID from the resource path if possible
         # Resource format: /users/{user-id}/onlineMeetings/{meeting-id}

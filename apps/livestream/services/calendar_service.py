@@ -240,7 +240,7 @@ class CalendarService:
                 reverse('livestream-ics', kwargs={'pk': session.id})
             ),
             'download': request.build_absolute_uri(
-                reverse('livestream-ics-download', kwargs={'pk': session.id})
+                reverse('livestream-ics', kwargs={'pk': session.id})
             ),
         }
 
