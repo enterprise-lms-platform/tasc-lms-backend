@@ -269,3 +269,127 @@ class DiscussionReply(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.discussion.title}"
+
+
+class Report(models.Model):
+    """
+    Report model for generated organization reports.
+    """
+
+    class Type(models.TextChoices):
+        USER_ACTIVITY = 'user_activity', 'User Activity'
+        COURSE_PERFORMANCE = 'course_performance', 'Course Performance'
+        ENROLLMENT = 'enrollment', 'Enrollment'
+        COMPLETION = 'completion', 'Completion'
+        ASSESSMENT = 'assessment', 'Assessment'
+        REVENUE = 'revenue', 'Revenue'
+
+    class Status(models.TextChoices):
+        PROCESSING = 'processing', 'Processing'
+        READY = 'ready', 'Ready'
+        FAILED = 'failed', 'Failed'
+
+    # Report details
+    report_type = models.CharField(max_length=30, choices=Type.choices)
+    name = models.CharField(max_length=255)
+    
+    # Generation info
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='generated_reports'
+    )
+    generated_at = models.DateTimeField(auto_now_add=True)
+    
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PROCESSING
+    )
+    
+    # File
+    file = models.FileField(upload_to='reports/', blank=True, null=True)
+    file_size = models.CharField(max_length=50, blank=True, null=True)
+    
+    # Filter parameters (stored as JSON)
+    parameters = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-generated_at']
+
+    def __str__(self):
+        return f"{self.name} - {self.status}"
+
+
+class Submission(models.Model):
+    """
+    Submission model for learner assignments and quizzes.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        GRADED = 'graded', 'Graded'
+        PENDING_REVIEW = 'pending_review', 'Pending Review'
+        REJECTED = 'rejected', 'Rejected'
+
+    # Links
+    enrollment = models.ForeignKey(
+        Enrollment,
+        on_delete=models.CASCADE,
+        related_name='submissions'
+    )
+    session = models.ForeignKey(
+        'catalogue.Session',
+        on_delete=models.CASCADE,
+        related_name='submissions',
+        null=True,
+        blank=True
+    )
+    
+    # Submission content
+    content = models.TextField(blank=True)
+    file = models.FileField(upload_to='submissions/', blank=True, null=True)
+    file_name = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Grading
+    score = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+    max_score = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=100
+    )
+    feedback = models.TextField(blank=True)
+    
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+    
+    # Timestamps
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    graded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ('enrollment', 'session')
+
+    def __str__(self):
+        return f"{self.enrollment.user.email} - {self.session.title if self.session else 'N/A'} - {self.status}"
+
+    @property
+    def grade_percentage(self):
+        if self.score and self.max_score:
+            return (self.score / self.max_score) * 100
+        return None

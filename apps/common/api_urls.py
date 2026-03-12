@@ -14,6 +14,7 @@ urlpatterns = [
     path("admin/users/invite/", invite_user, name="admin-invite-user"),
     path("admin/users/<int:user_id>/promote/", promote_user_role, name="admin-user-promote"),
     path("admin/", include(admin_router.urls)),  # /api/v1/admin/users/
+    path("notifications/", include("apps.notifications.urls")),
     path("superadmin/", include("apps.audit.urls")),
     path("public/", include("apps.catalogue.urls_public")),
     path("catalogue/", include("apps.catalogue.urls")),

@@ -7,6 +7,8 @@ from .views import (
     CertificateViewSet,
     DiscussionViewSet,
     DiscussionReplyViewSet,
+    ReportViewSet,
+    SubmissionViewSet,
 )
 
 router = DefaultRouter()
@@ -15,6 +17,8 @@ router.register(r'session-progress', SessionProgressViewSet, basename='session-p
 router.register(r'certificates', CertificateViewSet, basename='certificate')
 router.register(r'discussions', DiscussionViewSet, basename='discussion')
 router.register(r'discussion-replies', DiscussionReplyViewSet, basename='discussion-reply')
+router.register(r'reports', ReportViewSet, basename='report')
+router.register(r'submissions', SubmissionViewSet, basename='submission')
 
 urlpatterns = [
     path('', include(router.urls)),
