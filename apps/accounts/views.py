@@ -1,21 +1,28 @@
 import logging
 
-from drf_spectacular.utils import extend_schema, OpenApiExample
+from drf_spectacular.utils import extend_schema, OpenApiExample, extend_schema_view, OpenApiParameter
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import viewsets, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response as RestResponse
 
-from .serializers import UserMeSerializer, ProfileUpdateSerializer, InviteUserSerializer
+from .serializers import (
+    UserMeSerializer,
+    ProfileUpdateSerializer,
+    InviteUserSerializer,
+    UserListSerializer,
+    UserDetailSerializer,
+    UserUpdateSerializer,
+)
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_str, force_bytes
 from django.contrib.auth.tokens import default_token_generator
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
 from django.shortcuts import get_object_or_404
-from django.db import IntegrityError, transaction
+from django.db import models, IntegrityError, transaction
 
 from .tokens import email_verification_token
 from .rbac import is_admin_like
@@ -323,3 +330,119 @@ def promote_user_role(request, user_id: int):
         },
         status=status.HTTP_200_OK,
     )
+
+
+# ============================================
+# Admin/Manager User Management Views
+# ============================================
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Accounts - Admin Users"],
+        summary="List users",
+        description="Returns paginated list of users. Supports filtering by role, is_active, and search by email/name.",
+        parameters=[
+            OpenApiParameter(
+                name="role",
+                description="Filter by user role (learner, instructor, org_admin, finance, tasc_admin, lms_manager)",
+                type=str,
+            ),
+            OpenApiParameter(
+                name="is_active",
+                description="Filter by active status (true/false)",
+                type=bool,
+            ),
+            OpenApiParameter(
+                name="search",
+                description="Search by email or name",
+                type=str,
+            ),
+        ],
+    ),
+    retrieve=extend_schema(
+        tags=["Accounts - Admin Users"],
+        summary="Get user detail",
+        description="Returns detailed information about a specific user.",
+    ),
+    partial_update=extend_schema(
+        tags=["Accounts - Admin Users"],
+        summary="Update user",
+        description="Update user fields (role, active status, profile).",
+        request=UserUpdateSerializer,
+    ),
+)
+class UserAdminViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for admin/manager user management.
+    
+    Supports:
+    - Listing users with filtering (role, is_active, search)
+    - Retrieving user details
+    - Partial updating user fields
+    
+    Requires TASC_ADMIN or LMS_MANAGER role.
+    """
+    queryset = User.objects.all().order_by("-date_joined")
+    permission_classes = [IsAuthenticated]
+    
+    def check_admin_permission(self, request):
+        """Check if user has admin-like role."""
+        if not is_admin_like(request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only TASC Admins and LMS Managers can access this endpoint.")
+        return True
+    
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        # For update actions, check admin role
+        return super().get_permissions()
+    
+    def get_serializer_class(self):
+        if self.action == "list":
+            return UserListSerializer
+        elif self.action in ["retrieve"]:
+            return UserDetailSerializer
+        return UserUpdateSerializer
+    
+    def get_queryset(self):
+        # Check admin permission for list action
+        self.check_admin_permission(self.request)
+        
+        queryset = User.objects.all().order_by("-date_joined")
+        
+        # Filter by role
+        role = self.request.query_params.get("role", None)
+        if role:
+            queryset = queryset.filter(role=role)
+        
+        # Filter by is_active
+        is_active = self.request.query_params.get("is_active", None)
+        if is_active is not None:
+            is_active_bool = is_active.lower() in ("true", "1", "yes")
+            queryset = queryset.filter(is_active=is_active_bool)
+        
+        # Search by email or name
+        search = self.request.query_params.get("search", None)
+        if search:
+            queryset = queryset.filter(
+                models.Q(email__icontains=search) |
+                models.Q(first_name__icontains=search) |
+                models.Q(last_name__icontains=search) |
+                models.Q(username__icontains=search)
+            )
+        
+        return queryset
+    
+    def perform_update(self, serializer):
+        user = serializer.save()
+        # Log the update
+        from apps.audit.services import log_event
+        log_event(
+            action="updated",
+            resource="user",
+            resource_id=str(user.id),
+            actor=self.request.user,
+            request=self.request,
+            details=f"User updated via admin API: {user.email}",
+        )
