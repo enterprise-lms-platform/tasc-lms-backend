@@ -1,7 +1,15 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
-from .services.google_meet_service import GoogleMeetService
+import os
+import sys
+
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, project_root)
+
+# Now relative import might work
+from livestream.services.google_meet_service import GoogleMeetService
 
 
 class Command(BaseCommand):
@@ -38,9 +46,9 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("✅ Meeting retrieval successful"))
             
             # Clean up - delete test meeting
-            # delete_result = service.delete_meeting(result['meeting_id'])
-            # if delete_result['success']:
-            #     self.stdout.write(self.style.SUCCESS("✅ Test meeting deleted"))
+            delete_result = service.delete_meeting(result['meeting_id'])
+            if delete_result['success']:
+                self.stdout.write(self.style.SUCCESS("✅ Test meeting deleted"))
             
         else:
             self.stdout.write(self.style.ERROR(

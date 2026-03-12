@@ -65,7 +65,9 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
         return obj.attendances.filter(joined_at__isnull=False).count()
 
     def get_question_count(self, obj):
-        return obj.questions.count()
+        # TODO: restore when LivestreamQuestion model is created
+        # return obj.questions.count()
+        return 0
 
     def get_start_time_local(self, obj):
         """Return start time in user's timezone if available"""
