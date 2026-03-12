@@ -31,4 +31,9 @@ build/
 venv/
 .venv/
 
+"config/credentials/google-service-account.json" 
+
+.github
+.agents
+
 config/credentials/google-service-account.json

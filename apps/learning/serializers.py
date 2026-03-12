@@ -3,7 +3,7 @@ from rest_framework.exceptions import PermissionDenied
 from django.utils import timezone
 from datetime import timedelta
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission
 )
 from apps.catalogue.models import Course, Session
 from apps.accounts.rbac import is_admin_like, is_instructor
@@ -258,3 +258,72 @@ class SessionProgressUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'is_completed', 'time_spent_seconds'
         ]
+
+
+class ReportSerializer(serializers.ModelSerializer):
+    """Serializer for Report model."""
+    
+    class Meta:
+        model = Report
+        fields = [
+            'id', 'report_type', 'name', 'generated_by',
+            'generated_at', 'status', 'file', 'file_size', 'parameters'
+        ]
+        read_only_fields = ['id', 'generated_by', 'generated_at', 'status']
+
+
+class ReportGenerateSerializer(serializers.Serializer):
+    """Serializer for generating a new report."""
+    
+    report_type = serializers.ChoiceField(choices=Report.Type.choices)
+    parameters = serializers.JSONField(required=False, default=dict)
+
+
+class SubmissionSerializer(serializers.ModelSerializer):
+    """Serializer for Submission model."""
+    
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.SerializerMethodField()
+    course_name = serializers.SerializerMethodField()
+    session_title = serializers.SerializerMethodField()
+    grade_percentage = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Submission
+        fields = [
+            'id', 'enrollment', 'session', 'student_name', 'student_email',
+            'course_name', 'session_title', 'content', 'file', 'file_name',
+            'score', 'max_score', 'grade_percentage', 'feedback',
+            'status', 'submitted_at', 'graded_at', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_student_name(self, obj):
+        return obj.enrollment.user.get_full_name() or obj.enrollment.user.email
+    
+    def get_student_email(self, obj):
+        return obj.enrollment.user.email
+    
+    def get_course_name(self, obj):
+        return obj.enrollment.course.title
+    
+    def get_session_title(self, obj):
+        return obj.session.title if obj.session else None
+    
+    def get_grade_percentage(self, obj):
+        return obj.grade_percentage
+
+
+class SubmissionCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating/updating submissions."""
+    
+    class Meta:
+        model = Submission
+        fields = ['enrollment', 'session', 'content', 'file', 'status']
+
+
+class GradeSubmissionSerializer(serializers.Serializer):
+    """Serializer for grading submissions."""
+    
+    score = serializers.DecimalField(max_digits=5, decimal_places=2)
+    feedback = serializers.CharField(required=False, allow_blank=True, default='')
