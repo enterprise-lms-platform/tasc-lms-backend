@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.learning.models import Enrollment
 from apps.payments.models import Subscription, UserSubscription
 
-from .models import BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
+from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
 
 
 def _grant_subscription(user, days=180):
@@ -663,6 +663,239 @@ class QuizApiTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['session_type'], 'quiz')
         self.assertEqual(response.data['title'], 'New Quiz')
+
+
+# ---------------------------------------------------------------------------
+# Assignments V1 (instructor assignment authoring)
+# ---------------------------------------------------------------------------
+
+class AssignmentModelTest(TestCase):
+    """Assignment model: create, cascade delete, defaults."""
+
+    def setUp(self):
+        self.instructor = _make_instructor(suffix='_assign')
+        self.category = _make_category()
+        self.course = Course.objects.create(
+            title='Assignment Course',
+            description='desc',
+            slug='assignment-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.session = Session.objects.create(
+            course=self.course,
+            title='Essay Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+
+    def test_create_assignment_defaults(self):
+        """Assignment create uses model defaults."""
+        a = Assignment.objects.create(session=self.session)
+        self.assertEqual(a.assignment_type, 'project')
+        self.assertEqual(a.instructions, '')
+        self.assertEqual(a.max_points, 100)
+        self.assertIsNone(a.due_date)
+        self.assertFalse(a.allow_late)
+        self.assertEqual(a.penalty_type, 'none')
+        self.assertEqual(a.penalty_percent, 0)
+        self.assertEqual(a.allowed_file_types, [])
+        self.assertEqual(a.rubric_criteria, [])
+        self.assertEqual(a.settings, {})
+
+    def test_delete_session_cascades_assignment(self):
+        """Deleting Session deletes its Assignment."""
+        Assignment.objects.create(session=self.session)
+        session_id = self.session.id
+        self.session.delete()
+        self.assertFalse(Assignment.objects.filter(session_id=session_id).exists())
+
+
+class AssignmentApiTest(APITestCase):
+    """Assignment API: GET / PUT / PATCH /api/v1/catalogue/sessions/<id>/assignment/"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_assign_api')
+        self.other_instructor = User.objects.create_user(
+            username='other_assign_inst',
+            email='other_assign@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.manager = _make_manager(suffix='_assign')
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Assignment API Course',
+            description='desc',
+            slug='assignment-api-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.assignment_session = Session.objects.create(
+            course=self.course,
+            title='Essay Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+        self.video_session = Session.objects.create(
+            course=self.course,
+            title='Intro Video',
+            session_type=Session.SessionType.VIDEO,
+            order=2,
+        )
+
+    def test_get_returns_404_for_non_assignment_session(self):
+        """GET /sessions/{id}/assignment/ returns 404 for video session."""
+        resp = self.client.get(
+            f'{SESSIONS_URL}{self.video_session.id}/assignment/',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn('detail', resp.data)
+
+    def test_get_returns_404_when_no_assignment_config(self):
+        """GET returns 404 when session is assignment type but no config exists (no lazy create)."""
+        resp = self.client.get(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_put_creates_assignment(self):
+        """PUT creates Assignment and returns full config."""
+        due = timezone.now() + timedelta(days=7)
+        payload = {
+            'assignment_type': 'essay',
+            'instructions': '<p>Write 500 words</p>',
+            'max_points': 50,
+            'due_date': due.isoformat(),
+            'allow_late': True,
+            'late_cutoff_date': (due + timedelta(days=2)).isoformat(),
+            'penalty_type': 'percentage',
+            'penalty_percent': 10,
+            'rubric_criteria': [
+                {
+                    'name': 'Clarity',
+                    'description': 'Clear writing',
+                    'points': 25,
+                    'levels': {
+                        'excellent': 'Excellent',
+                        'good': 'Good',
+                        'satisfactory': 'Satisfactory',
+                        'needsImprovement': 'Needs work',
+                    },
+                },
+            ],
+        }
+        resp = self.client.put(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            payload,
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['assignment_type'], 'essay')
+        self.assertEqual(resp.data['max_points'], 50)
+        self.assertEqual(resp.data['instructions'], '<p>Write 500 words</p>')
+        self.assertEqual(resp.data['penalty_type'], 'percentage')
+        self.assertEqual(resp.data['penalty_percent'], 10)
+        self.assertEqual(len(resp.data['rubric_criteria']), 1)
+        self.assertEqual(resp.data['rubric_criteria'][0]['name'], 'Clarity')
+        self.assertIn('id', resp.data)
+        self.assertIn('created_at', resp.data)
+        self.assertTrue(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_patch_partial_update(self):
+        """PATCH partially updates assignment."""
+        Assignment.objects.create(
+            session=self.assignment_session,
+            assignment_type='project',
+            max_points=100,
+        )
+        resp = self.client.patch(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            {'max_points': 75, 'instructions': 'Updated instructions'},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['max_points'], 75)
+        self.assertEqual(resp.data['instructions'], 'Updated instructions')
+        self.assertEqual(resp.data['assignment_type'], 'project')
+
+    def test_patch_creates_if_missing(self):
+        """PATCH creates assignment config if it does not exist."""
+        resp = self.client.patch(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            {'max_points': 80},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['max_points'], 80)
+        self.assertTrue(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_instructor_cannot_edit_other_instructors_assignment(self):
+        """Instructor cannot GET/PUT/PATCH assignment for another instructor's session."""
+        other_course = Course.objects.create(
+            title='Other Course',
+            description='desc',
+            slug='other-assign-course',
+            status='draft',
+            instructor=self.other_instructor,
+            created_by=self.other_instructor,
+        )
+        other_session = Session.objects.create(
+            course=other_course,
+            title='Other Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+        url = f'{SESSIONS_URL}{other_session.id}/assignment/'
+        for method in ['get', 'put', 'patch']:
+            with self.subTest(method=method):
+                if method == 'get':
+                    r = self.client.get(url, **_auth(self.instructor))
+                elif method == 'put':
+                    r = self.client.put(url, {'max_points': 50}, format='json', **_auth(self.instructor))
+                else:
+                    r = self.client.patch(url, {'max_points': 50}, format='json', **_auth(self.instructor))
+                self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_payload_returns_400(self):
+        """Invalid assignment payload returns 400."""
+        payloads = [
+            {'max_points': 0},
+            {'max_points': -1},
+            {'assignment_type': 'invalid'},
+            {'penalty_percent': 99},
+            {'allowed_file_types': ['invalid-type']},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                resp = self.client.put(
+                    f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+                    payload,
+                    format='json',
+                    **_auth(self.instructor)
+                )
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_put_return_404_for_non_assignment_session(self):
+        """PUT returns 404 for video session."""
+        resp = self.client.put(
+            f'{SESSIONS_URL}{self.video_session.id}/assignment/',
+            {'max_points': 50},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
 # ---------------------------------------------------------------------------

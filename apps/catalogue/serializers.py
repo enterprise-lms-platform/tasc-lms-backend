@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
+from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
 from .utils.video_embed import validate_external_video_url
 
 
@@ -294,6 +294,154 @@ class AddFromBankSerializer(serializers.Serializer):
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
     )
+
+
+# ========================================
+# Assignment Serializers (session-scoped assignment API)
+# ========================================
+
+ASSIGNMENT_TYPES = ['project', 'essay', 'code', 'presentation', 'research']
+PENALTY_TYPES = ['percentage', 'fixed', 'none']
+ALLOWED_FILE_TYPES = ['pdf', 'doc', 'image', 'zip', 'code', 'ppt', 'any']
+RUBRIC_LEVEL_KEYS = ['excellent', 'good', 'satisfactory', 'needsImprovement']
+
+
+class AssignmentSerializer(serializers.ModelSerializer):
+    """Serializer for GET assignment config response."""
+
+    class Meta:
+        model = Assignment
+        fields = [
+            'id', 'session', 'assignment_type', 'instructions', 'max_points',
+            'due_date', 'available_from', 'allow_late', 'late_cutoff_date',
+            'penalty_type', 'penalty_percent', 'max_attempts',
+            'allowed_file_types', 'max_file_size_mb', 'rubric_criteria', 'settings',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
+def _validate_rubric_criteria(value):
+    """Validate rubric_criteria shape."""
+    if not isinstance(value, list):
+        raise serializers.ValidationError('rubric_criteria must be a list.')
+    for i, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise serializers.ValidationError(
+                f'rubric_criteria[{i}]: each item must be a JSON object.'
+            )
+        name = item.get('name')
+        if not (name and str(name).strip()):
+            raise serializers.ValidationError(
+                f'rubric_criteria[{i}]: name is required.'
+            )
+        pts = item.get('points')
+        if pts is not None and (not isinstance(pts, (int, float)) or pts < 0):
+            raise serializers.ValidationError(
+                f'rubric_criteria[{i}]: points must be >= 0.'
+            )
+        levels = item.get('levels')
+        if levels is not None:
+            if not isinstance(levels, dict):
+                raise serializers.ValidationError(
+                    f'rubric_criteria[{i}]: levels must be an object.'
+                )
+            for key in RUBRIC_LEVEL_KEYS:
+                if key not in levels:
+                    raise serializers.ValidationError(
+                        f'rubric_criteria[{i}]: levels must include key "{key}".'
+                    )
+                if not isinstance(levels[key], str):
+                    raise serializers.ValidationError(
+                        f'rubric_criteria[{i}]: levels["{key}"] must be a string.'
+                    )
+    return value
+
+
+class AssignmentCreateUpdateSerializer(serializers.Serializer):
+    """Input shape for PUT/PATCH /sessions/{id}/assignment/."""
+
+    assignment_type = serializers.ChoiceField(
+        choices=ASSIGNMENT_TYPES,
+        required=False,
+        default='project',
+    )
+    instructions = serializers.CharField(required=False, allow_blank=True, default='')
+    max_points = serializers.IntegerField(required=False, default=100, min_value=1, max_value=10000)
+    due_date = serializers.DateTimeField(required=False, allow_null=True)
+    available_from = serializers.DateTimeField(required=False, allow_null=True)
+    allow_late = serializers.BooleanField(required=False, default=False)
+    late_cutoff_date = serializers.DateTimeField(required=False, allow_null=True)
+    penalty_type = serializers.ChoiceField(
+        choices=PENALTY_TYPES,
+        required=False,
+        default='none',
+    )
+    penalty_percent = serializers.IntegerField(
+        required=False,
+        default=0,
+        min_value=0,
+        max_value=50,
+    )
+    max_attempts = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        max_value=99,
+    )
+    allowed_file_types = serializers.ListField(
+        child=serializers.ChoiceField(choices=ALLOWED_FILE_TYPES),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    max_file_size_mb = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        max_value=500,
+    )
+    rubric_criteria = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
+    settings = serializers.JSONField(required=False, default=dict)
+
+    def validate(self, attrs):
+        allow_late = attrs.get('allow_late', False)
+        due_date = attrs.get('due_date')
+        late_cutoff_date = attrs.get('late_cutoff_date')
+        available_from = attrs.get('available_from')
+        penalty_type = attrs.get('penalty_type', 'none')
+        penalty_percent = attrs.get('penalty_percent', 0)
+
+        if allow_late and due_date is not None and late_cutoff_date is not None:
+            if late_cutoff_date < due_date:
+                raise serializers.ValidationError({
+                    'late_cutoff_date': 'late_cutoff_date must be >= due_date when allow_late is true.',
+                })
+
+        if due_date is not None and available_from is not None and available_from >= due_date:
+            raise serializers.ValidationError({
+                'available_from': 'available_from must be before due_date.',
+            })
+
+        if penalty_type in ('percentage', 'fixed') and (penalty_percent < 0 or penalty_percent > 50):
+            raise serializers.ValidationError({
+                'penalty_percent': 'penalty_percent must be between 0 and 50 when penalty_type uses it.',
+            })
+
+        rubric = attrs.get('rubric_criteria')
+        if rubric is not None:
+            _validate_rubric_criteria(rubric)
+
+        settings_val = attrs.get('settings')
+        if settings_val is not None and not isinstance(settings_val, dict):
+            raise serializers.ValidationError({'settings': 'settings must be a JSON object.'})
+
+        return attrs
 
 
 class QuestionCategorySerializer(serializers.ModelSerializer):
