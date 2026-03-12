@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +12,24 @@ from .serializers import (
 )
 
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='List notifications',
+        description='Returns list of notifications for the authenticated user',
+        parameters=[
+            OpenApiParameter(name='is_read', type=bool, description='Filter by read status'),
+            OpenApiParameter(name='type', type=str, description='Filter by notification type'),
+        ],
+    ),
+    retrieve=extend_schema(
+        summary='Get notification',
+        description='Returns notification details by ID',
+    ),
+    destroy=extend_schema(
+        summary='Delete notification',
+        description='Delete a notification',
+    ),
+)
 class NotificationViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing user notifications.
@@ -41,6 +60,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
         
         return queryset
     
+    @extend_schema(
+        summary='Mark notification as read',
+        description='Mark a single notification as read',
+        responses={200: NotificationSerializer},
+    )
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
         """Mark a single notification as read"""
@@ -51,6 +75,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(notification)
         return Response(serializer.data)
     
+    @extend_schema(
+        summary='Mark all as read',
+        description='Mark all notifications as read',
+        responses={200: {'description': 'Number of notifications marked as read'}},
+    )
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         """Mark all notifications as read"""
@@ -64,6 +93,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
             'count': updated_count
         })
     
+    @extend_schema(
+        summary='Unread count',
+        description='Get count of unread notifications',
+        responses={200: {'description': 'Unread notifications count'}},
+    )
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
         """Get count of unread notifications"""

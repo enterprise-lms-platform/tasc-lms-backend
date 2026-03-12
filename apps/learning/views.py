@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -278,6 +278,20 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
 
 # REPORTS
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='List reports',
+        description='Returns list of generated reports',
+    ),
+    retrieve=extend_schema(
+        summary='Get report',
+        description='Returns report details by ID',
+    ),
+    create=extend_schema(
+        summary='Generate report',
+        description='Generate a new report',
+    ),
+)
 @extend_schema(
     tags=['Learning - Reports'],
     description='Generate and manage organization reports',
@@ -370,6 +384,32 @@ class ReportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
 
 # SUBMISSIONS (GRADES)
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='List submissions',
+        description='Returns list of learner submissions',
+    ),
+    retrieve=extend_schema(
+        summary='Get submission',
+        description='Returns submission details by ID',
+    ),
+    create=extend_schema(
+        summary='Create submission',
+        description='Create a new submission',
+    ),
+    update=extend_schema(
+        summary='Update submission',
+        description='Update a submission',
+    ),
+    partial_update=extend_schema(
+        summary='Partial update submission',
+        description='Partially update a submission',
+    ),
+    destroy=extend_schema(
+        summary='Delete submission',
+        description='Delete a submission',
+    ),
+)
 @extend_schema(
     tags=['Learning - Submissions'],
     description='Manage learner submissions and grading',
