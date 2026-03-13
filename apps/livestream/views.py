@@ -389,16 +389,16 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         responses={200: LivestreamSessionSerializer}
     )
     @action(detail=True, methods=['post'])
-    def action(self, request, pk=None):
+    def session_action(self, request, pk=None):
         """Take action on a session (start/end/cancel/remind)"""
         session = self.get_object()
         serializer = LivestreamActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        action = serializer.validated_data['action']
+        action_type = serializer.validated_data['action']
         reason = serializer.validated_data.get('reason', '')
         
-        if action == 'start':
+        if action_type == 'start':
             if session.status != 'scheduled':
                 return Response(
                     {'error': 'Only scheduled sessions can be started'},
@@ -406,7 +406,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.start_session()
             
-        elif action == 'end':
+        elif action_type == 'end':
             if session.status != 'live':
                 return Response(
                     {'error': 'Only live sessions can be ended'},
@@ -414,7 +414,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.end_session()
             
-        elif action == 'cancel':
+        elif action_type == 'cancel':
             if session.status in ['ended', 'cancelled']:
                 return Response(
                     {'error': 'Session already ended or cancelled'},
@@ -422,13 +422,13 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.cancel_session(reason)
             
-        elif action == 'remind':
+        elif action_type == 'remind':
             # Send reminder to enrolled learners
             self._send_reminder(session)
             session.reminder_sent_15m = True
             session.save()
             
-        elif action == 'send_recording':
+        elif action_type == 'send_recording':
             # Send recording link to learners
             self._send_recording_link(session)
         
