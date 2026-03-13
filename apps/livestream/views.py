@@ -388,8 +388,8 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         request=LivestreamActionSerializer,
         responses={200: LivestreamSessionSerializer}
     )
-    @action(detail=True, methods=['post'])
-    def session_action(self, request, pk=None):
+    @action(detail=True, methods=['post'], url_path='action')
+    def take_action(self, request, pk=None):
         """Take action on a session (start/end/cancel/remind)"""
         session = self.get_object()
         serializer = LivestreamActionSerializer(data=request.data)
