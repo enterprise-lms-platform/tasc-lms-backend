@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from django.utils import timezone
 from .models import (
@@ -39,8 +41,8 @@ class CreatePaymentSerializer(serializers.Serializer):
     )
     
     amount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, 
-        min_value=(0.01),
+        max_digits=10, decimal_places=2,
+        min_value=Decimal('0.01'),
         required=False
     )
     description = serializers.CharField(required=False, allow_blank=True)

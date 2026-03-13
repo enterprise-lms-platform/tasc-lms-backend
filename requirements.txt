@@ -64,3 +64,6 @@ sendgrid==6.12.5
 boto3
 
 gunicorn==21.2.0
+pytz==2026.1
+icalendar==7.0.3
+google-api-python-client>=2.0.0

@@ -1,3 +1,4 @@
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins
 from rest_framework.decorators import action
@@ -16,7 +17,8 @@ from .serializers import (
     DiscussionSerializer, DiscussionCreateSerializer,
     DiscussionReplySerializer, DiscussionReplyCreateSerializer,
     ReportSerializer, ReportGenerateSerializer,
-    SubmissionSerializer, SubmissionCreateSerializer, GradeSubmissionSerializer
+    SubmissionSerializer, SubmissionCreateSerializer,
+    SubmissionUpdateSerializer, GradeSubmissionSerializer,
 )
 
 
@@ -422,8 +424,10 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_serializer_class(self):
-        if self.action in ['update', 'partial_update', 'create']:
+        if self.action == 'create':
             return SubmissionCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return SubmissionUpdateSerializer
         return SubmissionSerializer
     
     def get_queryset(self):
@@ -442,15 +446,27 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'])
     def grade(self, request, pk=None):
-        """Grade a submission"""
+        """Grade a submission (instructor/admin only)"""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response(
+                {'detail': 'Only instructors and admins can grade submissions.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         submission = self.get_object()
-        serializer = GradeSubmissionSerializer(data=request.data)
+        serializer = GradeSubmissionSerializer(
+            data=request.data,
+            context={'submission': submission}
+        )
         serializer.is_valid(raise_exception=True)
         
-        submission.score = serializer.validated_data['score']
+        submission.grade = serializer.validated_data['grade']
         submission.feedback = serializer.validated_data.get('feedback', '')
+        submission.internal_notes = serializer.validated_data.get('internal_notes', '')
         submission.status = Submission.Status.GRADED
         submission.graded_at = timezone.now()
+        submission.graded_by = request.user
         submission.save()
         
         return Response(SubmissionSerializer(submission).data)
