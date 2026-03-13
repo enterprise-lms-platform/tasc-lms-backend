@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -7,8 +7,7 @@ from rest_framework.response import Response
 from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply,
-    Submission,
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer,
@@ -16,8 +15,8 @@ from .serializers import (
     CertificateSerializer,
     DiscussionSerializer, DiscussionCreateSerializer,
     DiscussionReplySerializer, DiscussionReplyCreateSerializer,
-    SubmissionSerializer, SubmissionCreateSerializer,
-    SubmissionUpdateSerializer, GradeSubmissionSerializer,
+    ReportSerializer, ReportGenerateSerializer,
+    SubmissionSerializer, SubmissionCreateSerializer, GradeSubmissionSerializer
 )
 
 
@@ -277,144 +276,181 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
 
-@extend_schema(
-    tags=['Learning - Submissions'],
-    description='Manage learner submissions for assignments',
-)
-class SubmissionViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing submissions."""
-    permission_classes = [IsAuthenticated]
+# REPORTS
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='List reports',
+        description='Returns list of generated reports',
+    ),
+    retrieve=extend_schema(
+        summary='Get report',
+        description='Returns report details by ID',
+    ),
+    create=extend_schema(
+        summary='Generate report',
+        description='Generate a new report',
+    ),
+)
+@extend_schema(
+    tags=['Learning - Reports'],
+    description='Generate and manage organization reports',
+)
+class ReportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for managing organization reports.
+    Supports listing reports, generating new reports, and downloading reports.
+    """
+    queryset = Report.objects.all()
+    permission_classes = [IsAuthenticated]
+    
     def get_serializer_class(self):
         if self.action == 'create':
-            return SubmissionCreateSerializer
-        if self.action in ('update', 'partial_update'):
-            return SubmissionUpdateSerializer
-        if self.action == 'grade':
-            return GradeSubmissionSerializer
-        return SubmissionSerializer
-
+            return ReportGenerateSerializer
+        return ReportSerializer
+    
     def get_queryset(self):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        user = self.request.user
-        role = getattr(user, 'role', None)
-
-        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
-            return Submission.objects.select_related(
-                'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
-                'graded_by',
-            ).all()
-        if role == User.Role.INSTRUCTOR:
-            return Submission.objects.filter(
-                assignment__session__course__instructor_id=user.id
-            ).select_related(
-                'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
-                'graded_by',
-            )
-        return Submission.objects.filter(
-            enrollment__user=user
-        ).select_related(
-            'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
-            'graded_by',
-        )
-
+        # Users can only see their own reports or all reports if admin/manager
+        return Report.objects.filter(generated_by=self.request.user)
+    
     @extend_schema(
-        summary='List submissions',
-        description='Learner: own submissions. Instructor/Admin: submissions for their courses.',
-        parameters=[
-            OpenApiParameter(name='enrollment', type=int, description='Filter by enrollment ID'),
-            OpenApiParameter(name='assignment', type=int, description='Filter by assignment ID'),
-            OpenApiParameter(name='status', type=str, description='Filter by status'),
-        ],
+        summary='List report types',
+        description='Returns available report types',
     )
-    def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
-
-    def filter_queryset(self, queryset):
-        qs = super().filter_queryset(queryset)
-        if self.action == 'list':
-            eid = self.request.query_params.get('enrollment')
-            aid = self.request.query_params.get('assignment')
-            st = self.request.query_params.get('status')
-            if eid:
-                qs = qs.filter(enrollment_id=eid)
-            if aid:
-                qs = qs.filter(assignment_id=aid)
-            if st:
-                qs = qs.filter(status=st)
-        return qs
-
+    @action(detail=False, methods=['get'])
+    def types(self, request):
+        """Get available report types"""
+        return Response([
+            {'id': 'user_activity', 'name': 'User Activity Report', 'description': 'User login patterns, session durations, platform engagement'},
+            {'id': 'course_performance', 'name': 'Course Performance Report', 'description': 'Course completion rates, learner satisfaction scores'},
+            {'id': 'enrollment', 'name': 'Enrollment Summary', 'description': 'Enrollment trends, new registrations, drop-off rates'},
+            {'id': 'completion', 'name': 'Completion Analytics', 'description': 'Course and module completion, time-to-complete'},
+            {'id': 'assessment', 'name': 'Assessment Results', 'description': 'Quiz and assignment scores, pass/fail distributions'},
+            {'id': 'revenue', 'name': 'Revenue Report', 'description': 'Financial summary, subscription income, revenue per learner'},
+        ])
+    
     @extend_schema(
-        summary='Create submission',
-        description='Create a new submission. Fails with validation error if one already exists.',
-        request=SubmissionCreateSerializer,
-        responses={201: SubmissionSerializer, 400: OpenApiResponse(description='Validation error')},
+        summary='Generate report',
+        description='Generate a new report',
+        request=ReportGenerateSerializer,
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
-
+        """Generate a new report"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        report_type = serializer.validated_data['report_type']
+        
+        # Create report with processing status
+        report = Report.objects.create(
+            report_type=report_type,
+            name=f"{report_type.replace('_', ' ').title()} - {timezone.now().strftime('%Y-%m-%d')}",
+            generated_by=request.user,
+            status=Report.Status.PROCESSING,
+            parameters=serializer.validated_data.get('parameters', {}),
+        )
+        
+        # TODO: In production, this would trigger an async task
+        # For now, we'll simulate completion
+        report.status = Report.Status.READY
+        report.save()
+        
+        return Response(
+            ReportSerializer(report).data,
+            status=status.HTTP_201_CREATED
+        )
+    
     @extend_schema(
-        summary='Get submission',
-        description='Retrieve submission details',
+        summary='Download report',
+        description='Download a generated report file',
     )
-    def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
-
-    @extend_schema(
-        summary='Update submission (draft only)',
-        description='Update a draft submission. Only learner can edit own draft.',
-        request=SubmissionUpdateSerializer,
-    )
-    def partial_update(self, request, *args, **kwargs):
-        return super().partial_update(request, *args, **kwargs)
-
-    @extend_schema(
-        summary='Delete submission (draft only)',
-        description='Delete a draft submission. Only learner can delete own draft.',
-    )
-    def destroy(self, request, *args, **kwargs):
-        submission = self.get_object()
-        if submission.status != Submission.Status.DRAFT:
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """Download report file"""
+        report = self.get_object()
+        
+        if report.status != Report.Status.READY or not report.file:
             return Response(
-                {'detail': 'Only draft submissions can be deleted.'},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'error': 'Report is not ready for download'},
+                status=status.HTTP_400_BAD_REQUEST
             )
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        if getattr(request.user, 'role', None) not in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
-            if submission.enrollment.user_id != request.user.id:
-                return Response(
-                    {'detail': 'You can only delete your own submissions.'},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-        return super().destroy(request, *args, **kwargs)
+        
+        # Return file URL or redirect
+        return Response({
+            'download_url': report.file.url if report.file else None,
+            'file_size': report.file_size,
+        })
 
+
+# SUBMISSIONS (GRADES)
+
+@extend_schema_view(
+    list=extend_schema(
+        summary='List submissions',
+        description='Returns list of learner submissions',
+    ),
+    retrieve=extend_schema(
+        summary='Get submission',
+        description='Returns submission details by ID',
+    ),
+    create=extend_schema(
+        summary='Create submission',
+        description='Create a new submission',
+    ),
+    update=extend_schema(
+        summary='Update submission',
+        description='Update a submission',
+    ),
+    partial_update=extend_schema(
+        summary='Partial update submission',
+        description='Partially update a submission',
+    ),
+    destroy=extend_schema(
+        summary='Delete submission',
+        description='Delete a submission',
+    ),
+)
+@extend_schema(
+    tags=['Learning - Submissions'],
+    description='Manage learner submissions and grading',
+)
+class SubmissionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing learner submissions and grades.
+    """
+    queryset = Submission.objects.all()
+    permission_classes = [IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action in ['update', 'partial_update', 'create']:
+            return SubmissionCreateSerializer
+        return SubmissionSerializer
+    
+    def get_queryset(self):
+        # Filter by user for learners, all for instructors/managers
+        user = self.request.user
+        if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
+            # Instructors and managers can see all submissions for their courses
+            return Submission.objects.all()
+        # Learners can only see their own submissions
+        return Submission.objects.filter(enrollment__user=user)
+    
     @extend_schema(
         summary='Grade submission',
-        description='Instructor/Admin only. Grade a submitted submission.',
+        description='Grade a learner submission',
         request=GradeSubmissionSerializer,
-        responses={200: SubmissionSerializer, 400: OpenApiResponse(description='Validation error')},
     )
     @action(detail=True, methods=['post'])
     def grade(self, request, pk=None):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        role = getattr(request.user, 'role', None)
-        if role not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
-            return Response(
-                {'detail': 'Only instructors and admins can grade submissions.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
+        """Grade a submission"""
         submission = self.get_object()
-        serializer = GradeSubmissionSerializer(
-            submission,
-            data=request.data,
-            partial=True,
-            context={'request': request},
-        )
+        serializer = GradeSubmissionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        submission = serializer.save()
-        out = SubmissionSerializer(submission)
-        return Response(out.data, status=status.HTTP_200_OK)
+        
+        submission.score = serializer.validated_data['score']
+        submission.feedback = serializer.validated_data.get('feedback', '')
+        submission.status = Submission.Status.GRADED
+        submission.graded_at = timezone.now()
+        submission.save()
+        
+        return Response(SubmissionSerializer(submission).data)

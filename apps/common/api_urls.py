@@ -1,6 +1,11 @@
 from django.urls import path, include
-from apps.accounts.views import invite_user, promote_user_role
+from rest_framework.routers import DefaultRouter
+from apps.accounts.views import invite_user, promote_user_role, UserAdminViewSet
 from apps.common.views import PresignUploadView
+
+# Admin router for user management
+admin_router = DefaultRouter()
+admin_router.register(r'users', UserAdminViewSet, basename='admin-user')
 
 urlpatterns = [
     path("uploads/presign/", PresignUploadView.as_view(), name="uploads-presign"),
@@ -8,9 +13,13 @@ urlpatterns = [
     path("auth/", include("apps.accounts.urls")),
     path("admin/users/invite/", invite_user, name="admin-invite-user"),
     path("admin/users/<int:user_id>/promote/", promote_user_role, name="admin-user-promote"),
+    path("admin/", include(admin_router.urls)),  # /api/v1/admin/users/
+    path("notifications/", include("apps.notifications.urls")),
     path("superadmin/", include("apps.audit.urls")),
+    path("superadmin/", include("apps.accounts.urls_superadmin")),
     path("public/", include("apps.catalogue.urls_public")),
     path("catalogue/", include("apps.catalogue.urls")),
     path("learning/", include("apps.learning.urls")),
     path("payments/", include("apps.payments.urls")),
+    path("livestream/", include("apps.livestream.urls")),
 ]
