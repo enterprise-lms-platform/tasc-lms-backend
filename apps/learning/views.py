@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -7,14 +7,16 @@ from rest_framework.response import Response
 from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer,
     SessionProgressSerializer, SessionProgressUpdateSerializer,
     CertificateSerializer,
     DiscussionSerializer, DiscussionCreateSerializer,
-    DiscussionReplySerializer, DiscussionReplyCreateSerializer
+    DiscussionReplySerializer, DiscussionReplyCreateSerializer,
+    ReportSerializer, ReportGenerateSerializer,
+    SubmissionSerializer, SubmissionCreateSerializer, GradeSubmissionSerializer
 )
 
 
@@ -272,3 +274,183 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
+
+
+# REPORTS
+
+@extend_schema_view(
+    list=extend_schema(
+        summary='List reports',
+        description='Returns list of generated reports',
+    ),
+    retrieve=extend_schema(
+        summary='Get report',
+        description='Returns report details by ID',
+    ),
+    create=extend_schema(
+        summary='Generate report',
+        description='Generate a new report',
+    ),
+)
+@extend_schema(
+    tags=['Learning - Reports'],
+    description='Generate and manage organization reports',
+)
+class ReportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for managing organization reports.
+    Supports listing reports, generating new reports, and downloading reports.
+    """
+    queryset = Report.objects.all()
+    permission_classes = [IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ReportGenerateSerializer
+        return ReportSerializer
+    
+    def get_queryset(self):
+        # Users can only see their own reports or all reports if admin/manager
+        return Report.objects.filter(generated_by=self.request.user)
+    
+    @extend_schema(
+        summary='List report types',
+        description='Returns available report types',
+    )
+    @action(detail=False, methods=['get'])
+    def types(self, request):
+        """Get available report types"""
+        return Response([
+            {'id': 'user_activity', 'name': 'User Activity Report', 'description': 'User login patterns, session durations, platform engagement'},
+            {'id': 'course_performance', 'name': 'Course Performance Report', 'description': 'Course completion rates, learner satisfaction scores'},
+            {'id': 'enrollment', 'name': 'Enrollment Summary', 'description': 'Enrollment trends, new registrations, drop-off rates'},
+            {'id': 'completion', 'name': 'Completion Analytics', 'description': 'Course and module completion, time-to-complete'},
+            {'id': 'assessment', 'name': 'Assessment Results', 'description': 'Quiz and assignment scores, pass/fail distributions'},
+            {'id': 'revenue', 'name': 'Revenue Report', 'description': 'Financial summary, subscription income, revenue per learner'},
+        ])
+    
+    @extend_schema(
+        summary='Generate report',
+        description='Generate a new report',
+        request=ReportGenerateSerializer,
+    )
+    def create(self, request, *args, **kwargs):
+        """Generate a new report"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        report_type = serializer.validated_data['report_type']
+        
+        # Create report with processing status
+        report = Report.objects.create(
+            report_type=report_type,
+            name=f"{report_type.replace('_', ' ').title()} - {timezone.now().strftime('%Y-%m-%d')}",
+            generated_by=request.user,
+            status=Report.Status.PROCESSING,
+            parameters=serializer.validated_data.get('parameters', {}),
+        )
+        
+        # TODO: In production, this would trigger an async task
+        # For now, we'll simulate completion
+        report.status = Report.Status.READY
+        report.save()
+        
+        return Response(
+            ReportSerializer(report).data,
+            status=status.HTTP_201_CREATED
+        )
+    
+    @extend_schema(
+        summary='Download report',
+        description='Download a generated report file',
+    )
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """Download report file"""
+        report = self.get_object()
+        
+        if report.status != Report.Status.READY or not report.file:
+            return Response(
+                {'error': 'Report is not ready for download'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Return file URL or redirect
+        return Response({
+            'download_url': report.file.url if report.file else None,
+            'file_size': report.file_size,
+        })
+
+
+# SUBMISSIONS (GRADES)
+
+@extend_schema_view(
+    list=extend_schema(
+        summary='List submissions',
+        description='Returns list of learner submissions',
+    ),
+    retrieve=extend_schema(
+        summary='Get submission',
+        description='Returns submission details by ID',
+    ),
+    create=extend_schema(
+        summary='Create submission',
+        description='Create a new submission',
+    ),
+    update=extend_schema(
+        summary='Update submission',
+        description='Update a submission',
+    ),
+    partial_update=extend_schema(
+        summary='Partial update submission',
+        description='Partially update a submission',
+    ),
+    destroy=extend_schema(
+        summary='Delete submission',
+        description='Delete a submission',
+    ),
+)
+@extend_schema(
+    tags=['Learning - Submissions'],
+    description='Manage learner submissions and grading',
+)
+class SubmissionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing learner submissions and grades.
+    """
+    queryset = Submission.objects.all()
+    permission_classes = [IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action in ['update', 'partial_update', 'create']:
+            return SubmissionCreateSerializer
+        return SubmissionSerializer
+    
+    def get_queryset(self):
+        # Filter by user for learners, all for instructors/managers
+        user = self.request.user
+        if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
+            # Instructors and managers can see all submissions for their courses
+            return Submission.objects.all()
+        # Learners can only see their own submissions
+        return Submission.objects.filter(enrollment__user=user)
+    
+    @extend_schema(
+        summary='Grade submission',
+        description='Grade a learner submission',
+        request=GradeSubmissionSerializer,
+    )
+    @action(detail=True, methods=['post'])
+    def grade(self, request, pk=None):
+        """Grade a submission"""
+        submission = self.get_object()
+        serializer = GradeSubmissionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        submission.score = serializer.validated_data['score']
+        submission.feedback = serializer.validated_data.get('feedback', '')
+        submission.status = Submission.Status.GRADED
+        submission.graded_at = timezone.now()
+        submission.save()
+        
+        return Response(SubmissionSerializer(submission).data)

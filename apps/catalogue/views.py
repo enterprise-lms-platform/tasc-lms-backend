@@ -18,7 +18,7 @@ from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
-    BankQuestion, Category, Course, Module, Quiz, QuizQuestion,
+    Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion,
     QuestionCategory, Session, Tag
 )
 from .permissions import (
@@ -27,7 +27,8 @@ from .permissions import (
     IsCategoryManagerOrReadOnly, IsCourseWriter,
 )
 from .serializers import (
-    AddFromBankSerializer, BankQuestionListSerializer, BankQuestionSerializer,
+    AddFromBankSerializer, AssignmentCreateUpdateSerializer, AssignmentSerializer,
+    BankQuestionListSerializer, BankQuestionSerializer,
     CategoryDetailSerializer, CategorySerializer,
     CourseCreateSerializer, CourseDetailSerializer, CourseListSerializer,
     ModuleSerializer,
@@ -641,7 +642,7 @@ class SessionViewSet(viewsets.ModelViewSet):
         if session_type:
             queryset = queryset.filter(session_type=session_type)
 
-        if self.action in ('list', 'update', 'partial_update', 'destroy', 'quiz', 'quiz_questions', 'add_from_bank'):
+        if self.action in ('list', 'update', 'partial_update', 'destroy', 'quiz', 'quiz_questions', 'add_from_bank', 'assignment'):
             role = getattr(self.request.user, 'role', None)
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(course__instructor_id=self.request.user.id)
@@ -654,6 +655,31 @@ class SessionViewSet(viewsets.ModelViewSet):
             return None
         quiz, _ = Quiz.objects.get_or_create(session=session, defaults={'settings': {}})
         return quiz
+
+    def _get_assignment(self, session):
+        """Return Assignment if exists; do not create. None if session_type != 'assignment'."""
+        if session.session_type != Session.SessionType.ASSIGNMENT:
+            return None
+        try:
+            return session.assignment
+        except Assignment.DoesNotExist:
+            return None
+
+    def _get_or_create_assignment(self, session):
+        """Return Assignment for session, creating if missing. None if session_type != 'assignment'."""
+        if session.session_type != Session.SessionType.ASSIGNMENT:
+            return None
+        assignment, _ = Assignment.objects.get_or_create(
+            session=session,
+            defaults={
+                'assignment_type': 'project',
+                'instructions': '',
+                'max_points': 100,
+                'penalty_type': 'none',
+                'penalty_percent': 0,
+            },
+        )
+        return assignment
 
     def perform_create(self, serializer):
         course = serializer.validated_data.get('course')
@@ -978,3 +1004,40 @@ class SessionViewSet(viewsets.ModelViewSet):
         return Response({
             'questions': QuizQuestionSerializer(questions, many=True).data,
         })
+
+    @extend_schema(
+        summary='Assignment config',
+        description='GET: Return assignment config. 404 if not assignment session or no config. '
+                    'PUT: Create/replace config. PATCH: Partial update.',
+        request=AssignmentCreateUpdateSerializer,
+        responses={
+            200: AssignmentSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='Session not assignment type or no config'),
+        },
+    )
+    @action(detail=True, methods=['get', 'put', 'patch'], url_path='assignment')
+    def assignment(self, request, pk=None):
+        session = self.get_object()
+        if request.method == 'GET':
+            assignment = self._get_assignment(session)
+            if assignment is None:
+                return Response(
+                    {'detail': 'Assignment config not found or session is not an assignment session.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            return Response(AssignmentSerializer(assignment).data)
+        # PUT / PATCH: create if missing, then update
+        assignment = self._get_or_create_assignment(session)
+        if assignment is None:
+            return Response(
+                {'detail': 'Session is not an assignment session.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        partial = request.method == 'PATCH'
+        serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        for key, value in serializer.validated_data.items():
+            setattr(assignment, key, value)
+        assignment.save()
+        return Response(AssignmentSerializer(assignment).data)
