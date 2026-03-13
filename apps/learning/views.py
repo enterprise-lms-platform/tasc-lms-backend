@@ -7,14 +7,17 @@ from rest_framework.response import Response
 from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply,
+    Submission,
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer,
     SessionProgressSerializer, SessionProgressUpdateSerializer,
     CertificateSerializer,
     DiscussionSerializer, DiscussionCreateSerializer,
-    DiscussionReplySerializer, DiscussionReplyCreateSerializer
+    DiscussionReplySerializer, DiscussionReplyCreateSerializer,
+    SubmissionSerializer, SubmissionCreateSerializer,
+    SubmissionUpdateSerializer, GradeSubmissionSerializer,
 )
 
 
@@ -272,3 +275,146 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Learning - Submissions'],
+    description='Manage learner submissions for assignments',
+)
+class SubmissionViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing submissions."""
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return SubmissionCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return SubmissionUpdateSerializer
+        if self.action == 'grade':
+            return GradeSubmissionSerializer
+        return SubmissionSerializer
+
+    def get_queryset(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = self.request.user
+        role = getattr(user, 'role', None)
+
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Submission.objects.select_related(
+                'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
+                'graded_by',
+            ).all()
+        if role == User.Role.INSTRUCTOR:
+            return Submission.objects.filter(
+                assignment__session__course__instructor_id=user.id
+            ).select_related(
+                'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
+                'graded_by',
+            )
+        return Submission.objects.filter(
+            enrollment__user=user
+        ).select_related(
+            'enrollment', 'enrollment__user', 'assignment', 'assignment__session',
+            'graded_by',
+        )
+
+    @extend_schema(
+        summary='List submissions',
+        description='Learner: own submissions. Instructor/Admin: submissions for their courses.',
+        parameters=[
+            OpenApiParameter(name='enrollment', type=int, description='Filter by enrollment ID'),
+            OpenApiParameter(name='assignment', type=int, description='Filter by assignment ID'),
+            OpenApiParameter(name='status', type=str, description='Filter by status'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    def filter_queryset(self, queryset):
+        qs = super().filter_queryset(queryset)
+        if self.action == 'list':
+            eid = self.request.query_params.get('enrollment')
+            aid = self.request.query_params.get('assignment')
+            st = self.request.query_params.get('status')
+            if eid:
+                qs = qs.filter(enrollment_id=eid)
+            if aid:
+                qs = qs.filter(assignment_id=aid)
+            if st:
+                qs = qs.filter(status=st)
+        return qs
+
+    @extend_schema(
+        summary='Create submission',
+        description='Create a new submission. Fails with validation error if one already exists.',
+        request=SubmissionCreateSerializer,
+        responses={201: SubmissionSerializer, 400: OpenApiResponse(description='Validation error')},
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Get submission',
+        description='Retrieve submission details',
+    )
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Update submission (draft only)',
+        description='Update a draft submission. Only learner can edit own draft.',
+        request=SubmissionUpdateSerializer,
+    )
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Delete submission (draft only)',
+        description='Delete a draft submission. Only learner can delete own draft.',
+    )
+    def destroy(self, request, *args, **kwargs):
+        submission = self.get_object()
+        if submission.status != Submission.Status.DRAFT:
+            return Response(
+                {'detail': 'Only draft submissions can be deleted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            if submission.enrollment.user_id != request.user.id:
+                return Response(
+                    {'detail': 'You can only delete your own submissions.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        return super().destroy(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Grade submission',
+        description='Instructor/Admin only. Grade a submitted submission.',
+        request=GradeSubmissionSerializer,
+        responses={200: SubmissionSerializer, 400: OpenApiResponse(description='Validation error')},
+    )
+    @action(detail=True, methods=['post'])
+    def grade(self, request, pk=None):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        role = getattr(request.user, 'role', None)
+        if role not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response(
+                {'detail': 'Only instructors and admins can grade submissions.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        submission = self.get_object()
+        serializer = GradeSubmissionSerializer(
+            submission,
+            data=request.data,
+            partial=True,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        out = SubmissionSerializer(submission)
+        return Response(out.data, status=status.HTTP_200_OK)
