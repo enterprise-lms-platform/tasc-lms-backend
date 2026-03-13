@@ -380,6 +380,61 @@ class Quiz(models.Model):
         return f"Quiz for {self.session.title}"
 
 
+class Assignment(models.Model):
+    """
+    Assignment stores authoring data for a Session with session_type='assignment'.
+    OneToOne with Session; created lazily on first PUT to .../assignment/.
+    """
+    class AssignmentType(models.TextChoices):
+        PROJECT = 'project', 'Project'
+        ESSAY = 'essay', 'Essay'
+        CODE = 'code', 'Code Submission'
+        PRESENTATION = 'presentation', 'Presentation'
+        RESEARCH = 'research', 'Research'
+
+    class PenaltyType(models.TextChoices):
+        PERCENTAGE = 'percentage', 'Percentage per day'
+        FIXED = 'fixed', 'Fixed percentage'
+        NONE = 'none', 'No penalty'
+
+    session = models.OneToOneField(
+        Session,
+        on_delete=models.CASCADE,
+        related_name='assignment',
+    )
+    assignment_type = models.CharField(
+        max_length=20,
+        choices=AssignmentType.choices,
+        default=AssignmentType.PROJECT,
+    )
+    instructions = models.TextField(blank=True, default='')
+    max_points = models.PositiveIntegerField(default=100)
+    due_date = models.DateTimeField(null=True, blank=True)
+    available_from = models.DateTimeField(null=True, blank=True)
+    allow_late = models.BooleanField(default=False)
+    late_cutoff_date = models.DateTimeField(null=True, blank=True)
+    penalty_type = models.CharField(
+        max_length=20,
+        choices=PenaltyType.choices,
+        default=PenaltyType.NONE,
+    )
+    penalty_percent = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(null=True, blank=True)
+    allowed_file_types = models.JSONField(default=list, blank=True)
+    max_file_size_mb = models.PositiveIntegerField(null=True, blank=True)
+    rubric_criteria = models.JSONField(default=list, blank=True)
+    settings = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Assignment'
+        verbose_name_plural = 'Assignments'
+
+    def __str__(self):
+        return f"Assignment for {self.session.title}"
+
+
 class QuizQuestion(models.Model):
     """
     A single question within a Quiz. Type-specific data stored in answer_payload.

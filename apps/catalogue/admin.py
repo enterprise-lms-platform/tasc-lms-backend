@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BankQuestion, Module, QuestionCategory, Quiz, QuizQuestion
+from .models import Assignment, BankQuestion, Module, QuestionCategory, Quiz, QuizQuestion
 
 
 @admin.register(QuestionCategory)
@@ -19,6 +19,15 @@ class BankQuestionAdmin(admin.ModelAdmin):
     search_fields = ('question_text',)
     raw_id_fields = ('owner', 'category')
     ordering = ('-created_at',)
+
+
+@admin.register(Assignment)
+class AssignmentAdmin(admin.ModelAdmin):
+    list_display = ('id', 'session', 'assignment_type', 'max_points', 'due_date', 'updated_at')
+    list_filter = ('assignment_type',)
+    search_fields = ('instructions',)
+    raw_id_fields = ('session',)
+    ordering = ('-updated_at',)
 
 
 @admin.register(Quiz)
