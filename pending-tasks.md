@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 16 March 2026
+**Last updated:** 17 March 2026
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -215,9 +215,49 @@ This file tracks all known incomplete work in the backend codebase. Items are gr
 
 ---
 
+## LOW — Silent Exception Handling & Code Quality
+
+### 19. Payment Webhook Handlers — Silent `pass` on Missing Records
+- **File:** `apps/payments/utils/webhook_handlers.py` (lines 271, 317)
+- **Issue:** `_handle_failed_payment()` and `_handle_refund()` silently ignore `PaymentDoesNotExist` with bare `pass`.
+- **What to do:** Add `logger.warning()` instead of silent pass.
+
+### 20. Payment Validators — Silent Validation Failures
+- **File:** `apps/payments/utils/payment_validators.py` (line 328)
+- **Issue:** Invalid phone number validation catches `ValidationError` with silent `pass`.
+- **What to do:** Add logging for failed validations.
+
+### 21. Calendar Service — Timezone Exception Silencing
+- **File:** `apps/livestream/services/calendar_service.py` (line 57)
+- **Issue:** `except Exception: pass` for invalid timezone conversion. Calendar events may silently use wrong timezone.
+- **What to do:** Log warning and fall back to UTC explicitly.
+
+### 22. Audit Views — Date Parsing Silenced
+- **File:** `apps/audit/views.py` (lines 79, 89)
+- **Issue:** ValueError on date parsing silently caught with `pass`. Users won't know their date filters are malformed.
+- **What to do:** Return 400 error or log warning.
+
+### 23. Catalogue Views — Category Filter Silenced
+- **File:** `apps/catalogue/views.py` (line 118)
+- **Issue:** ValueError when parsing category ID silently ignored.
+- **What to do:** Return meaningful error or skip filter with logging.
+
+### 24. Livestream Webhook Validation — Misnamed Endpoint
+- **File:** `apps/livestream/views.py` (lines 876-882)
+- **Issue:** `validate_webhook` action returns hardcoded `{"status": "ok"}` without actual validation. It's a health check, not a validator.
+- **What to do:** Rename to `webhook_health` or implement actual signature validation.
+
+### 25. Notifications ViewSet — Limited Functionality
+- **File:** `apps/notifications/views.py`
+- **Issue:** Only basic CRUD + mark_read/mark_all_read. No date filtering, bulk delete, or preference management.
+- **What to do:** Add notification preferences, date filters, bulk delete.
+
+---
+
 ## Configuration TODOs
 
 - Ensure `ZOOM_WEBHOOK_SECRET` is set in production settings
 - Ensure Google Meet service account credentials are configured
 - Add Celery + Redis/RabbitMQ for async task processing (reports, bulk imports)
 - Configure email templates for SendGrid in production
+- Add HTML email templates for: verification, password reset, enrollment confirmation, certificate issuance, payment receipt
