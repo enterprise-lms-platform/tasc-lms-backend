@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.learning.models import Enrollment
 from apps.payments.models import Subscription, UserSubscription
 
-from .models import Category, Course, Module, Quiz, QuizQuestion, Session, Tag
+from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
 
 
 def _grant_subscription(user, days=180):
@@ -45,6 +45,8 @@ MODULES_URL = '/api/v1/catalogue/modules/'
 SESSIONS_URL = '/api/v1/catalogue/sessions/'
 CATEGORIES_URL = '/api/v1/catalogue/categories/'
 TAGS_URL = '/api/v1/catalogue/tags/'
+QUESTION_CATEGORIES_URL = '/api/v1/catalogue/question-categories/'
+BANK_QUESTIONS_URL = '/api/v1/catalogue/bank-questions/'
 
 
 def _auth(user):
@@ -59,6 +61,17 @@ def _make_instructor(suffix=''):
         email=f'instructor{suffix}@example.com',
         password='pass1234',
         role='instructor',
+        email_verified=True,
+        is_active=True,
+    )
+
+
+def _make_manager(suffix=''):
+    return User.objects.create_user(
+        username=f'lmsmanager{suffix}',
+        email=f'lmsmanager{suffix}@example.com',
+        password='pass1234',
+        role=User.Role.LMS_MANAGER,
         email_verified=True,
         is_active=True,
     )
@@ -383,8 +396,65 @@ class SessionTypeTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# D1b) Quiz authoring API (Instructor Quiz Builder MVP)
+# D1a) Session list instructor scope (Select Quiz modal safety)
 # ---------------------------------------------------------------------------
+
+class SessionListInstructorScopeTest(APITestCase):
+    """Instructor listing sessions only sees sessions from their own courses."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_slist')
+        self.other_instructor = User.objects.create_user(
+            username='other_slist_inst',
+            email='other_slist@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='My Course',
+            description='desc',
+            slug='my-course-slist',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.other_course = Course.objects.create(
+            title='Other Course',
+            description='desc',
+            slug='other-course-slist',
+            status='draft',
+            instructor=self.other_instructor,
+            created_by=self.other_instructor,
+        )
+        self.my_quiz = Session.objects.create(
+            course=self.course,
+            title='My Quiz',
+            session_type=Session.SessionType.QUIZ,
+            order=1,
+        )
+        self.other_quiz = Session.objects.create(
+            course=self.other_course,
+            title='Other Quiz',
+            session_type=Session.SessionType.QUIZ,
+            order=1,
+        )
+
+    def test_instructor_list_sessions_sees_only_own_courses(self):
+        """GET /sessions/?type=quiz returns only sessions from instructor's courses."""
+        response = self.client.get(
+            f'{SESSIONS_URL}?type=quiz',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', response.data) if isinstance(response.data, dict) else response.data
+        ids = [s['id'] for s in results]
+        self.assertIn(self.my_quiz.id, ids)
+        self.assertNotIn(self.other_quiz.id, ids)
+
 
 class QuizApiTest(APITestCase):
     """Quiz authoring endpoints: GET/PATCH /sessions/{id}/quiz/, PUT /sessions/{id}/quiz/questions/"""
@@ -593,6 +663,545 @@ class QuizApiTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['session_type'], 'quiz')
         self.assertEqual(response.data['title'], 'New Quiz')
+
+
+# ---------------------------------------------------------------------------
+# Assignments V1 (instructor assignment authoring)
+# ---------------------------------------------------------------------------
+
+class AssignmentModelTest(TestCase):
+    """Assignment model: create, cascade delete, defaults."""
+
+    def setUp(self):
+        self.instructor = _make_instructor(suffix='_assign')
+        self.category = _make_category()
+        self.course = Course.objects.create(
+            title='Assignment Course',
+            description='desc',
+            slug='assignment-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.session = Session.objects.create(
+            course=self.course,
+            title='Essay Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+
+    def test_create_assignment_defaults(self):
+        """Assignment create uses model defaults."""
+        a = Assignment.objects.create(session=self.session)
+        self.assertEqual(a.assignment_type, 'project')
+        self.assertEqual(a.instructions, '')
+        self.assertEqual(a.max_points, 100)
+        self.assertIsNone(a.due_date)
+        self.assertFalse(a.allow_late)
+        self.assertEqual(a.penalty_type, 'none')
+        self.assertEqual(a.penalty_percent, 0)
+        self.assertEqual(a.allowed_file_types, [])
+        self.assertEqual(a.rubric_criteria, [])
+        self.assertEqual(a.settings, {})
+
+    def test_delete_session_cascades_assignment(self):
+        """Deleting Session deletes its Assignment."""
+        Assignment.objects.create(session=self.session)
+        session_id = self.session.id
+        self.session.delete()
+        self.assertFalse(Assignment.objects.filter(session_id=session_id).exists())
+
+
+class AssignmentApiTest(APITestCase):
+    """Assignment API: GET / PUT / PATCH /api/v1/catalogue/sessions/<id>/assignment/"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_assign_api')
+        self.other_instructor = User.objects.create_user(
+            username='other_assign_inst',
+            email='other_assign@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.manager = _make_manager(suffix='_assign')
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Assignment API Course',
+            description='desc',
+            slug='assignment-api-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.assignment_session = Session.objects.create(
+            course=self.course,
+            title='Essay Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+        self.video_session = Session.objects.create(
+            course=self.course,
+            title='Intro Video',
+            session_type=Session.SessionType.VIDEO,
+            order=2,
+        )
+
+    def test_get_returns_404_for_non_assignment_session(self):
+        """GET /sessions/{id}/assignment/ returns 404 for video session."""
+        resp = self.client.get(
+            f'{SESSIONS_URL}{self.video_session.id}/assignment/',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn('detail', resp.data)
+
+    def test_get_returns_404_when_no_assignment_config(self):
+        """GET returns 404 when session is assignment type but no config exists (no lazy create)."""
+        resp = self.client.get(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_put_creates_assignment(self):
+        """PUT creates Assignment and returns full config."""
+        due = timezone.now() + timedelta(days=7)
+        payload = {
+            'assignment_type': 'essay',
+            'instructions': '<p>Write 500 words</p>',
+            'max_points': 50,
+            'due_date': due.isoformat(),
+            'allow_late': True,
+            'late_cutoff_date': (due + timedelta(days=2)).isoformat(),
+            'penalty_type': 'percentage',
+            'penalty_percent': 10,
+            'rubric_criteria': [
+                {
+                    'name': 'Clarity',
+                    'description': 'Clear writing',
+                    'points': 25,
+                    'levels': {
+                        'excellent': 'Excellent',
+                        'good': 'Good',
+                        'satisfactory': 'Satisfactory',
+                        'needsImprovement': 'Needs work',
+                    },
+                },
+            ],
+        }
+        resp = self.client.put(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            payload,
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['assignment_type'], 'essay')
+        self.assertEqual(resp.data['max_points'], 50)
+        self.assertEqual(resp.data['instructions'], '<p>Write 500 words</p>')
+        self.assertEqual(resp.data['penalty_type'], 'percentage')
+        self.assertEqual(resp.data['penalty_percent'], 10)
+        self.assertEqual(len(resp.data['rubric_criteria']), 1)
+        self.assertEqual(resp.data['rubric_criteria'][0]['name'], 'Clarity')
+        self.assertIn('id', resp.data)
+        self.assertIn('created_at', resp.data)
+        self.assertTrue(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_patch_partial_update(self):
+        """PATCH partially updates assignment."""
+        Assignment.objects.create(
+            session=self.assignment_session,
+            assignment_type='project',
+            max_points=100,
+        )
+        resp = self.client.patch(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            {'max_points': 75, 'instructions': 'Updated instructions'},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['max_points'], 75)
+        self.assertEqual(resp.data['instructions'], 'Updated instructions')
+        self.assertEqual(resp.data['assignment_type'], 'project')
+
+    def test_patch_creates_if_missing(self):
+        """PATCH creates assignment config if it does not exist."""
+        resp = self.client.patch(
+            f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+            {'max_points': 80},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['max_points'], 80)
+        self.assertTrue(Assignment.objects.filter(session=self.assignment_session).exists())
+
+    def test_instructor_cannot_edit_other_instructors_assignment(self):
+        """Instructor cannot GET/PUT/PATCH assignment for another instructor's session."""
+        other_course = Course.objects.create(
+            title='Other Course',
+            description='desc',
+            slug='other-assign-course',
+            status='draft',
+            instructor=self.other_instructor,
+            created_by=self.other_instructor,
+        )
+        other_session = Session.objects.create(
+            course=other_course,
+            title='Other Assignment',
+            session_type=Session.SessionType.ASSIGNMENT,
+            order=1,
+        )
+        url = f'{SESSIONS_URL}{other_session.id}/assignment/'
+        for method in ['get', 'put', 'patch']:
+            with self.subTest(method=method):
+                if method == 'get':
+                    r = self.client.get(url, **_auth(self.instructor))
+                elif method == 'put':
+                    r = self.client.put(url, {'max_points': 50}, format='json', **_auth(self.instructor))
+                else:
+                    r = self.client.patch(url, {'max_points': 50}, format='json', **_auth(self.instructor))
+                self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_payload_returns_400(self):
+        """Invalid assignment payload returns 400."""
+        payloads = [
+            {'max_points': 0},
+            {'max_points': -1},
+            {'assignment_type': 'invalid'},
+            {'penalty_percent': 99},
+            {'allowed_file_types': ['invalid-type']},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                resp = self.client.put(
+                    f'{SESSIONS_URL}{self.assignment_session.id}/assignment/',
+                    payload,
+                    format='json',
+                    **_auth(self.instructor)
+                )
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_put_return_404_for_non_assignment_session(self):
+        """PUT returns 404 for video session."""
+        resp = self.client.put(
+            f'{SESSIONS_URL}{self.video_session.id}/assignment/',
+            {'max_points': 50},
+            format='json',
+            **_auth(self.instructor)
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# D1c) Question Bank MVP (Instructor Question Bank)
+# ---------------------------------------------------------------------------
+
+class QuestionBankApiTest(APITestCase):
+    """Question bank: categories, bank questions, add-from-bank."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_qb')
+        self.other_instructor = User.objects.create_user(
+            username='other_qb_inst',
+            email='other_qb@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.manager = _make_manager(suffix='_qb')
+        _make_category()
+        self.course = Course.objects.create(
+            title='QB Test Course',
+            description='desc',
+            slug='qb-test-course',
+            status='draft',
+            instructor=self.instructor,
+            created_by=self.instructor,
+        )
+        self.quiz_session = Session.objects.create(
+            course=self.course,
+            title='Quiz',
+            session_type=Session.SessionType.QUIZ,
+            order=1,
+        )
+        self.video_session = Session.objects.create(
+            course=self.course,
+            title='Video',
+            session_type=Session.SessionType.VIDEO,
+            order=2,
+        )
+
+    def test_instructor_can_create_list_update_delete_own_categories(self):
+        """Instructor can create/list/update/delete own categories."""
+        create_resp = self.client.post(
+            QUESTION_CATEGORIES_URL,
+            {'name': 'Science', 'order': 0},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        cat_id = create_resp.data['id']
+
+        list_resp = self.client.get(QUESTION_CATEGORIES_URL, **_auth(self.instructor))
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(list_resp.data.get('results', list_resp.data)), 1)
+        ids = [c['id'] for c in (list_resp.data.get('results') or list_resp.data)]
+        self.assertIn(cat_id, ids)
+
+        patch_resp = self.client.patch(
+            f'{QUESTION_CATEGORIES_URL}{cat_id}/',
+            {'name': 'Science (revised)'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_resp.data['name'], 'Science (revised)')
+
+        del_resp = self.client.delete(
+            f'{QUESTION_CATEGORIES_URL}{cat_id}/',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(del_resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(QuestionCategory.objects.filter(pk=cat_id).exists())
+
+    def test_instructor_sees_only_own_categories(self):
+        """Instructor sees only own categories, not another instructor's."""
+        QuestionCategory.objects.create(
+            name='Own Cat', owner=self.instructor, order=0,
+        )
+        QuestionCategory.objects.create(
+            name='Other Cat', owner=self.other_instructor, order=0,
+        )
+        resp = self.client.get(QUESTION_CATEGORIES_URL, **_auth(self.instructor))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        names = [c['name'] for c in (resp.data.get('results') or resp.data)]
+        self.assertIn('Own Cat', names)
+        self.assertNotIn('Other Cat', names)
+
+    def test_instructor_can_create_list_update_delete_own_bank_questions(self):
+        """Instructor can create/list/update/delete own bank questions."""
+        payload = {
+            'question_type': 'multiple-choice',
+            'question_text': 'What is 2+2?',
+            'points': 10,
+            'answer_payload': {'options': [{'text': '4', 'isCorrect': True}]},
+            'tags': ['math'],
+        }
+        create_resp = self.client.post(
+            BANK_QUESTIONS_URL, payload, format='json', **_auth(self.instructor),
+        )
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        bq_id = create_resp.data['id']
+
+        list_resp = self.client.get(BANK_QUESTIONS_URL, **_auth(self.instructor))
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        ids = [q['id'] for q in (list_resp.data.get('results') or list_resp.data)]
+        self.assertIn(bq_id, ids)
+
+        patch_resp = self.client.patch(
+            f'{BANK_QUESTIONS_URL}{bq_id}/',
+            {'question_text': 'Updated: What is 2+2?'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_resp.data['question_text'], 'Updated: What is 2+2?')
+
+        del_resp = self.client.delete(
+            f'{BANK_QUESTIONS_URL}{bq_id}/',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(del_resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(BankQuestion.objects.filter(pk=bq_id).exists())
+
+    def test_instructor_cannot_access_other_instructors_bank_questions(self):
+        """Instructor cannot access another instructor's bank questions."""
+        bq = BankQuestion.objects.create(
+            owner=self.other_instructor,
+            question_type='multiple-choice',
+            question_text='Other Q',
+            points=10,
+            answer_payload={},
+        )
+        get_resp = self.client.get(
+            f'{BANK_QUESTIONS_URL}{bq.id}/',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(get_resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_list_filters_work_for_bank_questions(self):
+        """List filters: category, search, question_type, difficulty, tags."""
+        cat = QuestionCategory.objects.create(name='Cat', owner=self.instructor, order=0)
+        BankQuestion.objects.create(
+            owner=self.instructor, category=cat,
+            question_type='multiple-choice', question_text='Searchable question here',
+            points=10, answer_payload={}, difficulty='easy', tags=['foo'],
+        )
+        BankQuestion.objects.create(
+            owner=self.instructor, category=cat,
+            question_type='true-false', question_text='Other',
+            points=5, answer_payload={}, difficulty='hard', tags=['bar'],
+        )
+
+        resp_cat = self.client.get(
+            f'{BANK_QUESTIONS_URL}?category={cat.id}',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp_cat.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(resp_cat.data.get('results', resp_cat.data)), 2)
+
+        resp_search = self.client.get(
+            f'{BANK_QUESTIONS_URL}?search=Searchable',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp_search.status_code, status.HTTP_200_OK)
+        items = resp_search.data.get('results') or resp_search.data
+        self.assertGreaterEqual(len(items), 1)
+        self.assertTrue(any('Searchable' in (q.get('question_text') or '') for q in items))
+
+        resp_type = self.client.get(
+            f'{BANK_QUESTIONS_URL}?question_type=true-false',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp_type.status_code, status.HTTP_200_OK)
+        items = resp_type.data.get('results') or resp_type.data
+        self.assertTrue(all(q.get('question_type') == 'true-false' for q in items if q))
+
+        resp_diff = self.client.get(
+            f'{BANK_QUESTIONS_URL}?difficulty=hard',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp_diff.status_code, status.HTTP_200_OK)
+        items = resp_diff.data.get('results') or resp_diff.data
+        self.assertTrue(all(q.get('difficulty') == 'hard' for q in items if q))
+
+        resp_tag = self.client.get(
+            f'{BANK_QUESTIONS_URL}?tags=foo',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp_tag.status_code, status.HTTP_200_OK)
+        items = resp_tag.data.get('results') or resp_tag.data
+        self.assertGreaterEqual(len(items), 1)
+        self.assertTrue(any('foo' in (q.get('tags') or []) for q in items))
+
+    def test_add_from_bank_copies_questions_into_quiz(self):
+        """add-from-bank copies bank questions into quiz as new QuizQuestion rows."""
+        bq1 = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='multiple-choice',
+            question_text='Bank Q1',
+            points=10,
+            answer_payload={'options': [{'text': 'A', 'isCorrect': True}]},
+        )
+        bq2 = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='true-false',
+            question_text='Bank Q2',
+            points=5,
+            answer_payload={'correctAnswer': True},
+        )
+        url = f'{SESSIONS_URL}{self.quiz_session.id}/quiz/questions/add-from-bank/'
+        resp = self.client.post(
+            url,
+            {'bank_question_ids': [bq1.id, bq2.id]},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('questions', resp.data)
+        self.assertEqual(len(resp.data['questions']), 2)
+        texts = [q['question_text'] for q in resp.data['questions']]
+        self.assertIn('Bank Q1', texts)
+        self.assertIn('Bank Q2', texts)
+        self.assertEqual(resp.data['questions'][0]['question_type'], 'multiple-choice')
+        self.assertEqual(resp.data['questions'][1]['question_type'], 'true-false')
+
+    def test_copied_quiz_questions_have_source_bank_question_set(self):
+        """Copied quiz questions get source_bank_question set."""
+        bq = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='multiple-choice',
+            question_text='Source Q',
+            points=10,
+            answer_payload={},
+        )
+        url = f'{SESSIONS_URL}{self.quiz_session.id}/quiz/questions/add-from-bank/'
+        resp = self.client.post(
+            url, {'bank_question_ids': [bq.id]}, format='json', **_auth(self.instructor),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        qq = QuizQuestion.objects.get(quiz__session=self.quiz_session, question_text='Source Q')
+        self.assertEqual(qq.source_bank_question_id, bq.id)
+
+    def test_add_from_bank_returns_404_for_non_quiz_session(self):
+        """add-from-bank returns 404 for non-quiz session."""
+        bq = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='multiple-choice',
+            question_text='Q',
+            points=10,
+            answer_payload={},
+        )
+        url = f'{SESSIONS_URL}{self.video_session.id}/quiz/questions/add-from-bank/'
+        resp = self.client.post(
+            url, {'bank_question_ids': [bq.id]}, format='json', **_auth(self.instructor),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_instructor_cannot_add_to_other_instructors_quiz(self):
+        """Instructor cannot add bank questions to another instructor's quiz."""
+        other_course = Course.objects.create(
+            title='Other', description='d', slug='other-qb-course', status='draft',
+            instructor=self.other_instructor, created_by=self.other_instructor,
+        )
+        other_quiz_session = Session.objects.create(
+            course=other_course, title='Other Quiz',
+            session_type=Session.SessionType.QUIZ, order=1,
+        )
+        bq = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='multiple-choice',
+            question_text='My Q',
+            points=10,
+            answer_payload={},
+        )
+        url = f'{SESSIONS_URL}{other_quiz_session.id}/quiz/questions/add-from-bank/'
+        resp = self.client.post(
+            url, {'bank_question_ids': [bq.id]}, format='json', **_auth(self.instructor),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_manager_can_access_all_categories_and_bank_questions(self):
+        """Manager can access all categories and bank questions."""
+        cat = QuestionCategory.objects.create(
+            name='Instructor Cat', owner=self.instructor, order=0,
+        )
+        bq = BankQuestion.objects.create(
+            owner=self.instructor,
+            question_type='multiple-choice',
+            question_text='Instructor Q',
+            points=10,
+            answer_payload={},
+        )
+        list_cats = self.client.get(QUESTION_CATEGORIES_URL, **_auth(self.manager))
+        self.assertEqual(list_cats.status_code, status.HTTP_200_OK)
+        names = [c['name'] for c in (list_cats.data.get('results') or list_cats.data)]
+        self.assertIn('Instructor Cat', names)
+
+        get_bq = self.client.get(
+            f'{BANK_QUESTIONS_URL}{bq.id}/',
+            **_auth(self.manager),
+        )
+        self.assertEqual(get_bq.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_bq.data['question_text'], 'Instructor Q')
 
 
 # ---------------------------------------------------------------------------

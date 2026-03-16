@@ -314,6 +314,8 @@ GOOGLE_APPLICATION_CREDENTIALS = os.path.join(
     os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'config/credentials/google-service-account.json')
 )
 GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID', 'primary')
+GOOGLE_MEET_SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_MEET_SERVICE_ACCOUNT_FILE', 'config/credentials/google-service-account.json')
+GOOGLE_MEET_DELEGATED_USER = os.getenv('GOOGLE_MEET_DELEGATED_USER', '')  # Optional: email of user to impersonate for calendar access
 
 # Validate credentials exist
 if not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
@@ -322,6 +324,15 @@ if not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
         f"Google service account credentials not found at {GOOGLE_APPLICATION_CREDENTIALS}. "
         "Google Meet integration will not work."
     )
+
+# Google Meet service reads GOOGLE_MEET_CALENDAR_ID from settings
+GOOGLE_MEET_CALENDAR_ID = GOOGLE_CALENDAR_ID
+
+# Microsoft Teams Integration
+TEAMS_TENANT_ID = os.getenv('TEAMS_TENANT_ID', '')
+TEAMS_CLIENT_ID = os.getenv('TEAMS_CLIENT_ID', '')
+TEAMS_CLIENT_SECRET = os.getenv('TEAMS_CLIENT_SECRET', '')
+TEAMS_ORGANIZER_USER_ID = os.getenv('TEAMS_ORGANIZER_USER_ID', '')
 
 # Site settings
 SITE_DOMAIN = os.getenv('SITE_DOMAIN', 'localhost:8000')

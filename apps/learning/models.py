@@ -184,6 +184,66 @@ class Certificate(models.Model):
         return False
 
 
+class Submission(models.Model):
+    """
+    Submission represents a learner's submission for an assignment.
+    V1: one submission per (enrollment, assignment).
+    """
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SUBMITTED = 'submitted', 'Submitted'
+        GRADED = 'graded', 'Graded'
+
+    enrollment = models.ForeignKey(
+        Enrollment,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    assignment = models.ForeignKey(
+        'catalogue.Assignment',
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+
+    submitted_text = models.TextField(blank=True, default='')
+    submitted_file_url = models.URLField(max_length=2048, blank=True, null=True)
+    submitted_file_name = models.CharField(max_length=255, blank=True, null=True)
+
+    grade = models.PositiveIntegerField(null=True, blank=True)
+    feedback = models.TextField(blank=True, default='')
+    internal_notes = models.TextField(blank=True, default='')
+    graded_at = models.DateTimeField(null=True, blank=True)
+    graded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='graded_submissions',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('enrollment', 'assignment')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['enrollment', 'assignment']),
+            models.Index(fields=['assignment', 'status']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.enrollment.user.email} - {self.assignment.session.title}"
+
+
 class Discussion(models.Model):
     """
     Discussion represents discussion threads for courses/sessions.
@@ -269,3 +329,55 @@ class DiscussionReply(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.discussion.title}"
+
+
+class Report(models.Model):
+    """
+    Report model for generated organization reports.
+    """
+
+    class Type(models.TextChoices):
+        USER_ACTIVITY = 'user_activity', 'User Activity'
+        COURSE_PERFORMANCE = 'course_performance', 'Course Performance'
+        ENROLLMENT = 'enrollment', 'Enrollment'
+        COMPLETION = 'completion', 'Completion'
+        ASSESSMENT = 'assessment', 'Assessment'
+        REVENUE = 'revenue', 'Revenue'
+
+    class Status(models.TextChoices):
+        PROCESSING = 'processing', 'Processing'
+        READY = 'ready', 'Ready'
+        FAILED = 'failed', 'Failed'
+
+    # Report details
+    report_type = models.CharField(max_length=30, choices=Type.choices)
+    name = models.CharField(max_length=255)
+    
+    # Generation info
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='generated_reports'
+    )
+    generated_at = models.DateTimeField(auto_now_add=True)
+    
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PROCESSING
+    )
+    
+    # File
+    file = models.FileField(upload_to='reports/', blank=True, null=True)
+    file_size = models.CharField(max_length=50, blank=True, null=True)
+    
+    # Filter parameters (stored as JSON)
+    parameters = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-generated_at']
+
+    def __str__(self):
+        return f"{self.name} - {self.status}"

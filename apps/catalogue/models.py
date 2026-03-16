@@ -291,6 +291,77 @@ class Session(models.Model):
         return 0
 
 
+# Shared question type choices for QuizQuestion and BankQuestion
+QUESTION_TYPE_CHOICES = [
+    ('multiple-choice', 'Multiple Choice'),
+    ('true-false', 'True/False'),
+    ('short-answer', 'Short Answer'),
+    ('essay', 'Essay'),
+    ('matching', 'Matching'),
+    ('fill-blank', 'Fill in the Blank'),
+]
+
+
+class QuestionCategory(models.Model):
+    """
+    Instructor-owned category for organizing bank questions.
+    """
+    name = models.CharField(max_length=255)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='question_categories',
+    )
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'name', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'name'],
+                name='catalogue_questioncategory_owner_name_unique',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} (owner={self.owner_id})"
+
+
+class BankQuestion(models.Model):
+    """
+    Instructor-owned reusable question for the question bank.
+    """
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='bank_questions',
+    )
+    category = models.ForeignKey(
+        QuestionCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='questions',
+    )
+    question_type = models.CharField(max_length=32, choices=QUESTION_TYPE_CHOICES)
+    question_text = models.TextField()
+    points = models.PositiveIntegerField(default=10)
+    answer_payload = models.JSONField(default=dict, blank=True)
+    difficulty = models.CharField(max_length=16, blank=True, default='')
+    tags = models.JSONField(default=list, blank=True)
+    explanation = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"BankQ{self.id}: {self.question_text[:50]}..."
+
+
 class Quiz(models.Model):
     """
     Quiz stores authoring data for a Session with session_type='quiz'.
@@ -307,6 +378,61 @@ class Quiz(models.Model):
 
     def __str__(self):
         return f"Quiz for {self.session.title}"
+
+
+class Assignment(models.Model):
+    """
+    Assignment stores authoring data for a Session with session_type='assignment'.
+    OneToOne with Session; created lazily on first PUT to .../assignment/.
+    """
+    class AssignmentType(models.TextChoices):
+        PROJECT = 'project', 'Project'
+        ESSAY = 'essay', 'Essay'
+        CODE = 'code', 'Code Submission'
+        PRESENTATION = 'presentation', 'Presentation'
+        RESEARCH = 'research', 'Research'
+
+    class PenaltyType(models.TextChoices):
+        PERCENTAGE = 'percentage', 'Percentage per day'
+        FIXED = 'fixed', 'Fixed percentage'
+        NONE = 'none', 'No penalty'
+
+    session = models.OneToOneField(
+        Session,
+        on_delete=models.CASCADE,
+        related_name='assignment',
+    )
+    assignment_type = models.CharField(
+        max_length=20,
+        choices=AssignmentType.choices,
+        default=AssignmentType.PROJECT,
+    )
+    instructions = models.TextField(blank=True, default='')
+    max_points = models.PositiveIntegerField(default=100)
+    due_date = models.DateTimeField(null=True, blank=True)
+    available_from = models.DateTimeField(null=True, blank=True)
+    allow_late = models.BooleanField(default=False)
+    late_cutoff_date = models.DateTimeField(null=True, blank=True)
+    penalty_type = models.CharField(
+        max_length=20,
+        choices=PenaltyType.choices,
+        default=PenaltyType.NONE,
+    )
+    penalty_percent = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(null=True, blank=True)
+    allowed_file_types = models.JSONField(default=list, blank=True)
+    max_file_size_mb = models.PositiveIntegerField(null=True, blank=True)
+    rubric_criteria = models.JSONField(default=list, blank=True)
+    settings = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Assignment'
+        verbose_name_plural = 'Assignments'
+
+    def __str__(self):
+        return f"Assignment for {self.session.title}"
 
 
 class QuizQuestion(models.Model):
@@ -331,6 +457,13 @@ class QuizQuestion(models.Model):
     question_text = models.TextField()
     points = models.PositiveIntegerField(default=10)
     answer_payload = models.JSONField(default=dict, blank=True)
+    source_bank_question = models.ForeignKey(
+        BankQuestion,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='quiz_question_copies',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

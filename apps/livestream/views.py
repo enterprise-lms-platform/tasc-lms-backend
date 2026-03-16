@@ -12,8 +12,10 @@ from drf_spectacular.utils import (
     OpenApiExample, inline_serializer
 )
 import json
+import logging
+from datetime import timedelta
 
-from apps.audit import models
+from django.db.models import Avg
 
 from .models import (
     LivestreamSession, LivestreamAttendance, 
@@ -26,10 +28,15 @@ from .serializers import (
     LivestreamQuestionAnswerSerializer, LivestreamRecordingSerializer,
     UserTimezoneSerializer
 )
-from .services.zoom_service import ZoomService, ZoomWebhookHandler
+from .services.platform_factory import LivestreamPlatformFactory
+from .services.zoom_service import ZoomWebhookHandler
+from .services.google_meet_service import GoogleMeetWebhookHandler
+from .services.teams_service import TeamsWebhookHandler
 from .services.calendar_service import CalendarService, TimezoneService
-from  .permissions import IsInstructorOrReadOnly
+from .permissions import IsInstructorOrReadOnly
 from apps.accounts.rbac import is_admin_like, is_instructor
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(tags=['Livestream Sessions'])
@@ -138,61 +145,15 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
     )
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        """Create a new livestream session with Zoom integration"""
+        """Create a new livestream session with platform meeting integration"""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         # Save session first
         session = serializer.save()
         
-        # Create Zoom meeting automatically
-        if session.platform == 'zoom':
-            try:
-                zoom_service = ZoomService()
-                
-                # Prepare meeting data
-                meeting_data = {
-                    'topic': f"{session.course.title}: {session.title}",
-                    'agenda': session.description,
-                    'start_time': session.start_time,
-                    'duration': session.duration_minutes,
-                    'timezone': session.timezone,
-                    'host_video': True,
-                    'participant_video': False,
-                    'mute_upon_entry': session.mute_on_entry,
-                    'waiting_room': session.waiting_room,
-                    'auto_recording': 'cloud' if session.auto_recording else 'none',
-                }
-                
-                # Handle recurring meetings
-                if session.is_recurring and session.recurrence_pattern != 'none':
-                    result = zoom_service.create_recurring_meeting(
-                        meeting_data,
-                        session.recurrence_pattern,
-                        session.recurrence_end_date
-                    )
-                else:
-                    result = zoom_service.create_meeting(meeting_data)
-                
-                if result['success']:
-                    # Update session with Zoom details
-                    session.zoom_meeting_id = result['meeting_id']
-                    session.zoom_meeting_uuid = result.get('meeting_uuid', '')
-                    session.join_url = result['join_url']
-                    session.start_url = result['start_url']
-                    session.password = result.get('password', '')
-                    session.save()
-                else:
-                    # Log error but don't fail
-                    session.metadata = session.metadata or {}
-                    session.metadata['zoom_error'] = result.get('error', 'Unknown error')
-                    session.save()
-                    
-            except Exception as e:
-                # Log error but continue
-                session.metadata = session.metadata or {}
-                session.metadata['zoom_error'] = str(e)
-                session.save()
+        # Create meeting on the selected platform
+        self._create_platform_meeting(session)
         
         # If recurring, create child sessions
         if session.is_recurring and session.recurrence_pattern != 'none':
@@ -203,11 +164,122 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED
         )
     
+    def _create_platform_meeting(self, session):
+        """Create a meeting on the appropriate platform (Zoom, Google Meet, or Teams)."""
+        if session.platform == 'custom':
+            return  # Custom RTMP doesn't need a platform meeting
+        
+        try:
+            platform_service = LivestreamPlatformFactory.get_platform(session.platform)
+        except ValueError:
+            logger.warning(f"Unsupported platform '{session.platform}' for session {session.id}")
+            return
+        
+        meeting_data = {
+            'topic': f"{session.course.title}: {session.title}",
+            'agenda': session.description,
+            'start_time': session.start_time,
+            'duration': session.duration_minutes,
+            'timezone': session.timezone,
+            'host_video': True,
+            'participant_video': False,
+            'mute_upon_entry': session.mute_on_entry,
+            'waiting_room': session.waiting_room,
+            'auto_recording': 'cloud' if session.auto_recording else 'none',
+        }
+        
+        try:
+            # Handle recurring meetings (Zoom only for now)
+            if session.platform == 'zoom' and session.is_recurring and session.recurrence_pattern != 'none':
+                result = platform_service.create_recurring_meeting(
+                    meeting_data,
+                    session.recurrence_pattern,
+                    session.recurrence_end_date
+                )
+            else:
+                result = platform_service.create_meeting(meeting_data)
+            
+            # Store platform-specific meeting details
+            if session.platform == 'zoom':
+                if result.get('success'):
+                    session.zoom_meeting_id = result['meeting_id']
+                    session.zoom_meeting_uuid = result.get('meeting_uuid', '')
+                    session.join_url = result['join_url']
+                    session.start_url = result['start_url']
+                    session.password = result.get('password', '')
+                    session.save()
+                else:
+                    session.metadata['platform_error'] = result.get('error', 'Unknown error')
+                    session.save()
+                    
+            elif session.platform == 'google_meet':
+                if result.get('success'):
+                    session.calendar_event_id = result.get('event_id', '')
+                    session.join_url = result.get('meet_uri', '')
+                    session.start_url = result.get('meet_uri', '')
+                    session.save()
+                else:
+                    session.metadata['platform_error'] = str(result)
+                    session.save()
+                    
+            elif session.platform == 'teams':
+                session.teams_meeting_id = result.get('meeting_id', '')
+                session.teams_join_url = result.get('join_url', '')
+                session.join_url = result.get('join_url', '')
+                session.save()
+
+        except Exception as e:
+            logger.error(f"Failed to create {session.platform} meeting for session {session.id}: {e}")
+            session.metadata['platform_error'] = str(e)
+            session.save()
+    
     def _create_recurring_sessions(self, parent_session):
-        """Create child sessions for recurring pattern"""
-        # Implementation for creating recurring session instances
-        # This would generate individual sessions based on pattern
-        pass
+        """Create child sessions for recurring pattern."""
+        pattern = parent_session.recurrence_pattern
+        end_date = parent_session.recurrence_end_date
+        
+        if not end_date:
+            return
+        
+        interval_map = {
+            'daily': timedelta(days=1),
+            'weekly': timedelta(weeks=1),
+            'biweekly': timedelta(weeks=2),
+            'monthly': timedelta(days=30),  # approximate
+        }
+        interval = interval_map.get(pattern)
+        if not interval:
+            return
+        
+        duration = parent_session.end_time - parent_session.start_time
+        current_start = parent_session.start_time + interval
+        order = 1
+        
+        while current_start <= end_date:
+            LivestreamSession.objects.create(
+                course=parent_session.course,
+                instructor=parent_session.instructor,
+                title=parent_session.title,
+                description=parent_session.description,
+                start_time=current_start,
+                end_time=current_start + duration,
+                duration_minutes=parent_session.duration_minutes,
+                timezone=parent_session.timezone,
+                is_recurring=False,
+                recurrence_pattern='none',
+                parent_session=parent_session,
+                recurrence_order=order,
+                platform=parent_session.platform,
+                auto_recording=parent_session.auto_recording,
+                waiting_room=parent_session.waiting_room,
+                mute_on_entry=parent_session.mute_on_entry,
+                allow_chat=parent_session.allow_chat,
+                allow_questions=parent_session.allow_questions,
+                max_attendees=parent_session.max_attendees,
+                created_by=parent_session.created_by,
+            )
+            current_start += interval
+            order += 1
     
     @extend_schema(
         summary='Get session details',
@@ -255,23 +327,8 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
-        # Update on Zoom if meeting exists
-        if instance.zoom_meeting_id and instance.platform == 'zoom':
-            try:
-                zoom_service = ZoomService()
-                zoom_service.update_meeting(
-                    instance.zoom_meeting_id,
-                    {
-                        'topic': serializer.validated_data.get('title', instance.title),
-                        'agenda': serializer.validated_data.get('description', instance.description),
-                        'start_time': serializer.validated_data.get('start_time', instance.start_time),
-                        'duration': serializer.validated_data.get('duration_minutes', instance.duration_minutes),
-                    }
-                )
-            except Exception as e:
-                # Log error but continue
-                instance.metadata = instance.metadata or {}
-                instance.metadata['zoom_update_error'] = str(e)
+        # Update on the appropriate platform
+        self._update_platform_meeting(instance, serializer.validated_data)
         
         self.perform_update(serializer)
         
@@ -279,21 +336,49 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
             LivestreamSessionSerializer(instance, context={'request': request}).data
         )
     
+    def _update_platform_meeting(self, instance, validated_data):
+        """Update the meeting on the appropriate platform."""
+        update_data = {
+            'topic': validated_data.get('title', instance.title),
+            'agenda': validated_data.get('description', instance.description),
+            'start_time': validated_data.get('start_time', instance.start_time),
+            'duration': validated_data.get('duration_minutes', instance.duration_minutes),
+        }
+        
+        try:
+            if instance.platform == 'zoom' and instance.zoom_meeting_id:
+                platform_service = LivestreamPlatformFactory.get_platform('zoom')
+                platform_service.update_meeting(instance.zoom_meeting_id, update_data)
+            elif instance.platform == 'google_meet' and instance.calendar_event_id:
+                platform_service = LivestreamPlatformFactory.get_platform('google_meet')
+                platform_service.update_meeting(instance.calendar_event_id, update_data)
+            elif instance.platform == 'teams' and instance.teams_meeting_id:
+                platform_service = LivestreamPlatformFactory.get_platform('teams')
+                platform_service.update_meeting(instance.teams_meeting_id, update_data)
+        except Exception as e:
+            logger.error(f"Failed to update {instance.platform} meeting: {e}")
+            instance.metadata['platform_update_error'] = str(e)
+    
     @extend_schema(
         summary='Delete session',
-        description='Delete a livestream session (also deletes Zoom meeting)'
+        description='Delete a livestream session (also deletes platform meeting)'
     )
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         
-        # Delete from Zoom
-        if instance.zoom_meeting_id and instance.platform == 'zoom':
-            try:
-                zoom_service = ZoomService()
-                zoom_service.delete_meeting(instance.zoom_meeting_id)
-            except Exception as e:
-                # Log error but continue
-                pass
+        # Delete from the appropriate platform
+        try:
+            if instance.platform == 'zoom' and instance.zoom_meeting_id:
+                platform_service = LivestreamPlatformFactory.get_platform('zoom')
+                platform_service.delete_meeting(instance.zoom_meeting_id)
+            elif instance.platform == 'google_meet' and instance.calendar_event_id:
+                platform_service = LivestreamPlatformFactory.get_platform('google_meet')
+                platform_service.delete_meeting(instance.calendar_event_id)
+            elif instance.platform == 'teams' and instance.teams_meeting_id:
+                platform_service = LivestreamPlatformFactory.get_platform('teams')
+                platform_service.delete_meeting(instance.teams_meeting_id)
+        except Exception as e:
+            logger.error(f"Failed to delete {instance.platform} meeting: {e}")
         
         return super().destroy(request, *args, **kwargs)
     
@@ -303,17 +388,17 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         request=LivestreamActionSerializer,
         responses={200: LivestreamSessionSerializer}
     )
-    @action(detail=True, methods=['post'])
-    def action(self, request, pk=None):
+    @action(detail=True, methods=['post'], url_path='action')
+    def take_action(self, request, pk=None):
         """Take action on a session (start/end/cancel/remind)"""
         session = self.get_object()
         serializer = LivestreamActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        action = serializer.validated_data['action']
+        action_type = serializer.validated_data['action']
         reason = serializer.validated_data.get('reason', '')
         
-        if action == 'start':
+        if action_type == 'start':
             if session.status != 'scheduled':
                 return Response(
                     {'error': 'Only scheduled sessions can be started'},
@@ -321,7 +406,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.start_session()
             
-        elif action == 'end':
+        elif action_type == 'end':
             if session.status != 'live':
                 return Response(
                     {'error': 'Only live sessions can be ended'},
@@ -329,7 +414,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.end_session()
             
-        elif action == 'cancel':
+        elif action_type == 'cancel':
             if session.status in ['ended', 'cancelled']:
                 return Response(
                     {'error': 'Session already ended or cancelled'},
@@ -337,13 +422,13 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                 )
             session.cancel_session(reason)
             
-        elif action == 'remind':
+        elif action_type == 'remind':
             # Send reminder to enrolled learners
             self._send_reminder(session)
             session.reminder_sent_15m = True
             session.save()
             
-        elif action == 'send_recording':
+        elif action_type == 'send_recording':
             # Send recording link to learners
             self._send_recording_link(session)
         
@@ -351,16 +436,58 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
             LivestreamSessionSerializer(session, context={'request': request}).data
         )
     
-    # def _send_reminder(self, session):
-    #     """Send reminder to enrolled learners"""
-    #     # Implement email/notification sending
-    #     from .tasks import send_session_reminder
-    #     send_session_reminder.delay(session.id)
+    def _send_reminder(self, session):
+        """Send reminder email to enrolled learners."""
+        from django.core.mail import send_mass_mail
+        from django.conf import settings as django_settings
+        
+        attendances = session.attendances.filter(status='registered')
+        if not attendances.exists():
+            return
+        
+        messages = []
+        for att in attendances:
+            messages.append((
+                f"Reminder: {session.title} is starting soon",
+                f"Hi {att.learner.get_full_name() or att.learner.email},\n\n"
+                f"Your session '{session.title}' for {session.course.title} "
+                f"starts at {session.start_time.strftime('%H:%M %Z')}.\n\n"
+                f"Join here: {session.join_url}\n",
+                django_settings.DEFAULT_FROM_EMAIL,
+                [att.learner.email],
+            ))
+        
+        try:
+            send_mass_mail(messages, fail_silently=True)
+            logger.info(f"Sent {len(messages)} reminders for session {session.id}")
+        except Exception as e:
+            logger.error(f"Failed to send reminders: {e}")
     
-    # def _send_recording_link(self, session):
-    #     """Send recording link to enrolled learners"""
-    #     from ..tasks import send_recording_link
-    #     send_recording_link.delay(session.id)
+    def _send_recording_link(self, session):
+        """Send recording link to enrolled learners."""
+        from django.core.mail import send_mass_mail
+        from django.conf import settings as django_settings
+        
+        if not session.recording_url:
+            return
+        
+        attendances = session.attendances.all()
+        messages = []
+        for att in attendances:
+            messages.append((
+                f"Recording available: {session.title}",
+                f"Hi {att.learner.get_full_name() or att.learner.email},\n\n"
+                f"The recording for '{session.title}' is now available.\n\n"
+                f"Watch here: {session.recording_url}\n",
+                django_settings.DEFAULT_FROM_EMAIL,
+                [att.learner.email],
+            ))
+        
+        try:
+            send_mass_mail(messages, fail_silently=True)
+            logger.info(f"Sent {len(messages)} recording links for session {session.id}")
+        except Exception as e:
+            logger.error(f"Failed to send recording links: {e}")
     
     @extend_schema(
         summary='Join session',
@@ -486,7 +613,7 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
         # Average attendance duration
         avg_duration = attendance.filter(
             duration_seconds__gt=0
-        ).aggregate(avg=models.Avg('duration_seconds'))['avg'] or 0
+        ).aggregate(avg=Avg('duration_seconds'))['avg'] or 0
         
         return Response({
             'session_id': str(session.id),
@@ -682,6 +809,60 @@ class LivestreamWebhookView(viewsets.GenericViewSet):
                 {'error': result.get('error', 'Unknown error')},
                 status=400
             )
+
+    @extend_schema(
+        summary='Google Calendar webhook',
+        description='Receive push notifications from Google Calendar for automatic updates',
+        request=inline_serializer(
+            name='GoogleCalendarWebhookPayload',
+            fields={}
+        ),
+        responses={200: OpenApiResponse(description='Webhook received')},
+        parameters=[
+            OpenApiParameter(name='X-Goog-Channel-ID', location=OpenApiParameter.HEADER, required=True),
+            OpenApiParameter(name='X-Goog-Resource-ID', location=OpenApiParameter.HEADER, required=True),
+            OpenApiParameter(name='X-Goog-Resource-State', location=OpenApiParameter.HEADER, required=True),
+        ]
+    )
+    @action(detail=False, methods=['post'], url_path='google-calendar')
+    @csrf_exempt
+    def google_calendar_webhook(self, request):
+        """Handle Google Calendar push notification webhook"""
+        handler = GoogleMeetWebhookHandler()
+        result = handler.handle_webhook(request)
+        
+        status_code = 200
+        if result.get('status') == 'error':
+            status_code = 400
+            
+        return JsonResponse(result, status=status_code)
+
+    @extend_schema(
+        summary='Microsoft Teams webhook',
+        description='Receive change notifications from Microsoft Graph for Teams meetings',
+        request=inline_serializer(
+            name='TeamsWebhookPayload',
+            fields={}
+        ),
+        responses={200: OpenApiResponse(description='Webhook received or validation token returned')}
+    )
+    @action(detail=False, methods=['post'], url_path='teams')
+    @csrf_exempt
+    def teams_webhook(self, request):
+        """Handle Microsoft Teams / Graph webhook"""
+        handler = TeamsWebhookHandler()
+        result = handler.handle_webhook(request)
+        
+        # If it's a validation request, Graph expects 200 OK with the token as plain text
+        if 'validation_token' in result:
+            from django.http import HttpResponse
+            return HttpResponse(result['validation_token'], content_type='text/plain')
+            
+        status_code = 200
+        if result.get('status') in ['error', 'invalid_payload']:
+            status_code = 400
+            
+        return JsonResponse(result, status=status_code)
     
     @extend_schema(
         summary='Validate webhook',

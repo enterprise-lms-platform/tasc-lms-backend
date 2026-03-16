@@ -14,10 +14,11 @@ from rest_framework.views import APIView
 
 from .spaces import create_boto3_client
 from apps.accounts.rbac import is_course_writer
-from apps.catalogue.models import Course, Session
+from apps.catalogue.models import Course, Session, Assignment
+from apps.learning.models import Enrollment
 
 
-ALLOWED_UPLOAD_PREFIXES = {"course-thumbnails", "course-banners", "session-assets"}
+ALLOWED_UPLOAD_PREFIXES = {"course-thumbnails", "course-banners", "session-assets", "submission-files"}
 ALLOWED_CONTENT_TYPES_PUBLIC = {"image/png", "image/jpeg", "image/webp"}
 ALLOWED_CONTENT_TYPES_SESSION_ASSETS = {
     "video/mp4",
@@ -48,10 +49,28 @@ class UploadPresignRequestSerializer(serializers.Serializer):
     content_type = serializers.ChoiceField(choices=sorted(ALLOWED_CONTENT_TYPES))
     course_id = serializers.IntegerField(required=False, allow_null=True)
     session_id = serializers.IntegerField(required=False, allow_null=True)
+    enrollment_id = serializers.IntegerField(required=False, allow_null=True)
+    assignment_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate(self, attrs):
         prefix = attrs["prefix"]
         content_type = attrs["content_type"]
+
+        if prefix == "submission-files":
+            enrollment_id = attrs.get("enrollment_id")
+            assignment_id = attrs.get("assignment_id")
+            err = {}
+            if enrollment_id is None:
+                err["enrollment_id"] = "enrollment_id is required for submission-files."
+            if assignment_id is None:
+                err["assignment_id"] = "assignment_id is required for submission-files."
+            if err:
+                raise serializers.ValidationError(err)
+            if content_type not in ALLOWED_CONTENT_TYPES_SESSION_ASSETS:
+                raise serializers.ValidationError(
+                    {"content_type": "submission-files only allows video, PDF, or zip content types."}
+                )
+            return attrs
 
         if prefix == "session-assets":
             course_id = attrs.get("course_id")
@@ -167,8 +186,40 @@ class PresignUploadView(APIView):
 
         prefix = data["prefix"]
         is_session_assets = prefix == "session-assets"
+        is_submission_files = prefix == "submission-files"
 
-        if is_session_assets:
+        if is_submission_files:
+            if not getattr(settings, "DO_SPACES_PRIVATE_BUCKET", None):
+                raise ImproperlyConfigured(
+                    "DO_SPACES_PRIVATE_BUCKET is required for submission-files uploads."
+                )
+            for k in ("DO_SPACES_ENDPOINT", "DO_SPACES_ACCESS_KEY_ID", "DO_SPACES_SECRET_ACCESS_KEY"):
+                if not getattr(settings, k, None):
+                    return Response(
+                        {"detail": f"Spaces upload is not configured. Missing: {k}"},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+            enrollment = get_object_or_404(Enrollment, pk=data["enrollment_id"])
+            assignment = get_object_or_404(Assignment, pk=data["assignment_id"])
+            if enrollment.user_id != request.user.id:
+                return Response(
+                    {"detail": "You can only upload submission files for your own enrollments."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if assignment.session.course_id != enrollment.course_id:
+                return Response(
+                    {"detail": "Assignment does not belong to your enrollment's course."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            bucket = settings.DO_SPACES_PRIVATE_BUCKET
+            use_public_acl = False
+            sanitized = _sanitize_filename(data["filename"])
+            ext = _key_extension(data["filename"], data["content_type"])
+            key = (
+                f"submission-files/enrollment_{enrollment.id}/assignment_{assignment.id}/"
+                f"{uuid.uuid4()}/{Path(sanitized).stem}.{ext}"
+            )
+        elif is_session_assets:
             if not getattr(settings, "DO_SPACES_PRIVATE_BUCKET", None):
                 raise ImproperlyConfigured(
                     "DO_SPACES_PRIVATE_BUCKET is required for session-assets uploads."

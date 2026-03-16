@@ -365,3 +365,89 @@ class SetPasswordFromInviteSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+# ============================================
+# Admin/Manager User Management Serializers
+# ============================================
+
+class UserListSerializer(serializers.ModelSerializer):
+    """Serializer for admin/manager user listing with key fields."""
+    name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "name",
+            "role",
+            "is_active",
+            "email_verified",
+            "date_joined",
+            "last_login",
+        ]
+        read_only_fields = fields
+
+    def get_name(self, obj) -> str:
+        full = (obj.get_full_name() or "").strip()
+        if full:
+            return full
+        return getattr(obj, "username", obj.email.split("@")[0])
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Serializer for admin/manager user detail view."""
+    name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "name",
+            "username",
+            "first_name",
+            "last_name",
+            "role",
+            "is_active",
+            "email_verified",
+            "phone_number",
+            "country",
+            "timezone",
+            "avatar",
+            "bio",
+            "date_joined",
+            "last_login",
+        ]
+        read_only_fields = ["id", "email", "date_joined", "last_login"]
+
+    def get_name(self, obj) -> str:
+        full = (obj.get_full_name() or "").strip()
+        if full:
+            return full
+        return getattr(obj, "username", obj.email.split("@")[0])
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for admin/manager to update user fields."""
+
+    class Meta:
+        model = User
+        fields = [
+            "role",
+            "is_active",
+            "first_name",
+            "last_name",
+            "phone_number",
+            "country",
+            "bio",
+        ]
+
+    def validate_role(self, value):
+        valid_roles = [choice[0] for choice in User.Role.choices]
+        if value not in valid_roles:
+            raise serializers.ValidationError(
+                f"Invalid role. Must be one of: {', '.join(valid_roles)}"
+            )
+        return value

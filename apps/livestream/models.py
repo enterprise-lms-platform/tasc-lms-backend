@@ -141,6 +141,16 @@ class LivestreamSession(models.Model):
     zoom_webhook_received = models.BooleanField(default=False)
     zoom_webhook_data = models.JSONField(default=dict, blank=True)
 
+    # Generic metadata for platform errors, extra info, etc.
+    metadata = models.JSONField(default=dict, blank=True)
+
+    # Google Calendar webhook channel tracking
+    calendar_channel_id = models.CharField(max_length=255, blank=True)
+
+    # Microsoft Teams fields
+    teams_meeting_id = models.CharField(max_length=255, blank=True, help_text="Teams online meeting ID")
+    teams_join_url = models.URLField(blank=True, help_text="Teams join URL")
+
     class Meta:
         db_table = 'catalogue_livestreamsession'
         ordering = ['-start_time']

@@ -35,3 +35,7 @@ venv/
 
 .agents/
 .github/
+.github
+.agents
+
+config/credentials/google-service-account.json
