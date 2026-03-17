@@ -244,6 +244,64 @@ class Submission(models.Model):
         return f"{self.enrollment.user.email} - {self.assignment.session.title}"
 
 
+class QuizSubmission(models.Model):
+    """
+    QuizSubmission stores a learner's attempt at a quiz.
+    """
+    enrollment = models.ForeignKey(
+        Enrollment,
+        on_delete=models.CASCADE,
+        related_name='quiz_submissions',
+    )
+    quiz = models.ForeignKey(
+        'catalogue.Quiz',
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    attempt_number = models.PositiveIntegerField(default=1)
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    max_score = models.DecimalField(max_digits=5, decimal_places=2)
+    passed = models.BooleanField(default=False)
+    time_spent_seconds = models.PositiveIntegerField(default=0)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['enrollment', 'quiz']),
+            models.Index(fields=['quiz', 'submitted_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.enrollment.user.email} - {self.quiz.session.title} (Attempt {self.attempt_number})"
+
+
+class QuizAnswer(models.Model):
+    """
+    QuizAnswer stores the learner's answer for a single question in a quiz submission.
+    """
+    submission = models.ForeignKey(
+        QuizSubmission,
+        on_delete=models.CASCADE,
+        related_name='answers',
+    )
+    question = models.ForeignKey(
+        'catalogue.QuizQuestion',
+        on_delete=models.CASCADE,
+    )
+    selected_answer = models.JSONField()
+    is_correct = models.BooleanField(null=True, blank=True)
+    points_awarded = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['submission', 'question']),
+        ]
+
+    def __str__(self):
+        return f"Answer for Q{self.question.order} in {self.submission}"
+
+
 class Discussion(models.Model):
     """
     Discussion represents discussion threads for courses/sessions.

@@ -8,7 +8,8 @@ from rest_framework.response import Response
 from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
+    QuizSubmission, QuizAnswer
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer,
@@ -19,6 +20,7 @@ from .serializers import (
     ReportSerializer, ReportGenerateSerializer,
     SubmissionSerializer, SubmissionCreateSerializer,
     SubmissionUpdateSerializer, GradeSubmissionSerializer,
+    QuizSubmissionSerializer, QuizSubmissionCreateSerializer,
 )
 
 
@@ -338,12 +340,13 @@ class ReportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
     )
     def create(self, request, *args, **kwargs):
         """Generate a new report"""
+        from .tasks import generate_report
+        
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         report_type = serializer.validated_data['report_type']
         
-        # Create report with processing status
         report = Report.objects.create(
             report_type=report_type,
             name=f"{report_type.replace('_', ' ').title()} - {timezone.now().strftime('%Y-%m-%d')}",
@@ -352,10 +355,7 @@ class ReportViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
             parameters=serializer.validated_data.get('parameters', {}),
         )
         
-        # TODO: In production, this would trigger an async task
-        # For now, we'll simulate completion
-        report.status = Report.Status.READY
-        report.save()
+        generate_report.delay(report.id)
         
         return Response(
             ReportSerializer(report).data,
@@ -470,3 +470,168 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         submission.save()
         
         return Response(SubmissionSerializer(submission).data)
+
+    @extend_schema(
+        summary='Grade statistics',
+        description='Get grade distribution and statistics for a course',
+    )
+    @action(detail=False, methods=['get'])
+    def statistics(self, request):
+        """Get grade distribution for a course"""
+        from django.contrib.auth import get_user_model
+        from django.db.models import Avg, Count, Q
+        User = get_user_model()
+        
+        course_id = request.query_params.get('course')
+        if not course_id:
+            return Response(
+                {'course': 'Course ID is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        submissions = Submission.objects.filter(
+            assignment__session__course_id=course_id,
+            status=Submission.Status.GRADED,
+            grade__isnull=False
+        )
+        
+        total = submissions.count()
+        graded = submissions.exclude(grade__isnull=True).count()
+        pending = total - graded
+        
+        avg_grade = submissions.aggregate(Avg('grade'))['grade__avg'] or 0
+        
+        distribution = [
+            {'range': '90-100', 'label': 'A', 'count': submissions.filter(grade__gte=90).count()},
+            {'range': '80-89', 'label': 'B', 'count': submissions.filter(grade__gte=80, grade__lt=90).count()},
+            {'range': '70-79', 'label': 'C', 'count': submissions.filter(grade__gte=70, grade__lt=80).count()},
+            {'range': '60-69', 'label': 'D', 'count': submissions.filter(grade__gte=60, grade__lt=70).count()},
+            {'range': '0-59', 'label': 'F', 'count': submissions.filter(grade__lt=60).count()},
+        ]
+        
+        for d in distribution:
+            d['percentage'] = round((d['count'] / total * 100), 1) if total > 0 else 0
+        
+        return Response({
+            'total_submissions': total,
+            'graded': graded,
+            'pending': pending,
+            'average_grade': round(avg_grade, 1),
+            'distribution': distribution
+        })
+
+    @extend_schema(
+        summary='Bulk grade submissions',
+        description='Grade multiple submissions at once',
+        request=serializers.Serializer(
+            fields={
+                'grades': serializers.ListField(
+                    child=serializers.DictField(
+                        child=serializers.CharField()
+                    )
+                )
+            }
+        ),
+    )
+    @action(detail=False, methods=['post'])
+    def bulk_grade(self, request):
+        """Bulk grade submissions (instructor/admin only)"""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        grades_data = request.data.get('grades', [])
+        if not grades_data:
+            return Response(
+                {'grades': 'This field is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        results = []
+        graded_count = 0
+        
+        for grade_item in grades_data:
+            submission_id = grade_item.get('submission_id')
+            grade = grade_item.get('grade')
+            feedback = grade_item.get('feedback', '')
+            
+            if not submission_id or grade is None:
+                results.append({
+                    'submission_id': submission_id,
+                    'status': 'error',
+                    'error': 'submission_id and grade are required'
+                })
+                continue
+            
+            try:
+                submission = Submission.objects.get(id=submission_id)
+            except Submission.DoesNotExist:
+                results.append({
+                    'submission_id': submission_id,
+                    'status': 'error',
+                    'error': 'Submission not found'
+                })
+                continue
+            
+            if submission.status != Submission.Status.SUBMITTED:
+                results.append({
+                    'submission_id': submission_id,
+                    'status': 'error',
+                    'error': 'Only submitted submissions can be graded'
+                })
+                continue
+            
+            submission.grade = grade
+            submission.feedback = feedback
+            submission.status = Submission.Status.GRADED
+            submission.graded_at = timezone.now()
+            submission.graded_by = request.user
+            submission.save()
+            
+            results.append({
+                'submission_id': submission_id,
+                'status': 'success'
+            })
+            graded_count += 1
+        
+        return Response({
+            'graded': graded_count,
+            'results': results
+        })
+
+
+@extend_schema(
+    tags=['Learning - Quiz Submissions'],
+    description='Manage quiz submissions and grading',
+)
+class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for quiz submissions.
+    - POST: Submit quiz answers (auto-grades)
+    - GET: List submissions (filtered by user/enrollment/quiz)
+    - GET /{id}: Retrieve single submission with answers
+    """
+    queryset = QuizSubmission.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return QuizSubmissionCreateSerializer
+        return QuizSubmissionSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = QuizSubmission.objects.select_related('enrollment__user', 'quiz__session').prefetch_related('answers')
+
+        if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
+            return queryset
+
+        return queryset.filter(enrollment__user=user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = QuizSubmissionCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        return Response(
+            QuizSubmissionSerializer(submission).data,
+            status=status.HTTP_201_CREATED
+        )

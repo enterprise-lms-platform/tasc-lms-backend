@@ -3,8 +3,10 @@ from rest_framework.exceptions import PermissionDenied
 from django.utils import timezone
 from datetime import timedelta
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission
+    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
+    QuizSubmission, QuizAnswer
 )
+from apps.catalogue.models import Quiz, QuizQuestion
 from apps.catalogue.models import Course, Session
 from apps.accounts.rbac import is_admin_like, is_instructor
 from apps.payments.permissions import user_has_active_subscription
@@ -445,3 +447,191 @@ class GradeSubmissionSerializer(serializers.Serializer):
                     {'grade': f'Grade must be between 0 and {max_points}.'}
                 )
         return attrs
+
+
+class QuizAnswerSerializer(serializers.ModelSerializer):
+    """Serializer for QuizAnswer model."""
+
+    class Meta:
+        model = QuizAnswer
+        fields = ['id', 'question', 'selected_answer', 'is_correct', 'points_awarded']
+        read_only_fields = ['id', 'is_correct', 'points_awarded']
+
+
+class QuizSubmissionSerializer(serializers.ModelSerializer):
+    """Serializer for QuizSubmission model (list/retrieve)."""
+    answers = QuizAnswerSerializer(many=True, read_only=True)
+    quiz_title = serializers.SerializerMethodField()
+    course_title = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuizSubmission
+        fields = [
+            'id', 'enrollment', 'quiz', 'quiz_title', 'course_title',
+            'attempt_number', 'score', 'max_score', 'passed',
+            'time_spent_seconds', 'submitted_at', 'answers'
+        ]
+        read_only_fields = ['id', 'attempt_number', 'score', 'max_score', 'passed', 'submitted_at']
+
+    def get_quiz_title(self, obj):
+        return obj.quiz.session.title if obj.quiz.session else None
+
+    def get_course_title(self, obj):
+        return obj.quiz.session.course.title if obj.quiz.session and obj.quiz.session.course else None
+
+
+class QuizAnswerCreateSerializer(serializers.Serializer):
+    """Serializer for a single answer in submission creation."""
+    question = serializers.IntegerField()
+    selected_answer = serializers.JSONField()
+
+
+class QuizSubmissionCreateSerializer(serializers.Serializer):
+    """Serializer for creating a quiz submission with answers."""
+    enrollment = serializers.IntegerField()
+    quiz = serializers.IntegerField()
+    time_spent_seconds = serializers.IntegerField(required=False, default=0)
+    answers = QuizAnswerCreateSerializer(many=True)
+
+    def validate_enrollment(self, value):
+        try:
+            return Enrollment.objects.get(id=value)
+        except Enrollment.DoesNotExist:
+            raise serializers.ValidationError("Enrollment not found.")
+
+    def validate_quiz(self, value):
+        try:
+            return Quiz.objects.get(id=value)
+        except Quiz.DoesNotExist:
+            raise serializers.ValidationError("Quiz not found.")
+
+    def validate(self, attrs):
+        enrollment = attrs.get('enrollment')
+        quiz = attrs.get('quiz')
+
+        if enrollment.quiz != quiz:
+            raise serializers.ValidationError(
+                {"quiz": "The quiz does not belong to the enrolled course."}
+            )
+
+        existing_attempts = QuizSubmission.objects.filter(
+            enrollment=enrollment,
+            quiz=quiz
+        ).count()
+        attrs['attempt_number'] = existing_attempts + 1
+
+        return attrs
+
+    def _grade_answer(self, question, selected_answer):
+        """
+        Grade a single answer based on question type.
+        Returns (is_correct, points_awarded).
+        """
+        answer_payload = question.answer_payload or {}
+        question_type = question.question_type
+        points = question.points
+
+        if question_type == QuizQuestion.QuestionType.MULTIPLE_CHOICE:
+            selected_option = selected_answer.get('selected_option')
+            options = answer_payload.get('options', [])
+            if selected_option is not None and selected_option < len(options):
+                is_correct = options[selected_option].get('is_correct', False)
+                return is_correct, points if is_correct else 0
+            return False, 0
+
+        elif question_type == QuizQuestion.QuestionType.TRUE_FALSE:
+            correct_answer = answer_payload.get('correct_answer')
+            is_correct = selected_answer.get('value') == correct_answer
+            return is_correct, points if is_correct else 0
+
+        elif question_type == QuizQuestion.QuestionType.SHORT_ANSWER:
+            sample_answer = answer_payload.get('sample_answer', '').lower().strip()
+            user_answer = selected_answer.get('text', '').lower().strip()
+            is_correct = user_answer == sample_answer or sample_answer in user_answer
+            return is_correct, points if is_correct else 0
+
+        elif question_type == QuizQuestion.QuestionType.FILL_BLANK:
+            blanks = answer_payload.get('blanks', [])
+            user_blanks = selected_answer.get('blanks', [])
+            if len(user_blanks) != len(blanks):
+                return False, 0
+            correct_count = 0
+            for i, blank in enumerate(blanks):
+                if i < len(user_blanks):
+                    if user_blanks[i].lower().strip() == blank.get('answer', '').lower().strip():
+                        correct_count += 1
+            total_blanks = len(blanks)
+            if total_blanks > 0:
+                is_correct = correct_count == total_blanks
+                points_awarded = (points * correct_count) // total_blanks
+                return is_correct, points_awarded
+            return False, 0
+
+        elif question_type == QuizQuestion.QuestionType.MATCHING:
+            correct_pairs = answer_payload.get('pairs', [])
+            user_pairs = selected_answer.get('pairs', [])
+            correct_count = 0
+            for pair in correct_pairs:
+                for user_pair in user_pairs:
+                    if pair.get('key') == user_pair.get('key'):
+                        if pair.get('value') == user_pair.get('value'):
+                            correct_count += 1
+            total_pairs = len(correct_pairs)
+            if total_pairs > 0:
+                is_correct = correct_count == total_pairs
+                points_awarded = (points * correct_count) // total_pairs
+                return is_correct, points_awarded
+            return False, 0
+
+        elif question_type == QuizQuestion.QuestionType.ESSAY:
+            return None, 0
+
+        return False, 0
+
+    def create(self, validated_data):
+        enrollment = validated_data['enrollment']
+        quiz = validated_data['quiz']
+        time_spent_seconds = validated_data.get('time_spent_seconds', 0)
+        answers_data = validated_data['answers']
+        attempt_number = validated_data['attempt_number']
+
+        questions = {q.id: q for q in quiz.questions.all()}
+        total_points = sum(q.points for q in questions.values())
+        total_score = 0
+
+        submission = QuizSubmission.objects.create(
+            enrollment=enrollment,
+            quiz=quiz,
+            attempt_number=attempt_number,
+            max_score=total_points,
+            time_spent_seconds=time_spent_seconds,
+        )
+
+        settings = quiz.settings or {}
+        passing_score_percent = settings.get('passing_score_percent', 70)
+
+        for answer_data in answers_data:
+            question_id = answer_data['question']
+            selected_answer = answer_data['selected_answer']
+
+            question = questions.get(question_id)
+            if not question:
+                continue
+
+            is_correct, points_awarded = self._grade_answer(question, selected_answer)
+
+            QuizAnswer.objects.create(
+                submission=submission,
+                question=question,
+                selected_answer=selected_answer,
+                is_correct=is_correct,
+                points_awarded=points_awarded
+            )
+
+            total_score += points_awarded
+
+        submission.score = total_score
+        submission.passed = (total_score / total_points * 100) >= passing_score_percent if total_points > 0 else False
+        submission.save()
+
+        return submission

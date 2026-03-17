@@ -9,6 +9,7 @@ from .views import (
     DiscussionReplyViewSet,
     ReportViewSet,
     SubmissionViewSet,
+    QuizSubmissionViewSet,
 )
 
 router = DefaultRouter()
@@ -19,6 +20,7 @@ router.register(r'discussions', DiscussionViewSet, basename='discussion')
 router.register(r'discussion-replies', DiscussionReplyViewSet, basename='discussion-reply')
 router.register(r'reports', ReportViewSet, basename='report')
 router.register(r'submissions', SubmissionViewSet, basename='submission')
+router.register(r'quiz-submissions', QuizSubmissionViewSet, basename='quiz-submission')
 
 urlpatterns = [
     path('', include(router.urls)),
