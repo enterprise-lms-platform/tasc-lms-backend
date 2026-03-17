@@ -386,3 +386,41 @@ class LivestreamRecording(models.Model):
     def get_download_url(self):
         """Get download URL (with token for authenticated users)"""
         return self.download_url
+
+
+class LivestreamQuestion(models.Model):
+    """
+    Questions asked by learners during livestream sessions.
+    """
+    session = models.ForeignKey(
+        LivestreamSession,
+        on_delete=models.CASCADE,
+        related_name='questions'
+    )
+    asked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='livestream_questions'
+    )
+    question_text = models.TextField()
+    asked_at = models.DateTimeField(auto_now_add=True)
+    is_answered = models.BooleanField(default=False)
+    answer_text = models.TextField(blank=True, default='')
+    answered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='answered_questions'
+    )
+    answered_at = models.DateTimeField(null=True, blank=True)
+    upvotes = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-upvotes', '-asked_at']
+        indexes = [
+            models.Index(fields=['session', 'is_answered']),
+        ]
+
+    def __str__(self):
+        return f"Q by {self.asked_by.email}: {self.question_text[:50]}..."

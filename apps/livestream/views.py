@@ -19,14 +19,15 @@ from django.db.models import Avg
 
 from .models import (
     LivestreamSession, LivestreamAttendance, 
-    LivestreamRecording
+    LivestreamRecording, LivestreamQuestion
 )
 from .serializers import (
     LivestreamSessionSerializer, LivestreamSessionCreateSerializer,
     LivestreamSessionUpdateSerializer, LivestreamAttendanceSerializer,
     LivestreamActionSerializer,
     LivestreamQuestionAnswerSerializer, LivestreamRecordingSerializer,
-    UserTimezoneSerializer
+    UserTimezoneSerializer, LivestreamQuestionSerializer,
+    LivestreamQuestionCreateSerializer
 )
 from .services.platform_factory import LivestreamPlatformFactory
 from .services.zoom_service import ZoomWebhookHandler
@@ -964,3 +965,94 @@ class TimezoneViewSet(viewsets.GenericViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+@extend_schema(
+    tags=['Livestream - Questions'],
+    description='Manage questions in livestream sessions',
+)
+class LivestreamQuestionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing livestream questions.
+    - GET: List questions for a session
+    - POST: Ask a question (learners)
+    - POST /{id}/answer/: Answer a question (instructor)
+    - DELETE: Delete a question
+    """
+    queryset = LivestreamQuestion.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return LivestreamQuestionCreateSerializer
+        return LivestreamQuestionSerializer
+
+    def get_queryset(self):
+        queryset = LivestreamQuestion.objects.select_related('session', 'asked_by', 'answered_by')
+        
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            queryset = queryset.filter(session_id=session_id)
+        
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        session_id = request.data.get('session')
+        if not session_id:
+            return Response(
+                {'session': 'This field is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            session = LivestreamSession.objects.get(id=session_id)
+        except LivestreamSession.DoesNotExist:
+            return Response(
+                {'session': 'Session not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not session.allow_questions:
+            return Response(
+                {'error': 'Questions are not allowed for this session.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        question = LivestreamQuestion.objects.create(
+            session=session,
+            asked_by=request.user,
+            question_text=request.data.get('question_text', '')
+        )
+
+        return Response(
+            LivestreamQuestionSerializer(question).data,
+            status=status.HTTP_201_CREATED
+        )
+
+    @extend_schema(
+        summary='Answer a question',
+        description='Answer a livestream question (instructor only)',
+        request=LivestreamQuestionAnswerSerializer,
+    )
+    @action(detail=True, methods=['post'])
+    def answer(self, request, pk=None):
+        """Answer a question (instructor only)"""
+        question = self.get_object()
+        
+        instructor = question.session.instructor
+        if request.user != instructor and not is_admin_like(request.user):
+            return Response(
+                {'error': 'Only the instructor can answer questions.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        answer_text = request.data.get('answer', '')
+        answer_status = request.data.get('status', 'answered')
+
+        question.answer_text = answer_text
+        question.answered_by = request.user
+        question.answered_at = timezone.now()
+        question.is_answered = answer_status == 'answered'
+        question.save()
+
+        return Response(LivestreamQuestionSerializer(question).data)

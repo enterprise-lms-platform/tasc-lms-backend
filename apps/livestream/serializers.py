@@ -7,7 +7,7 @@ import re
 
 from apps.livestream.models import (
     LivestreamSession, LivestreamAttendance,
-    LivestreamRecording
+    LivestreamRecording, LivestreamQuestion
 )
 from apps.accounts.rbac import is_admin_like
 from apps.livestream.services.calendar_service import TimezoneService
@@ -65,9 +65,7 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
         return obj.attendances.filter(joined_at__isnull=False).count()
 
     def get_question_count(self, obj):
-        # TODO: restore when LivestreamQuestion model is created
-        # return obj.questions.count()
-        return 0
+        return obj.questions.count()
 
     def get_start_time_local(self, obj):
         """Return start time in user's timezone if available"""
@@ -289,3 +287,38 @@ class UserTimezoneSerializer(serializers.Serializer):
             return value
         except pytz.exceptions.UnknownTimeZoneError:
             raise serializers.ValidationError(f"Unknown timezone: {value}")
+
+
+class LivestreamQuestionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for LivestreamQuestion model.
+    """
+    asked_by_name = serializers.SerializerMethodField()
+    answered_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LivestreamQuestion
+        fields = [
+            'id', 'session', 'asked_by', 'asked_by_name', 'question_text',
+            'asked_at', 'is_answered', 'answer_text', 'answered_by',
+            'answered_by_name', 'answered_at', 'upvotes'
+        ]
+        read_only_fields = ['id', 'asked_at', 'upvotes']
+
+    def get_asked_by_name(self, obj):
+        return obj.asked_by.get_full_name() or obj.asked_by.email
+
+    def get_answered_by_name(self, obj):
+        if obj.answered_by:
+            return obj.answered_by.get_full_name() or obj.answered_by.email
+        return None
+
+
+class LivestreamQuestionCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating questions.
+    """
+
+    class Meta:
+        model = LivestreamQuestion
+        fields = ['question_text']

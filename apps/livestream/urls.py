@@ -4,7 +4,8 @@ from .views import (
     LivestreamSessionViewSet,
     LivestreamAttendanceViewSet,
     LivestreamWebhookView,
-    TimezoneViewSet
+    TimezoneViewSet,
+    LivestreamQuestionViewSet
 )
 
 # Create router for main endpoints
@@ -12,6 +13,7 @@ router = DefaultRouter()
 router.register(r'livestreams', LivestreamSessionViewSet, basename='livestream')
 router.register(r'livestream-attendance', LivestreamAttendanceViewSet, basename='livestream-attendance')
 router.register(r'timezone', TimezoneViewSet, basename='timezone')
+router.register(r'questions', LivestreamQuestionViewSet, basename='question')
 
 urlpatterns = [
     # Include all router URLs
