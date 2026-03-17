@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from apps.accounts.views import invite_user, promote_user_role, UserAdminViewSet
-from apps.common.views import PresignUploadView
+from apps.common.views import PresignUploadView, StorageQuotaView
 
 # Admin router for user management
 admin_router = DefaultRouter()
@@ -9,6 +9,7 @@ admin_router.register(r'users', UserAdminViewSet, basename='admin-user')
 
 urlpatterns = [
     path("uploads/presign/", PresignUploadView.as_view(), name="uploads-presign"),
+    path("uploads/quota/", StorageQuotaView.as_view(), name="uploads-quota"),
     path("", include("apps.common.urls")),
     path("auth/", include("apps.accounts.urls")),
     path("admin/users/invite/", invite_user, name="admin-invite-user"),

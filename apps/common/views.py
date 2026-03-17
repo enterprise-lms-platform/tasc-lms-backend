@@ -303,3 +303,69 @@ class PresignUploadView(APIView):
             response_data["public_url"] = _public_url_for_key(key)
 
         return Response(response_data)
+
+
+@extend_schema(
+    tags=["Common"],
+    summary="Get storage quota",
+    description="Get storage usage for the current organization or platform",
+    responses={
+        200: {
+            'used_bytes': 5368709120,
+            'total_bytes': 10737418240
+        }
+    },
+)
+class StorageQuotaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        user = request.user
+        role = getattr(user, 'role', None)
+        
+        DEFAULT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
+        
+        total_bytes = DEFAULT_QUOTA_BYTES
+        
+        used_bytes = 0
+        
+        if hasattr(settings, 'DO_SPACES_CDN_BASE_URL') and settings.DO_SPACES_CDN_BASE_URL:
+            try:
+                s3_client = create_boto3_client()
+                
+                prefix = ""
+                if role in [User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN]:
+                    prefix = f"session-assets/course_"
+                elif role == User.Role.LEARNER:
+                    prefix = f"submission-files/"
+                
+                if prefix:
+                    buckets = []
+                    if getattr(settings, 'DO_SPACES_PUBLIC_BUCKET', None):
+                        buckets.append(settings.DO_SPACES_PUBLIC_BUCKET)
+                    if getattr(settings, 'DO_SPACES_PRIVATE_BUCKET', None):
+                        buckets.append(settings.DO_SPACES_PRIVATE_BUCKET)
+                    
+                    for bucket in buckets:
+                        try:
+                            response = s3_client.list_objects_v2(
+                                Bucket=bucket,
+                                Prefix=prefix,
+                                MaxKeys=1000
+                            )
+                            if 'Contents' in response:
+                                for obj in response['Contents']:
+                                    used_bytes += obj.get('Size', 0)
+                        except Exception:
+                            pass
+                            
+            except Exception:
+                pass
+        
+        return Response({
+            "used_bytes": used_bytes,
+            "total_bytes": total_bytes
+        })
