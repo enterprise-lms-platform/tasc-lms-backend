@@ -20,6 +20,7 @@ urlpatterns = [
     path("public/", include("apps.catalogue.urls_public")),
     path("catalogue/", include("apps.catalogue.urls")),
     path("learning/", include("apps.learning.urls")),
+    path("learner/", include("apps.learning.urls_learner")),
     path("payments/", include("apps.payments.urls")),
     path("livestream/", include("apps.livestream.urls")),
 ]
