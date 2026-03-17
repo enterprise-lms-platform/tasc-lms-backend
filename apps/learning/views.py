@@ -1,6 +1,6 @@
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
-from rest_framework import viewsets, status, mixins
+from rest_framework import viewsets, status, mixins, serializers
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -523,15 +523,7 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     @extend_schema(
         summary='Bulk grade submissions',
         description='Grade multiple submissions at once',
-        request=serializers.Serializer(
-            fields={
-                'grades': serializers.ListField(
-                    child=serializers.DictField(
-                        child=serializers.CharField()
-                    )
-                )
-            }
-        ),
+        request=serializers.Serializer,
     )
     @action(detail=False, methods=['post'])
     def bulk_grade(self, request):
