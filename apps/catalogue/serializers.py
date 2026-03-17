@@ -2,6 +2,17 @@ from rest_framework import serializers
 from django.utils.text import slugify
 
 from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
+
+
+def _get_user_enrollment(user, course):
+    """Return enrollment for user+course if authenticated, else None."""
+    if not user or not user.is_authenticated:
+        return None
+    from apps.learning.models import Enrollment
+    try:
+        return Enrollment.objects.get(user=user, course=course)
+    except Enrollment.DoesNotExist:
+        return None
 from .utils.video_embed import validate_external_video_url
 
 
@@ -514,6 +525,11 @@ class CourseListSerializer(serializers.ModelSerializer):
     tags = TagSerializer(many=True, read_only=True)
     instructor_name = serializers.SerializerMethodField()
     discounted_price = serializers.ReadOnlyField()
+    is_free = serializers.SerializerMethodField()
+    enrollment_status = serializers.SerializerMethodField()
+    enrollment_id = serializers.SerializerMethodField()
+    progress_percentage = serializers.SerializerMethodField()
+    enrolled_at = serializers.SerializerMethodField()
     
     class Meta:
         model = Course
@@ -525,12 +541,38 @@ class CourseListSerializer(serializers.ModelSerializer):
             'duration_hours', 'duration_weeks', 'total_sessions',
             'instructor', 'instructor_name',
             'enrollment_count',
-            'featured', 'status', 'published_at', 'access_duration', 'allow_self_enrollment'
+            'featured', 'status', 'published_at', 'access_duration', 'allow_self_enrollment',
+            'is_free', 'enrollment_status', 'enrollment_id', 'progress_percentage', 'enrolled_at',
         ]
         read_only_fields = ['id', 'enrollment_count']
     
     def get_instructor_name(self, obj):
         return obj.instructor.get_full_name() or obj.instructor.email if obj.instructor else None
+    
+    def get_is_free(self, obj):
+        return obj.price == 0 if obj.price is not None else True
+    
+    def _get_enrollment(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return None
+        return _get_user_enrollment(request.user, obj)
+    
+    def get_enrollment_status(self, obj):
+        enrollment = self._get_enrollment(obj)
+        return enrollment.status if enrollment else 'none'
+    
+    def get_enrollment_id(self, obj):
+        enrollment = self._get_enrollment(obj)
+        return enrollment.id if enrollment else None
+    
+    def get_progress_percentage(self, obj):
+        enrollment = self._get_enrollment(obj)
+        return float(enrollment.progress_percentage) if enrollment else None
+    
+    def get_enrolled_at(self, obj):
+        enrollment = self._get_enrollment(obj)
+        return enrollment.enrolled_at if enrollment else None
 
 
 class CourseDetailSerializer(CourseListSerializer):
