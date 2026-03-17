@@ -212,6 +212,9 @@ This file tracks all known incomplete work in the backend codebase. Items are gr
 | `GET /api/v1/learning/analytics/engagement/` | Engagement metrics | All analytics pages |
 | `GET /api/v1/uploads/quota/` | Storage usage | ContentUploadPage.tsx |
 | Async report generation | Generate CSV/PDF files | ManagerReportsPage.tsx |
+| `GET /api/v1/public/stats/` | Platform metrics (courses, learners, instructors, certs) | StatsBanner.tsx, BusinessStatsSection.tsx |
+| `GET /api/v1/catalogue/courses/{id}/reviews/` | Course reviews and ratings | CourseReviews.tsx |
+| `GET /api/v1/public/clients/` | Trusted-by company logos | TrustedBy.tsx |
 
 ---
 
