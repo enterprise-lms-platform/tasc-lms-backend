@@ -39,6 +39,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "corsheaders",
     "rest_framework_simplejwt.token_blacklist",
+    "django_celery_results",
+    "django_celery_beat",
     # Local apps
     "apps.common",
     "apps.accounts",
@@ -367,3 +369,15 @@ DO_SPACES_ACCESS_KEY_ID = env("DO_SPACES_ACCESS_KEY_ID", default="")
 DO_SPACES_SECRET_ACCESS_KEY = env("DO_SPACES_SECRET_ACCESS_KEY", default="")
 DO_SPACES_CDN_BASE_URL = env("DO_SPACES_CDN_BASE_URL", default="")
 DO_SPACES_PRESIGN_EXPIRY_SECONDS = env.int("DO_SPACES_PRESIGN_EXPIRY_SECONDS", default=300)
+
+# ----------------------------------------
+# Celery Configuration (Database-backed for development)
+# ----------------------------------------
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="django://")
+CELERY_RESULT_BACKEND = "django-db"
+CELERY_CACHE_BACKEND = "default"
+
+# Use database-backed scheduler for development
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
