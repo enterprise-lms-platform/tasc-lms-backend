@@ -474,6 +474,46 @@ class QuizQuestion(models.Model):
         return f"Q{self.order}: {self.question_text[:50]}..."
 
 
+class CourseReview(models.Model):
+    """
+    CourseReview represents a learner's review of a course.
+    """
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='reviews'
+    )
+    user = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.CASCADE,
+        related_name='course_reviews'
+    )
+    rating = models.PositiveSmallIntegerField(
+        choices=[
+            (1, '1 Star'),
+            (2, '2 Stars'),
+            (3, '3 Stars'),
+            (4, '4 Stars'),
+            (5, '5 Stars'),
+        ]
+    )
+    content = models.TextField(blank=True, default='')
+    is_approved = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('course', 'user')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['course', 'is_approved']),
+            models.Index(fields=['user', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"Review by {self.user.email} for {self.course.title}"
+
+
 class Tag(models.Model):
     """
     Tag represents keywords for categorizing courses.

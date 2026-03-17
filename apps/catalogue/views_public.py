@@ -7,6 +7,7 @@ These endpoints are accessible without authentication for public browsing.
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from rest_framework import viewsets, filters
 from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
 from .models import Category, Course, Tag
 from .serializers import (
@@ -245,3 +246,74 @@ class PublicTagViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Public - Stats'],
+    description='Public platform statistics',
+)
+class PublicStatsViewSet(viewsets.ViewSet):
+    """
+    Public ViewSet for platform-wide statistics.
+    No authentication required.
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary='Get platform stats',
+        description='Returns platform-wide statistics including total courses, learners, instructors, and certificates.',
+        responses={
+            200: {
+                'courses': 150,
+                'learners': 12000,
+                'instructors': 85,
+                'certificates': 8500
+            }
+        },
+    )
+    def list(self, request):
+        from django.contrib.auth import get_user_model
+        from apps.learning.models import Certificate
+        from apps.catalogue.models import Course
+
+        User = get_user_model()
+
+        stats = {
+            'courses': Course.objects.filter(status='published').count(),
+            'learners': User.objects.filter(role='learner', is_active=True).count(),
+            'instructors': User.objects.filter(role='instructor', is_active=True).count(),
+            'certificates': Certificate.objects.count(),
+        }
+
+        return Response(stats)
+
+
+@extend_schema(
+    tags=['Public - Clients'],
+    description='Trusted clients displayed on landing page',
+)
+class TrustedClientsViewSet(viewsets.ViewSet):
+    """
+    Public ViewSet for trusted client logos.
+    No authentication required.
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary='Get trusted clients',
+        description='Returns list of trusted client companies for display on landing page.',
+        responses={
+            200: [
+                {'name': 'Acme Corp', 'logo_url': 'https://...'},
+            ]
+        },
+    )
+    def list(self, request):
+        clients = [
+            {'name': 'Acme Corp', 'logo_url': ''},
+            {'name': 'Global Tech', 'logo_url': ''},
+            {'name': 'InnovateLabs', 'logo_url': ''},
+            {'name': 'FutureSoft', 'logo_url': ''},
+            {'name': 'DataDynamics', 'logo_url': ''},
+        ]
+        return Response(clients)

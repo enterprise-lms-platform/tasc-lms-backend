@@ -9,6 +9,7 @@ from .views import (
     SessionViewSet,
     QuestionCategoryViewSet,
     BankQuestionViewSet,
+    CourseReviewViewSet,
 )
 
 router = DefaultRouter()
@@ -19,6 +20,7 @@ router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'courses', CourseViewSet, basename='course')
 router.register(r'modules', ModuleViewSet, basename='module')
 router.register(r'sessions', SessionViewSet, basename='session')
+router.register(r'course-reviews', CourseReviewViewSet, basename='course-review')
 
 urlpatterns = [
     path('', include(router.urls)),

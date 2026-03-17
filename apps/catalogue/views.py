@@ -19,7 +19,7 @@ from apps.learning.models import Enrollment
 
 from .models import (
     Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion,
-    QuestionCategory, Session, Tag
+    QuestionCategory, Session, Tag, CourseReview
 )
 from .permissions import (
     CanEditBankQuestion, CanEditQuestionCategory, CanEditCourse,
@@ -36,7 +36,8 @@ from .serializers import (
     QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
     QuizSettingsUpdateSerializer,
     SessionCreateSerializer, SessionSerializer,
-    TagSerializer,
+    TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
+    CourseReviewSummarySerializer,
 )
 
 User = get_user_model()
@@ -1041,3 +1042,128 @@ class SessionViewSet(viewsets.ModelViewSet):
             setattr(assignment, key, value)
         assignment.save()
         return Response(AssignmentSerializer(assignment).data)
+
+
+@extend_schema(
+    tags=['Catalogue - Course Reviews'],
+    description='Manage course reviews',
+)
+class CourseReviewViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing course reviews.
+    - GET: List reviews for a course
+    - POST: Create a review (learners only, must be enrolled)
+    - GET /{id}/: Get single review
+    """
+    queryset = CourseReview.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CourseReviewCreateSerializer
+        return CourseReviewSerializer
+
+    def get_queryset(self):
+        queryset = CourseReview.objects.filter(is_approved=True).select_related('course', 'user')
+        
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            queryset = queryset.filter(course_id=course_id)
+        
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        course_id = request.data.get('course')
+        if not course_id:
+            return Response(
+                {'course': 'This field is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response(
+                {'course': 'Course not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        enrollment = Enrollment.objects.filter(user=request.user, course=course).first()
+        if not enrollment:
+            return Response(
+                {'error': 'You must be enrolled to review this course.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        existing = CourseReview.objects.filter(course=course, user=request.user).first()
+        if existing:
+            return Response(
+                {'error': 'You have already reviewed this course.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        review = CourseReview.objects.create(
+            course=course,
+            user=request.user,
+            rating=request.data.get('rating'),
+            content=request.data.get('content', '')
+        )
+
+        return Response(
+            CourseReviewSerializer(review).data,
+            status=status.HTTP_201_CREATED
+        )
+
+    @extend_schema(
+        summary='Get course review summary',
+        description='Returns review summary with average rating and distribution',
+    )
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        course_id = request.query_params.get('course')
+        if not course_id:
+            return Response(
+                {'course': 'This field is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response(
+                {'course': 'Course not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        reviews = CourseReview.objects.filter(course=course, is_approved=True)
+        total = reviews.count()
+        
+        if total == 0:
+            return Response({
+                'average': 0,
+                'total': 0,
+                'distribution': [0, 0, 0, 0, 0],
+                'reviews': []
+            })
+
+        avg_rating = reviews.aggregate(Avg('rating'))['rating__avg']
+        
+        distribution = [
+            reviews.filter(rating=5).count(),
+            reviews.filter(rating=4).count(),
+            reviews.filter(rating=3).count(),
+            reviews.filter(rating=2).count(),
+            reviews.filter(rating=1).count(),
+        ]
+
+        reviews_list = reviews.order_by('-created_at')[:20]
+        
+        return Response({
+            'average': round(avg_rating, 1),
+            'total': total,
+            'distribution': distribution,
+            'reviews': CourseReviewSerializer(reviews_list, many=True).data
+        })
+
+
+from django.db.models import Avg

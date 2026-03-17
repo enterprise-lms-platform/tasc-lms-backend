@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
+from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
 
 
 def _get_user_enrollment(user, course):
@@ -815,3 +815,32 @@ class PublicCourseDetailSerializer(CourseListSerializer):
                 'avatar': obj.instructor.avatar
             }
         return None
+
+
+class CourseReviewSerializer(serializers.ModelSerializer):
+    """Serializer for CourseReview model."""
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CourseReview
+        fields = ['id', 'course', 'user', 'user_name', 'rating', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return obj.user.get_full_name() or obj.user.email
+
+
+class CourseReviewCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating course reviews."""
+
+    class Meta:
+        model = CourseReview
+        fields = ['rating', 'content']
+
+
+class CourseReviewSummarySerializer(serializers.Serializer):
+    """Serializer for course review summary."""
+    average = serializers.FloatField()
+    total = serializers.IntegerField()
+    distribution = serializers.ListField(child=serializers.IntegerField())
+    reviews = CourseReviewSerializer(many=True)
