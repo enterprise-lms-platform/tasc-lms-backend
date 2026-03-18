@@ -27,6 +27,79 @@ class TagSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     """Serializer for Category model."""
+
+    def _unique_slug(self, base: str) -> str:
+        """
+        Return a unique slug for Category.
+
+        Deterministic suffix pattern: <base>, <base>-2, <base>-3, ...
+        Excludes current instance when updating.
+        """
+        base = (base or "").strip() or "category"
+        candidate = base
+        qs = Category.objects.all()
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        n = 2
+        while qs.filter(slug=candidate).exists():
+            candidate = f"{base}-{n}"
+            n += 1
+        return candidate
+
+    def validate_name(self, value: str) -> str:
+        name = (value or "").strip()
+        if not name:
+            raise serializers.ValidationError("This field may not be blank.")
+        qs = Category.objects.all()
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.filter(name__iexact=name).exists():
+            raise serializers.ValidationError("A category with this name already exists.")
+        return name
+
+    def validate_slug(self, value: str) -> str:
+        slug = slugify((value or "").strip())
+        if not slug:
+            raise serializers.ValidationError("Slug is required.")
+        qs = Category.objects.all()
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.filter(slug__iexact=slug).exists():
+            raise serializers.ValidationError("A category with this slug already exists.")
+        return slug
+
+    def validate(self, attrs):
+        """
+        - Create: auto-generate slug from name when slug not provided.
+        - Update: preserve existing slug unless slug explicitly provided (and then validated).
+        """
+        attrs = dict(attrs)
+        incoming_slug = attrs.get("slug", None)
+        incoming_name = attrs.get("name", None)
+
+        if self.instance is None:
+            # CREATE
+            if not incoming_slug:
+                name_for_slug = (incoming_name or "").strip()
+                base = slugify(name_for_slug)
+                attrs["slug"] = self._unique_slug(base)
+            else:
+                # normalize + ensure uniqueness deterministically if slug collides
+                normalized = slugify(str(incoming_slug))
+                attrs["slug"] = self._unique_slug(normalized)
+        else:
+            # UPDATE / PATCH
+            if "slug" in attrs:
+                # if explicitly set, normalize and ensure unique
+                normalized = slugify(str(incoming_slug or ""))
+                if not normalized:
+                    raise serializers.ValidationError({"slug": "Slug is required."})
+                attrs["slug"] = self._unique_slug(normalized)
+            else:
+                # preserve current slug
+                pass
+
+        return super().validate(attrs)
     
     class Meta:
         model = Category
