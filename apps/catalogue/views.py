@@ -143,7 +143,7 @@ class BankQuestionViewSet(viewsets.ModelViewSet):
 )
 class CategoryViewSet(viewsets.ModelViewSet):
     """ViewSet for managing course categories."""
-    queryset = Category.objects.filter(is_active=True)
+    queryset = Category.objects.all()
     permission_classes = [IsAuthenticated, IsCategoryManagerOrReadOnly]
     pagination_class = CataloguePageNumberPagination
 
@@ -153,7 +153,14 @@ class CategoryViewSet(viewsets.ModelViewSet):
         return CategorySerializer
 
     def get_queryset(self):
-        queryset = Category.objects.filter(is_active=True)
+        role = getattr(self.request.user, 'role', None)
+        # Managers/admins can manage both active and inactive categories.
+        # Other authenticated users (learners/instructors) only see active categories.
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            queryset = Category.objects.all()
+        else:
+            queryset = Category.objects.filter(is_active=True)
+
         parent_val = self.request.query_params.get('parent')
         if parent_val is None:
             return queryset

@@ -1958,6 +1958,95 @@ class CategoryParentFilterTest(APITestCase):
 
 
 # ---------------------------------------------------------------------------
+# I) Category management (manager/admin) — slug + inactive visibility
+# ---------------------------------------------------------------------------
+
+class CategoryManagerCrudTest(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _make_manager(suffix='_catcrud')
+        self.instructor = _make_instructor(suffix='_catcrud')
+
+    def test_manager_can_create_category_with_name_only_slug_autogenerates(self):
+        resp = self.client.post(
+            CATEGORIES_URL,
+            {'name': 'Web Development'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['name'], 'Web Development')
+        self.assertEqual(resp.data['slug'], 'web-development')
+
+    def test_manager_create_duplicate_name_returns_400(self):
+        Category.objects.create(name='Design', slug='design', is_active=True)
+        resp = self.client.post(
+            CATEGORIES_URL,
+            {'name': 'Design'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('name', resp.data)
+
+    def test_manager_create_duplicate_slug_appends_suffix(self):
+        Category.objects.create(name='Web Dev', slug='web-development', is_active=True)
+        resp = self.client.post(
+            CATEGORIES_URL,
+            {'name': 'Web Development'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['slug'], 'web-development-2')
+
+    def test_instructor_cannot_create_category(self):
+        resp = self.client.post(
+            CATEGORIES_URL,
+            {'name': 'Forbidden'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_manager_can_see_inactive_categories_but_instructor_cannot(self):
+        active = Category.objects.create(name='Active Cat', slug='active-cat', is_active=True)
+        inactive = Category.objects.create(name='Inactive Cat', slug='inactive-cat', is_active=False)
+
+        mgr_resp = self.client.get(CATEGORIES_URL, **_auth(self.manager))
+        self.assertEqual(mgr_resp.status_code, status.HTTP_200_OK)
+        mgr_ids = [c['id'] for c in mgr_resp.data['results']]
+        self.assertIn(active.id, mgr_ids)
+        self.assertIn(inactive.id, mgr_ids)
+
+        inst_resp = self.client.get(CATEGORIES_URL, **_auth(self.instructor))
+        self.assertEqual(inst_resp.status_code, status.HTTP_200_OK)
+        inst_ids = [c['id'] for c in inst_resp.data['results']]
+        self.assertIn(active.id, inst_ids)
+        self.assertNotIn(inactive.id, inst_ids)
+
+    def test_manager_can_update_category_toggle_inactive_and_still_retrieve(self):
+        cat = Category.objects.create(name='Toggle Cat', slug='toggle-cat', is_active=True)
+        patch_resp = self.client.patch(
+            f'{CATEGORIES_URL}{cat.id}/',
+            {'is_active': False},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_resp.data['is_active'], False)
+
+        # Manager can still retrieve inactive
+        get_resp = self.client.get(f'{CATEGORIES_URL}{cat.id}/', **_auth(self.manager))
+        self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_resp.data['id'], cat.id)
+
+        # Non-manager should not retrieve inactive category (filtered out of queryset)
+        inst_get = self.client.get(f'{CATEGORIES_URL}{cat.id}/', **_auth(self.instructor))
+        self.assertEqual(inst_get.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# ---------------------------------------------------------------------------
 # H) Tags pagination (US-041 wizard bootstrap)
 # ---------------------------------------------------------------------------
 
