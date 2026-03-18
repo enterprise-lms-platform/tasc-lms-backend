@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 17 March 2026 (post-pull audit)
+**Last updated:** 18 March 2026 (post-pull audit)
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -262,7 +262,7 @@ Bulk grade and statistics actions are now implemented. Still missing:
 
 ### 17. ViewSets Missing `select_related`/`prefetch_related`
 Several viewsets query models with foreign keys but don't optimize their querysets:
-- **`EnrollmentViewSet`** (`apps/learning/views.py`) — `Enrollment` has FK to `user` and `course`, but `get_queryset()` does plain `Enrollment.objects.filter(user=...)` with no `select_related`
+- **`EnrollmentViewSet`** (`apps/learning/views.py`) — ~~no `select_related`~~ **Partially fixed 18 Mar 2026:** `get_queryset()` now supports `?role=instructor` param (returns enrollments in instructor's courses via `filter(course__instructor=user)`) and `?course=` filter. `select_related('course', 'course__category')` added on instructor branch. Default (learner) branch still lacks `select_related`.
 - **`DiscussionViewSet`** (`apps/learning/views.py`) — `Discussion` has FK to `user`, `course`, `session` — no `select_related`
 - **`DiscussionReplyViewSet`** (`apps/learning/views.py`) — `DiscussionReply` has FK to `user`, `discussion` — no `select_related`
 - **`SubmissionViewSet`** (`apps/learning/views.py`) — `Submission` has FK to `enrollment`, `assignment` — no `select_related`

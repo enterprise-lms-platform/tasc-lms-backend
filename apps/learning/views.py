@@ -44,11 +44,28 @@ class EnrollmentViewSet(
         return EnrollmentSerializer
 
     def get_queryset(self):
-        return Enrollment.objects.filter(user=self.request.user)
+        user = self.request.user
+        role_param = self.request.query_params.get('role', '').strip()
+
+        # ?role=instructor → show enrollments in courses I teach (my students)
+        if role_param == 'instructor' and user.role in ('instructor', 'tasc_admin'):
+            qs = Enrollment.objects.filter(
+                course__instructor=user
+            ).select_related('course', 'course__category')
+        else:
+            # Default: show my own enrollments as a learner
+            qs = Enrollment.objects.filter(user=user)
+
+        # Optional course filter
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            qs = qs.filter(course_id=course_id)
+
+        return qs
 
     @extend_schema(
         summary='List my enrollments',
-        description='Returns list of courses the authenticated user is enrolled in',
+        description='Returns list of courses the authenticated user is enrolled in (instructors see their students)',
         responses={200: EnrollmentSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):
