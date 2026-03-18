@@ -35,9 +35,43 @@ The following items were completed in the latest backend update and are no longe
 
 ---
 
+## HIGH — Public Course Search
+
+### 0a. Add Search Support to PublicCourseViewSet
+
+**File:** `apps/catalogue/views_public.py`
+
+**Why:** The frontend catalogue page has a search bar but it does nothing — the backend `PublicCourseViewSet` doesn't support text search. DRF's `SearchFilter` is already imported but unused.
+
+**Backend fix:**
+
+Add `SearchFilter` and `OrderingFilter` to `PublicCourseViewSet`:
+
+```python
+class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'short_description', 'description']
+    ordering_fields = ['published_at', 'enrollment_count', 'price', 'title']
+    ordering = ['-published_at']
+```
+
+This enables:
+```
+GET /api/v1/public/courses/?search=react
+GET /api/v1/public/courses/?search=python&category=3&level=beginner
+GET /api/v1/public/courses/?ordering=-enrollment_count  (most popular)
+```
+
+**Frontend impact:** Once backend is ready:
+1. Add `search` param to `PublicCourseParams` in `public.services.ts`
+2. Wire `CatalogueHero.onSearch` → state in `CourseCataloguePage` → pass as prop to `CoursesGrid`
+3. Pass `search` param in `CoursesGrid` API call (already accepts prop, just not using it)
+
+---
+
 ## HIGH — Manager Bulk Import Endpoint
 
-### 0. Add Manager-Scoped Bulk Import & CSV Template Endpoints
+### 0b. Add Manager-Scoped Bulk Import & CSV Template Endpoints
 
 **Why:** Bulk import currently only exists on `UserSuperadminViewSet` (`apps/accounts/views_superadmin.py`) behind `IsTascAdminUser` permission. The frontend `ManagerBulkImportPage` calls these endpoints, but LMS managers can't access them — they get 403. Managers need their own endpoints that auto-scope imported users to their organization.
 
