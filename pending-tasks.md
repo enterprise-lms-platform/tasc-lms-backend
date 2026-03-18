@@ -18,20 +18,21 @@ When you pick up a task, update this file.
 
 ---
 
-## Completed Items (removed from active tracking)
+## Completed Items
 
-The following items were completed in the latest backend update and are no longer pending:
-
-- ~~**#1 Quiz Submission System**~~ — `QuizSubmission`/`QuizAnswer` models, serializers, views, and migration all implemented
-- ~~**#2 Report Generation / Celery**~~ — Celery infrastructure set up (`config/celery.py`), async `generate_report` task in `apps/learning/tasks.py` with all 6 report types implemented
-- ~~**#3 Bulk User Import**~~ — Full CSV parsing with validation, error tracking, file size/row limits in `apps/accounts/views_superadmin.py`
-- ~~**#4 LivestreamQuestion Model**~~ — Model, migration, serializers, and endpoints implemented in `apps/livestream/`
-- ~~**#8 ReportViewSet Data Queries**~~ — Covered by #2 above
-- ~~**#9a Bulk Grade Action**~~ — Implemented in `apps/learning/views.py`
-- ~~**#9b Grade Statistics Action**~~ — Implemented in `apps/learning/views.py`
-- ~~**#14 Migration Backfill**~~ — `backfill()` function fully implemented in migration 0009
-- ~~**Course Reviews**~~ — New `CourseReview` model, serializers, and viewset added
-- ~~**Public Endpoints**~~ — `/api/v1/public/stats/`, `/api/v1/public/clients/`, `/api/v1/uploads/quota/` all implemented
+| # | Item | Details |
+|---|------|---------|
+| 1 | Quiz Submission System | `QuizSubmission`/`QuizAnswer` models, serializers, views, and migration all implemented |
+| 2 | Report Generation / Celery | Celery infrastructure (`config/celery.py`), async `generate_report` task in `apps/learning/tasks.py` with all 6 report types |
+| 3 | Bulk User Import (Superadmin) | Full CSV parsing with validation, error tracking, file size/row limits in `apps/accounts/views_superadmin.py` |
+| 4 | LivestreamQuestion Model | Model, migration, serializers, and endpoints implemented in `apps/livestream/` |
+| 8 | ReportViewSet Data Queries | Covered by #2 — Celery report generation |
+| 9a | Bulk Grade Action | Implemented in `apps/learning/views.py` |
+| 9b | Grade Statistics Action | Implemented in `apps/learning/views.py` |
+| 14 | Migration Backfill | `backfill()` function fully implemented in migration 0009 |
+| — | Course Reviews | New `CourseReview` model, serializers, and viewset added |
+| — | Public Endpoints | `/api/v1/public/stats/`, `/api/v1/public/clients/`, `/api/v1/uploads/quota/` all implemented |
+| — | Celery Setup | `config/celery.py`, broker config in settings, `apps/learning/tasks.py` |
 
 ---
 
@@ -333,7 +334,7 @@ Bulk grade and statistics actions are now implemented. Still missing:
 
 ### 17. ViewSets Missing `select_related`/`prefetch_related`
 Several viewsets query models with foreign keys but don't optimize their querysets:
-- **`EnrollmentViewSet`** (`apps/learning/views.py`) — ~~no `select_related`~~ **Partially fixed 18 Mar 2026:** `get_queryset()` now supports `?role=instructor` param (returns enrollments in instructor's courses via `filter(course__instructor=user)`) and `?course=` filter. `select_related('course', 'course__category')` added on instructor branch. Default (learner) branch still lacks `select_related`.
+- **`EnrollmentViewSet`** (`apps/learning/views.py`) — **Partially fixed 18 Mar:** `select_related('course', 'course__category')` added on instructor branch + `?role=instructor` and `?course=` filters. Default (learner) branch still lacks `select_related`.
 - **`DiscussionViewSet`** (`apps/learning/views.py`) — `Discussion` has FK to `user`, `course`, `session` — no `select_related`
 - **`DiscussionReplyViewSet`** (`apps/learning/views.py`) — `DiscussionReply` has FK to `user`, `discussion` — no `select_related`
 - **`SubmissionViewSet`** (`apps/learning/views.py`) — `Submission` has FK to `enrollment`, `assignment` — no `select_related`
@@ -387,7 +388,6 @@ class LivestreamSessionAdmin(admin.ModelAdmin):
 
 ## Configuration TODOs
 
-- ~~**Set up Celery**~~ — Done: `config/celery.py`, broker config in settings, `apps/learning/tasks.py`
 - Set `ZOOM_WEBHOOK_SECRET` in production settings
 - Configure Google Meet: `GOOGLE_MEET_SERVICE_ACCOUNT_FILE`, `GOOGLE_MEET_DELEGATED_USER`, `GOOGLE_MEET_CALENDAR_ID` (code is ready, just needs credentials)
 - Configure Teams: `TEAMS_TENANT_ID`, `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_ORGANIZER_USER_ID` (code is ready, just needs Azure AD app registration)
