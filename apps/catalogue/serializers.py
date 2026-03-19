@@ -27,6 +27,7 @@ class TagSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     """Serializer for Category model."""
+    slug = serializers.SlugField(required=False, allow_blank=True)
 
     def _unique_slug(self, base: str) -> str:
         """
@@ -76,6 +77,9 @@ class CategorySerializer(serializers.ModelSerializer):
         attrs = dict(attrs)
         incoming_slug = attrs.get("slug", None)
         incoming_name = attrs.get("name", None)
+        if isinstance(incoming_slug, str) and not incoming_slug.strip():
+            incoming_slug = None
+            attrs.pop("slug", None)
 
         if self.instance is None:
             # CREATE
