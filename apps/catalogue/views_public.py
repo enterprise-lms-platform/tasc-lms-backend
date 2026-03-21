@@ -9,6 +9,8 @@ from rest_framework import viewsets, filters
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from django.db.models import Count, Q
+
 from .models import Category, Course, Tag
 from .serializers import (
     CategorySerializer,
@@ -25,14 +27,20 @@ from .serializers import (
 class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Public ViewSet for browsing published courses.
-    
+
     - No authentication required
     - Returns only published courses
     - Lookup by slug for SEO-friendly URLs
     - Supports filtering by: featured, category, level
+    - Supports search by: title, short_description, instructor name
+    - Supports ordering by: title, published_at, enrollment_count
     """
     permission_classes = [AllowAny]
     lookup_field = 'slug'
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'short_description', 'instructor__first_name', 'instructor__last_name']
+    ordering_fields = ['title', 'published_at', 'enrollment_count']
+    ordering = ['-published_at']
     
     def get_queryset(self):
         """Return only published courses with optional filtering."""
@@ -83,6 +91,18 @@ class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
                 name='level',
                 type=str,
                 description='Filter by level: beginner, intermediate, advanced, all_levels',
+                required=False
+            ),
+            OpenApiParameter(
+                name='search',
+                type=str,
+                description='Search courses by title, description, or instructor name',
+                required=False
+            ),
+            OpenApiParameter(
+                name='ordering',
+                type=str,
+                description='Order results by: title, -title, published_at, -published_at, enrollment_count, -enrollment_count',
                 required=False
             ),
         ],
@@ -195,7 +215,9 @@ class PublicCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     - No authentication required
     - Returns only active categories
     """
-    queryset = Category.objects.filter(is_active=True)
+    queryset = Category.objects.filter(is_active=True).annotate(
+        courses_count=Count('courses', filter=Q(courses__status='published'))
+    )
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]
     

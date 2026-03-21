@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 19 March 2026 (post-pull audit)
+**Last updated:** 22 March 2026
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -33,40 +33,10 @@ When you pick up a task, update this file.
 | — | Course Reviews | New `CourseReview` model, serializers, and viewset added |
 | — | Public Endpoints | `/api/v1/public/stats/`, `/api/v1/public/clients/`, `/api/v1/uploads/quota/` all implemented |
 | — | Celery Setup | `config/celery.py`, broker config in settings, `apps/learning/tasks.py` |
+| 0a | Public Course Search & Ordering | Added `SearchFilter` + `OrderingFilter` to `PublicCourseViewSet`. Search fields: `title`, `short_description`, `instructor__first_name`, `instructor__last_name`. Ordering fields: `title`, `published_at`, `enrollment_count`. Default: `-published_at`. |
+| — | Category courses_count | Added `courses_count` annotated field to `CategorySerializer` and `PublicCategoryViewSet` queryset (`Count` + `Q` for published courses only) |
 
 ---
-
-## HIGH — Public Course Search
-
-### 0a. Add Search Support to PublicCourseViewSet
-
-**File:** `apps/catalogue/views_public.py`
-
-**Why:** The frontend catalogue page has a search bar but it does nothing — the backend `PublicCourseViewSet` doesn't support text search. DRF's `SearchFilter` is already imported but unused.
-
-**Backend fix:**
-
-Add `SearchFilter` and `OrderingFilter` to `PublicCourseViewSet`:
-
-```python
-class PublicCourseViewSet(viewsets.ReadOnlyModelViewSet):
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title', 'short_description', 'description']
-    ordering_fields = ['published_at', 'enrollment_count', 'price', 'title']
-    ordering = ['-published_at']
-```
-
-This enables:
-```
-GET /api/v1/public/courses/?search=react
-GET /api/v1/public/courses/?search=python&category=3&level=beginner
-GET /api/v1/public/courses/?ordering=-enrollment_count  (most popular)
-```
-
-**Frontend impact:** Once backend is ready:
-1. Add `search` param to `PublicCourseParams` in `public.services.ts`
-2. Wire `CatalogueHero.onSearch` → state in `CourseCataloguePage` → pass as prop to `CoursesGrid`
-3. Pass `search` param in `CoursesGrid` API call (already accepts prop, just not using it)
 
 ---
 

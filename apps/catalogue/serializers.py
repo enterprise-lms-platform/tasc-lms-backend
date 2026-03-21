@@ -105,13 +105,15 @@ class CategorySerializer(serializers.ModelSerializer):
 
         return super().validate(attrs)
     
+    courses_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = Category
         fields = [
             'id', 'name', 'slug', 'description', 'icon',
-            'parent', 'is_active', 'created_at', 'updated_at'
+            'parent', 'is_active', 'courses_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'courses_count', 'created_at', 'updated_at']
 
 
 class CategoryDetailSerializer(CategorySerializer):
