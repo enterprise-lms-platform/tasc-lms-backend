@@ -61,6 +61,17 @@ class EnrollmentViewSet(
         if course_id:
             qs = qs.filter(course_id=course_id)
 
+        # Search by learner name or email, or course title
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(course__title__icontains=search)
+            )
+
         return qs
 
     @extend_schema(
@@ -139,14 +150,29 @@ class SessionProgressViewSet(viewsets.ModelViewSet):
         return SessionProgressSerializer
     
     def get_queryset(self):
-        return SessionProgress.objects.filter(enrollment__user=self.request.user)
-    
+        qs = SessionProgress.objects.filter(enrollment__user=self.request.user)
+
+        enrollment_id = self.request.query_params.get('enrollment')
+        if enrollment_id:
+            qs = qs.filter(enrollment_id=enrollment_id)
+
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            qs = qs.filter(session_id=session_id)
+
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            qs = qs.filter(enrollment__course_id=course_id)
+
+        return qs
+
     @extend_schema(
         summary='List session progress',
         description='Returns progress for all sessions across user enrollments',
         parameters=[
             OpenApiParameter(name='enrollment', type=int, description='Filter by enrollment ID'),
             OpenApiParameter(name='session', type=int, description='Filter by session ID'),
+            OpenApiParameter(name='course', type=int, description='Filter by course ID'),
         ],
     )
     def list(self, request, *args, **kwargs):

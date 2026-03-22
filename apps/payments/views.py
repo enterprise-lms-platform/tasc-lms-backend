@@ -108,20 +108,30 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         parameters=[
             OpenApiParameter(name='status', type=str, description='Filter by status'),
             OpenApiParameter(name='user', type=int, description='Filter by user ID (finance only)'),
+            OpenApiParameter(name='from_date', type=str, description='Filter from date (YYYY-MM-DD)'),
+            OpenApiParameter(name='to_date', type=str, description='Filter to date (YYYY-MM-DD)'),
         ],
     )
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        
+
         # Apply filters
         status_filter = request.query_params.get('status')
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-        
+
         user_filter = request.query_params.get('user')
         if user_filter and hasattr(request.user, 'role') and request.user.role in ['finance', 'tasc_admin']:
             queryset = queryset.filter(user_id=user_filter)
-        
+
+        from_date = request.query_params.get('from_date')
+        if from_date:
+            queryset = queryset.filter(created_at__date__gte=from_date)
+
+        to_date = request.query_params.get('to_date')
+        if to_date:
+            queryset = queryset.filter(created_at__date__lte=to_date)
+
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)

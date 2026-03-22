@@ -35,6 +35,9 @@ When you pick up a task, update this file.
 | — | Celery Setup | `config/celery.py`, broker config in settings, `apps/learning/tasks.py` |
 | 0a | Public Course Search & Ordering | Added `SearchFilter` + `OrderingFilter` to `PublicCourseViewSet`. Search fields: `title`, `short_description`, `instructor__first_name`, `instructor__last_name`. Ordering fields: `title`, `published_at`, `enrollment_count`. Default: `-published_at`. |
 | — | Category courses_count | Added `courses_count` annotated field to `CategorySerializer` and `PublicCategoryViewSet` queryset (`Count` + `Q` for published courses only) |
+| — | InvoiceViewSet date filters | Added `from_date`/`to_date` query params to `InvoiceViewSet.list()` |
+| — | EnrollmentViewSet search | Added `search` filter (user name/email, course title) to `EnrollmentViewSet.get_queryset()` |
+| — | SessionProgressViewSet filters | Implemented `enrollment`, `session`, `course` filters (were documented in OpenAPI but not implemented) |
 
 ---
 
