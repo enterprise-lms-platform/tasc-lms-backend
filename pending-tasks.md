@@ -597,6 +597,113 @@ class LivestreamSessionAdmin(admin.ModelAdmin):
 
 ---
 
+## CRITICAL — Infrastructure for 1000 Concurrent Users
+
+> **Why this section exists:** A scalability audit identified that the application code is solid, but infrastructure configuration has gaps that would cause failures under production load (1000+ concurrent users). These are config changes, not code rewrites.
+
+### 25. Redis Integration (Caching + Celery Broker)
+
+**Why:** Currently there is no caching layer at all — every request hits the database, including session lookups. Celery uses `"django://"` (database) as its broker, meaning the task queue competes with application queries on the same PostgreSQL instance. Under load, this becomes the primary bottleneck.
+
+**What to do:**
+
+**a) Install and configure Redis:**
+- Add `redis` and `django-redis` to `requirements.txt`
+- Add to `config/settings.py`:
+```python
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://redis:6379/0",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+SESSION_CACHE_ALIAS = "default"
+```
+
+**b) Switch Celery to Redis broker:**
+```python
+CELERY_BROKER_URL = "redis://redis:6379/1"
+CELERY_RESULT_BACKEND = "redis://redis:6379/2"
+```
+Currently set to `"django://"` and `"django-db"` (lines 375-377 in settings.py).
+
+**c) Add Redis to docker-compose:**
+```yaml
+redis:
+  image: redis:7-alpine
+  restart: unless-stopped
+  ports:
+    - "127.0.0.1:6379:6379"
+```
+
+**Impact:** Eliminates DB as bottleneck for sessions, caching, and async tasks.
+
+---
+
+### 26. Database Connection Pooling
+
+**Why:** Without connection pooling, each request opens a new PostgreSQL connection and closes it when done. At 1000 concurrent users, this exhausts PostgreSQL's default `max_connections` (100) and causes connection refused errors. `psycopg-pool` is already in `requirements.txt` (line 65) but is not configured.
+
+**What to do:**
+
+Add to `DATABASES` config in `config/settings.py`:
+```python
+DATABASES = {
+    "default": {
+        # ... existing ENGINE, NAME, USER, PASSWORD, HOST, PORT ...
+        "CONN_MAX_AGE": 600,          # Keep connections alive for 10 min
+        "OPTIONS": {
+            "pool": {
+                "min_size": 5,
+                "max_size": 20,
+            }
+        }
+    }
+}
+```
+
+`CONN_MAX_AGE=600` alone gives a significant improvement. The `pool` option requires `psycopg[pool]` (psycopg v3) — verify the current psycopg version supports it, otherwise use `django-db-connection-pool`.
+
+**Impact:** Reduces connection overhead from ~5ms/request to near-zero; prevents connection exhaustion.
+
+---
+
+### 27. Gunicorn Worker Scaling
+
+**Why:** The Dockerfile hardcodes `--workers 3`. Each gunicorn worker handles one request at a time (sync). With 3 workers, only 3 requests can be processed simultaneously — at 1000 concurrent users, requests queue up and timeout.
+
+**Current config** (`Dockerfile` line 24 and `docker-compose.staging.yml` line 41):
+```bash
+gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+```
+
+**What to change:**
+```bash
+gunicorn config.wsgi:application \
+  --bind 0.0.0.0:8000 \
+  --workers 8 \
+  --threads 4 \
+  --worker-class gthread \
+  --timeout 120 \
+  --max-requests 1000 \
+  --max-requests-jitter 50
+```
+
+- `--workers 8`: Rule of thumb is `(2 × CPU cores) + 1`. 8 workers handles ~1200 req/sec.
+- `--threads 4`: Each worker handles 4 concurrent requests (32 total slots).
+- `--worker-class gthread`: Threaded workers for I/O-bound Django views.
+- `--max-requests 1000`: Recycle workers to prevent memory leaks.
+
+**Alternative:** Use `--worker-class gevent` with `--worker-connections 1000` for even higher concurrency (requires `pip install gevent`).
+
+**Impact:** Increases concurrent request capacity from 3 to 32 (or 1000+ with gevent).
+
+---
+
 ## Configuration TODOs
 
 - Set `ZOOM_WEBHOOK_SECRET` in production settings
