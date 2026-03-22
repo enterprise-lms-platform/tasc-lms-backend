@@ -228,6 +228,244 @@ Bulk grade and statistics actions are now implemented. Still missing:
 
 ---
 
+## HIGH — Missing Endpoints (Frontend Blocked)
+
+### 18. Analytics Aggregation Endpoints
+
+**Why:** Manager, Instructor, Finance, and Superadmin analytics pages all have charts that need time-series data. Currently these charts use hardcoded or `Math.random()` placeholder data on the frontend.
+
+**Endpoints needed:**
+
+**a) Enrollment trends:**
+```
+GET /api/v1/learning/analytics/enrollment-trends/?period=monthly&months=6
+```
+Response:
+```json
+{
+  "labels": ["Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"],
+  "data": [45, 62, 58, 71, 89, 95]
+}
+```
+- Aggregate from `Enrollment.created_at`, group by month/week
+- Scope by `request.user.role`: managers see their org only, instructors see their courses only, superadmin sees all
+
+**b) Engagement metrics:**
+```
+GET /api/v1/learning/analytics/engagement/?period=weekly&weeks=4
+```
+Response:
+```json
+{
+  "labels": ["Week 1", "Week 2", "Week 3", "Week 4"],
+  "active_learners": [120, 135, 142, 158],
+  "avg_session_minutes": [45, 52, 48, 55]
+}
+```
+- Derive from `SessionProgress` or `Enrollment` activity timestamps
+
+**c) Revenue over time (Finance):**
+```
+GET /api/v1/payments/analytics/revenue/?period=monthly&months=6
+```
+Response:
+```json
+{
+  "labels": ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"],
+  "revenue": [12500, 15200, 14800, 18900, 21000, 23500],
+  "currency": "USD"
+}
+```
+- Aggregate from `Transaction` where `status=completed`, group by month
+
+**Frontend blocking:** Analytics pages #2, #3, #4, #5
+
+---
+
+### 19. Certificate PDF Generation
+
+**Why:** `Certificate` model exists but `pdf_url` is never populated. Frontend certificates page falls back to mock data because there's no real PDF to download.
+
+**What to implement:**
+- Install `reportlab` or `weasyprint`
+- Create `apps/learning/services/certificate_generator.py`
+- Generate PDF with: learner name, course title, completion date, certificate ID, QR code linking to `/verify-certificate/{id}`
+- Upload to S3 (or local media) and populate `Certificate.pdf_url`
+- Trigger on course completion (when all sessions marked complete)
+
+**Endpoint:**
+```
+GET /api/v1/learning/certificates/{id}/download/
+```
+- Returns the PDF file or redirects to S3 URL
+
+**Frontend blocking:** LearnerCertificatesPage (#8, #50)
+
+---
+
+### 20. Bulk Enrollment Endpoint
+
+**Why:** `ManagerBulkEnrollPage` needs to enroll multiple users into a course at once. Currently no bulk endpoint exists.
+
+**Endpoint:**
+```
+POST /api/v1/manager/enrollments/bulk/
+```
+Request:
+```json
+{
+  "course": 5,
+  "user_ids": [12, 15, 18, 22, 31]
+}
+```
+Response:
+```json
+{
+  "enrolled": 4,
+  "already_enrolled": 1,
+  "failed": 0,
+  "errors": []
+}
+```
+- Permission: `IsLmsManager` — auto-scope to manager's organization users only
+- Use `transaction.atomic()` and `bulk_create()` with `ignore_conflicts=True`
+
+**Frontend blocking:** ManagerBulkEnrollPage (#20)
+
+---
+
+### 21. Session Attachments / Resources Endpoint
+
+**Why:** CoursePlayerPage has a "Resources" tab that currently uses `sampleResources[]` hardcoded data. There's no backend support for attaching downloadable files to lessons/sessions.
+
+**Model:**
+```python
+class SessionAttachment(models.Model):
+    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='attachments')
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to='session_attachments/')
+    file_type = models.CharField(max_length=50)  # pdf, zip, code, etc.
+    file_size = models.PositiveIntegerField()  # bytes
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+**Endpoints:**
+```
+GET  /api/v1/catalogue/sessions/{id}/attachments/   — list resources for a session
+POST /api/v1/catalogue/sessions/{id}/attachments/   — upload (instructor/manager only)
+DELETE /api/v1/catalogue/sessions/{id}/attachments/{attachment_id}/
+```
+
+**Frontend blocking:** CoursePlayerPage Resources tab (#10)
+
+---
+
+### 22. Security Metrics Endpoint
+
+**Why:** Superadmin `SecurityPage` displays active sessions, login attempts, and security KPIs — all currently hardcoded.
+
+**Endpoints:**
+
+**a) Active sessions:**
+```
+GET /api/v1/superadmin/security/sessions/
+```
+Response:
+```json
+[
+  {
+    "user": { "id": 5, "email": "user@example.com", "full_name": "John Doe" },
+    "ip_address": "192.168.1.1",
+    "user_agent": "Chrome/120",
+    "last_activity": "2026-03-22T10:30:00Z",
+    "created_at": "2026-03-22T08:00:00Z"
+  }
+]
+```
+- Derive from Django sessions or a custom `UserSession` model tracking login/activity
+
+**b) Security stats:**
+```
+GET /api/v1/superadmin/security/stats/
+```
+Response:
+```json
+{
+  "active_sessions": 42,
+  "failed_logins_today": 7,
+  "locked_accounts": 2,
+  "mfa_adoption_percent": 35
+}
+```
+- `failed_logins_today`: count users where `failed_login_attempts > 0` and last attempt is today
+- `locked_accounts`: count users where `account_locked_until > now()`
+
+**Frontend blocking:** SecurityPage (#26)
+
+---
+
+### 23. B2B / Organization Pricing Tiers
+
+**Why:** The `/for-business` page displays 3 hardcoded B2B pricing tiers (Team $15, Business $20, Enterprise $25). Current `Subscription` model is learner-focused.
+
+**Options:**
+- Add `tier_type` field to `Subscription` (`individual` vs `organization`) and create org plans via admin
+- Or create a separate `OrganizationPlan` model with `max_seats`, `price_per_seat`, etc.
+
+**Endpoint:**
+```
+GET /api/v1/public/business-plans/
+```
+Response:
+```json
+[
+  { "name": "Team", "price_per_seat": "15.00", "max_seats": 25, "billing_cycle": "monthly", "features": [...] },
+  { "name": "Business", "price_per_seat": "20.00", "max_seats": 100, "billing_cycle": "monthly", "features": [...] },
+  { "name": "Enterprise", "price_per_seat": "25.00", "max_seats": null, "billing_cycle": "monthly", "features": [...] }
+]
+```
+
+**Frontend blocking:** PricingSection (#34)
+
+**Severity:** LOW — acceptable as hardcoded marketing content for now.
+
+---
+
+### 24. Messaging / Inbox API
+
+**Why:** `InstructorMessagesPage` has 6+ hardcoded conversation objects. No messaging infrastructure exists.
+
+**Models needed:**
+```python
+class Conversation(models.Model):
+    participants = models.ManyToManyField(User)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class Message(models.Model):
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE)
+    sender = models.ForeignKey(User, on_delete=models.CASCADE)
+    content = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+**Endpoints:**
+```
+GET    /api/v1/messaging/conversations/           — list user's conversations
+POST   /api/v1/messaging/conversations/           — start new conversation
+GET    /api/v1/messaging/conversations/{id}/messages/  — list messages
+POST   /api/v1/messaging/conversations/{id}/messages/  — send message
+POST   /api/v1/messaging/conversations/{id}/read/      — mark all read
+```
+
+**Frontend blocking:** InstructorMessagesPage (#11)
+
+**Severity:** LOW — this is a larger feature that can be deferred.
+
+---
+
 ## LOW — Remaining Services & Templates
 
 ### 8. Email Templates
