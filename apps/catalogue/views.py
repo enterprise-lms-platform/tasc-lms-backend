@@ -37,7 +37,7 @@ from .serializers import (
     QuizSettingsUpdateSerializer,
     SessionCreateSerializer, SessionSerializer,
     TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
-    CourseReviewSummarySerializer, CourseApprovalRequestSerializer,
+    CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer,
 )
 
 User = get_user_model()
@@ -556,7 +556,8 @@ class CourseViewSet(viewsets.ModelViewSet):
                 status=CourseApprovalRequest.Status.PENDING,
             )
             course.status = Course.Status.PENDING_APPROVAL
-            course.save(update_fields=['status', 'updated_at'])
+            course.rejection_reason = ''  # Clear on resubmit
+            course.save(update_fields=['status', 'rejection_reason', 'updated_at'])
 
         from apps.audit.services import log_event
         log_event(
@@ -633,6 +634,96 @@ class CourseApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
             except (ValueError, TypeError):
                 pass
         return queryset.order_by('-created_at')
+
+    @extend_schema(
+        summary='Approve course',
+        description='Approve a pending approval request. Sets course status to published.',
+        request=ApproveActionSerializer,
+        responses={200: CourseApprovalRequestSerializer},
+    )
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        approval = self.get_object()
+        if approval.status != CourseApprovalRequest.Status.PENDING:
+            raise ValidationError({
+                'detail': f'Only pending requests can be approved. Current status: {approval.status}.'
+            })
+
+        serializer = ApproveActionSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        comments = (serializer.validated_data.get('reviewer_comments') or '').strip()
+
+        with transaction.atomic():
+            approval.status = CourseApprovalRequest.Status.APPROVED
+            approval.reviewed_by = request.user
+            approval.reviewed_at = timezone.now()
+            approval.reviewer_comments = comments
+            approval.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'reviewer_comments', 'updated_at'])
+
+            course = approval.course
+            course.status = Course.Status.PUBLISHED
+            if course.published_at is None:
+                course.published_at = timezone.now()
+            course.rejection_reason = ''
+            course.save(update_fields=['status', 'published_at', 'rejection_reason', 'updated_at'])
+
+        from apps.audit.services import log_event
+        log_event(
+            action='updated',
+            resource='course',
+            resource_id=str(course.id),
+            actor=request.user,
+            request=request,
+            details=f"Course approved: {course.title} (approval #{approval.id})",
+        )
+
+        out_serializer = CourseApprovalRequestSerializer(approval)
+        return Response(out_serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary='Reject course',
+        description='Reject a pending approval request. reviewer_comments is required. Sets course status to rejected.',
+        request=RejectActionSerializer,
+        responses={200: CourseApprovalRequestSerializer},
+    )
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        approval = self.get_object()
+        if approval.status != CourseApprovalRequest.Status.PENDING:
+            raise ValidationError({
+                'detail': f'Only pending requests can be rejected. Current status: {approval.status}.'
+            })
+
+        serializer = RejectActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        comments = (serializer.validated_data.get('reviewer_comments') or '').strip()
+        if not comments:
+            raise ValidationError({'reviewer_comments': ['A reason for rejection is required.']})
+
+        with transaction.atomic():
+            approval.status = CourseApprovalRequest.Status.REJECTED
+            approval.reviewed_by = request.user
+            approval.reviewed_at = timezone.now()
+            approval.reviewer_comments = comments
+            approval.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'reviewer_comments', 'updated_at'])
+
+            course = approval.course
+            course.status = Course.Status.REJECTED
+            course.rejection_reason = comments
+            course.save(update_fields=['status', 'rejection_reason', 'updated_at'])
+
+        from apps.audit.services import log_event
+        log_event(
+            action='updated',
+            resource='course',
+            resource_id=str(course.id),
+            actor=request.user,
+            request=request,
+            details=f"Course rejected: {course.title} (approval #{approval.id})",
+        )
+
+        out_serializer = CourseApprovalRequestSerializer(approval)
+        return Response(out_serializer.data, status=status.HTTP_200_OK)
 
 
 @extend_schema(

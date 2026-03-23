@@ -620,7 +620,7 @@ class CourseListSerializer(serializers.ModelSerializer):
             'duration_hours', 'duration_weeks', 'total_sessions',
             'instructor', 'instructor_name',
             'enrollment_count',
-            'featured', 'status', 'published_at', 'access_duration', 'allow_self_enrollment',
+            'featured', 'status', 'rejection_reason', 'published_at', 'access_duration', 'allow_self_enrollment',
             'is_free', 'enrollment_status', 'enrollment_id', 'progress_percentage', 'enrolled_at',
         ]
         read_only_fields = ['id', 'enrollment_count']
@@ -948,3 +948,13 @@ class CourseApprovalRequestSerializer(serializers.ModelSerializer):
 
     def get_reviewed_by_name(self, obj):
         return obj.reviewed_by.get_full_name() or obj.reviewed_by.email if obj.reviewed_by else None
+
+
+class ApproveActionSerializer(serializers.Serializer):
+    """Optional body for approve action."""
+    reviewer_comments = serializers.CharField(required=False, allow_blank=True)
+
+
+class RejectActionSerializer(serializers.Serializer):
+    """Required body for reject action."""
+    reviewer_comments = serializers.CharField(required=True, allow_blank=False)

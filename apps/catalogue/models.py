@@ -101,6 +101,10 @@ class Course(models.Model):
 
     # Settings
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    rejection_reason = models.TextField(
+        blank=True,
+        help_text='Reason provided by reviewer when course was rejected; cleared on resubmit.',
+    )
     featured = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
     access_duration = models.CharField(max_length=50, default='lifetime', blank=True)
