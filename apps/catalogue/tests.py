@@ -2254,3 +2254,183 @@ class CourseApprovalWorkflowTest(APITestCase):
     def test_unauthenticated_cannot_list_approval_requests(self):
         response = self.client.get(APPROVAL_REQUESTS_URL)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ---------------------------------------------------------------------------
+# Course approval workflow Phase 2 (approve/reject)
+# ---------------------------------------------------------------------------
+
+class CourseApprovalPhase2Test(APITestCase):
+    """Tests for approve and reject actions."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_p2')
+        self.manager = _make_manager(suffix='_p2')
+        self.admin = User.objects.create_user(
+            username='admin_p2',
+            email='admin_p2@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Course for Phase 2',
+            description='desc',
+            slug='course-phase-2',
+            status=Course.Status.PENDING_APPROVAL,
+            instructor=self.instructor,
+            created_by=self.instructor,
+            category=category,
+        )
+        self.approval = CourseApprovalRequest.objects.create(
+            course=self.course,
+            request_type='create',
+            requested_by=self.instructor,
+            status='pending',
+        )
+
+    def _approve_url(self):
+        return f'{APPROVAL_REQUESTS_URL}{self.approval.id}/approve/'
+
+    def _reject_url(self):
+        return f'{APPROVAL_REQUESTS_URL}{self.approval.id}/reject/'
+
+    def test_manager_can_approve_pending_request(self):
+        response = self.client.post(self._approve_url(), {}, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.approval.refresh_from_db()
+        self.course.refresh_from_db()
+        self.assertEqual(self.approval.status, 'approved')
+        self.assertEqual(self.approval.reviewed_by_id, self.manager.id)
+        self.assertIsNotNone(self.approval.reviewed_at)
+        self.assertEqual(self.course.status, Course.Status.PUBLISHED)
+        self.assertIsNotNone(self.course.published_at)
+
+    def test_admin_can_approve_pending_request(self):
+        response = self.client.post(self._approve_url(), {}, **_auth(self.admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.approval.refresh_from_db()
+        self.course.refresh_from_db()
+        self.assertEqual(self.approval.status, 'approved')
+        self.assertEqual(self.course.status, Course.Status.PUBLISHED)
+
+    def test_manager_can_reject_pending_request_with_comments(self):
+        response = self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': 'Needs more learning objectives.'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.approval.refresh_from_db()
+        self.course.refresh_from_db()
+        self.assertEqual(self.approval.status, 'rejected')
+        self.assertEqual(self.approval.reviewer_comments, 'Needs more learning objectives.')
+        self.assertEqual(self.approval.reviewed_by_id, self.manager.id)
+        self.assertIsNotNone(self.approval.reviewed_at)
+        self.assertEqual(self.course.status, Course.Status.REJECTED)
+        self.assertEqual(self.course.rejection_reason, 'Needs more learning objectives.')
+
+    def test_reject_without_comments_fails(self):
+        response = self.client.post(
+            self._reject_url(),
+            {},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('reviewer_comments', str(response.data))
+
+    def test_reject_with_empty_comments_fails(self):
+        response = self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': '   '},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_instructor_cannot_approve(self):
+        response = self.client.post(self._approve_url(), {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_instructor_cannot_reject(self):
+        response = self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': 'Rejected'},
+            format='json',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_pending_request_cannot_be_approved_twice(self):
+        self.client.post(self._approve_url(), {}, **_auth(self.manager))
+        response = self.client.post(self._approve_url(), {}, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Only pending', str(response.data))
+
+    def test_pending_request_cannot_be_rejected_after_approval(self):
+        self.client.post(self._approve_url(), {}, **_auth(self.manager))
+        response = self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': 'Too late'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Only pending', str(response.data))
+
+    def test_rejected_request_cannot_be_approved_again(self):
+        self.approval.status = 'rejected'
+        self.approval.save()
+        response = self.client.post(self._approve_url(), {}, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rejection_reason_exposed_on_course_detail(self):
+        self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': 'Add more prerequisites.'},
+            format='json',
+            **_auth(self.manager),
+        )
+        response = self.client.get(
+            f'{COURSES_URL}{self.course.id}/',
+            **_auth(self.instructor),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'rejected')
+        self.assertEqual(response.data['rejection_reason'], 'Add more prerequisites.')
+
+    def test_approve_with_optional_comments(self):
+        response = self.client.post(
+            self._approve_url(),
+            {'reviewer_comments': 'Great course!'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.approval.refresh_from_db()
+        self.assertEqual(self.approval.reviewer_comments, 'Great course!')
+
+    def test_rejected_course_can_resubmit_and_rejection_reason_cleared(self):
+        """Resubmit after reject clears rejection_reason."""
+        self.client.post(
+            self._reject_url(),
+            {'reviewer_comments': 'Needs work'},
+            format='json',
+            **_auth(self.manager),
+        )
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.rejection_reason, 'Needs work')
+
+        # Create new approval request (simulating resubmit - in reality instructor would call submit-for-approval)
+        # submit-for-approval creates new request and clears rejection_reason
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        response = self.client.post(url, {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.rejection_reason, '')
+        self.assertEqual(self.course.status, Course.Status.PENDING_APPROVAL)
