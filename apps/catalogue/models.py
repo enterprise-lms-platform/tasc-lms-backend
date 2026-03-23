@@ -42,7 +42,9 @@ class Course(models.Model):
 
     class Status(models.TextChoices):
         DRAFT = 'draft', 'Draft'
+        PENDING_APPROVAL = 'pending_approval', 'Pending Approval'
         PUBLISHED = 'published', 'Published'
+        REJECTED = 'rejected', 'Rejected'
         ARCHIVED = 'archived', 'Archived'
 
     # Basic Information
@@ -160,6 +162,63 @@ class Course(models.Model):
     @property
     def enrollment_count(self):
         return self.enrollments.count()
+
+
+class CourseApprovalRequest(models.Model):
+    """
+    Represents a request to publish or modify a course, reviewed by LMS Manager or TASC Admin.
+    """
+    class RequestType(models.TextChoices):
+        CREATE = 'create', 'Create'
+        EDIT = 'edit', 'Edit'
+        DELETE = 'delete', 'Delete'
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='approval_requests',
+    )
+    request_type = models.CharField(
+        max_length=20,
+        choices=RequestType.choices,
+        default=RequestType.CREATE,
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='course_approval_requests',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    reviewer_comments = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_approval_requests',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['course', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_request_type_display()} for {self.course.title} ({self.status})"
 
 
 class Module(models.Model):

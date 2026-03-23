@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
+from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
 
 
 def _get_user_enrollment(user, course):
@@ -923,3 +923,28 @@ class CourseReviewSummarySerializer(serializers.Serializer):
     total = serializers.IntegerField()
     distribution = serializers.ListField(child=serializers.IntegerField())
     reviews = CourseReviewSerializer(many=True)
+
+
+class CourseApprovalRequestSerializer(serializers.ModelSerializer):
+    """Serializer for CourseApprovalRequest list and detail."""
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    course_thumbnail = serializers.URLField(source='course.thumbnail', read_only=True, allow_null=True)
+    requested_by_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
+    submitted_at = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = CourseApprovalRequest
+        fields = [
+            'id', 'course', 'course_title', 'course_thumbnail',
+            'request_type', 'requested_by', 'requested_by_name',
+            'status', 'reviewer_comments', 'reviewed_by', 'reviewed_by_name',
+            'submitted_at', 'reviewed_at', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_requested_by_name(self, obj):
+        return obj.requested_by.get_full_name() or obj.requested_by.email if obj.requested_by else ''
+
+    def get_reviewed_by_name(self, obj):
+        return obj.reviewed_by.get_full_name() or obj.reviewed_by.email if obj.reviewed_by else None

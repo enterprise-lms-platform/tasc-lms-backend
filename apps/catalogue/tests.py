@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.learning.models import Enrollment
 from apps.payments.models import Subscription, UserSubscription
 
-from .models import Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
+from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag
 
 
 def _grant_subscription(user, days=180):
@@ -2109,3 +2109,148 @@ class PublicCatalogAccessTest(APITestCase):
     def test_public_courses_list_no_auth_returns_200(self):
         response = self.client.get('/api/v1/public/courses/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Course approval workflow (Phase 1)
+# ---------------------------------------------------------------------------
+
+APPROVAL_REQUESTS_URL = '/api/v1/catalogue/approval-requests/'
+
+
+class CourseApprovalWorkflowTest(APITestCase):
+    """Tests for submit-for-approval and approval request list/detail."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = _make_instructor(suffix='_approval')
+        self.other_instructor = _make_instructor(suffix='_other')
+        self.manager = _make_manager(suffix='_approval')
+        self.admin = User.objects.create_user(
+            username='admin_approval',
+            email='admin_approval@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner = User.objects.create_user(
+            username='learner_approval',
+            email='learner_approval@example.com',
+            password='pass1234',
+            role='learner',
+            email_verified=True,
+            is_active=True,
+        )
+        category = _make_category()
+        self.course = Course.objects.create(
+            title='Draft Course for Approval',
+            description='desc',
+            slug='draft-course-approval',
+            status=Course.Status.DRAFT,
+            instructor=self.instructor,
+            created_by=self.instructor,
+            category=category,
+        )
+
+    def test_instructor_can_submit_own_draft_for_approval(self):
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        response = self.client.post(url, {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'pending_approval')
+        self.assertTrue(
+            CourseApprovalRequest.objects.filter(course=self.course, status='pending').exists()
+        )
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.status, Course.Status.PENDING_APPROVAL)
+
+    def test_duplicate_submit_prevented(self):
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        self.client.post(url, {}, **_auth(self.instructor))
+        response = self.client.post(url, {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already has a pending', str(response.data))
+
+    def test_cannot_submit_published_course(self):
+        self.course.status = Course.Status.PUBLISHED
+        self.course.save()
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        response = self.client.post(url, {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Only draft or rejected', str(response.data))
+
+    def test_instructor_cannot_submit_other_instructors_course(self):
+        self.course.instructor = self.other_instructor
+        self.course.save()
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        response = self.client.post(url, {}, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_manager_can_list_approval_requests(self):
+        CourseApprovalRequest.objects.create(
+            course=self.course,
+            request_type='create',
+            requested_by=self.instructor,
+            status='pending',
+        )
+        response = self.client.get(APPROVAL_REQUESTS_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        self.assertGreaterEqual(len(results), 1)
+        self.assertEqual(results[0]['course_title'], self.course.title)
+
+    def test_admin_can_list_approval_requests(self):
+        CourseApprovalRequest.objects.create(
+            course=self.course,
+            request_type='create',
+            requested_by=self.instructor,
+            status='pending',
+        )
+        response = self.client.get(APPROVAL_REQUESTS_URL, **_auth(self.admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_instructor_cannot_list_approval_requests(self):
+        response = self.client.get(APPROVAL_REQUESTS_URL, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_learner_cannot_list_approval_requests(self):
+        response = self.client.get(APPROVAL_REQUESTS_URL, **_auth(self.learner))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_manager_can_retrieve_approval_request_detail(self):
+        approval = CourseApprovalRequest.objects.create(
+            course=self.course,
+            request_type='create',
+            requested_by=self.instructor,
+            status='pending',
+        )
+        url = f'{APPROVAL_REQUESTS_URL}{approval.id}/'
+        response = self.client.get(url, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], approval.id)
+        self.assertEqual(response.data['course'], self.course.id)
+        self.assertEqual(response.data['course_title'], self.course.title)
+        self.assertEqual(response.data['status'], 'pending')
+        self.assertEqual(response.data['request_type'], 'create')
+        self.assertIn('requested_by_name', response.data)
+        self.assertIn('submitted_at', response.data)
+
+    def test_instructor_cannot_retrieve_approval_request_detail(self):
+        approval = CourseApprovalRequest.objects.create(
+            course=self.course,
+            request_type='create',
+            requested_by=self.instructor,
+            status='pending',
+        )
+        url = f'{APPROVAL_REQUESTS_URL}{approval.id}/'
+        response = self.client.get(url, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_submit_for_approval(self):
+        url = f'{COURSES_URL}{self.course.id}/submit-for-approval/'
+        response = self.client.post(url, {})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unauthenticated_cannot_list_approval_requests(self):
+        response = self.client.get(APPROVAL_REQUESTS_URL)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
