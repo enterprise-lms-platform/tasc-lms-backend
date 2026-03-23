@@ -267,6 +267,14 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class PublicSubscriptionPlanSerializer(serializers.ModelSerializer):
+    """Minimal serializer for public landing page pricing. No internal/admin fields."""
+
+    class Meta:
+        model = Subscription
+        fields = ['id', 'name', 'description', 'price', 'currency', 'billing_cycle', 'features', 'status']
+
+
 class SubscriptionCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating subscriptions."""
     
