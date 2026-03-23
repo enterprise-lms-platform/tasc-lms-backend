@@ -5,6 +5,7 @@ from .views import (
     TagViewSet,
     CategoryViewSet,
     CourseViewSet,
+    CourseApprovalRequestViewSet,
     ModuleViewSet,
     SessionViewSet,
     QuestionCategoryViewSet,
@@ -18,6 +19,7 @@ router.register(r'question-categories', QuestionCategoryViewSet, basename='quest
 router.register(r'bank-questions', BankQuestionViewSet, basename='bank-question')
 router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'courses', CourseViewSet, basename='course')
+router.register(r'approval-requests', CourseApprovalRequestViewSet, basename='approval-request')
 router.register(r'modules', ModuleViewSet, basename='module')
 router.register(r'sessions', SessionViewSet, basename='session')
 router.register(r'course-reviews', CourseReviewViewSet, basename='course-review')

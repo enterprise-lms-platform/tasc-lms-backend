@@ -116,3 +116,12 @@ class CanEditBankQuestion(BasePermission):
         if role == User.Role.INSTRUCTOR:
             return obj.owner_id == request.user.id
         return False
+
+
+class IsApprovalManager(BasePermission):
+    """
+    Only LMS Manager and TASC Admin can list and view approval requests.
+    """
+    def has_permission(self, request, view):
+        role = getattr(request.user, 'role', None)
+        return role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN)

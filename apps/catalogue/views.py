@@ -18,13 +18,13 @@ from apps.payments.permissions import HasActiveSubscription
 from apps.learning.models import Enrollment
 
 from .models import (
-    Assignment, BankQuestion, Category, Course, Module, Quiz, QuizQuestion,
-    QuestionCategory, Session, Tag, CourseReview
+    Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module,
+    Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
 )
 from .permissions import (
     CanEditBankQuestion, CanEditQuestionCategory, CanEditCourse,
     CanDeleteCourse, CanEditModuleCourse, CanEditSessionCourse,
-    IsCategoryManagerOrReadOnly, IsCourseWriter,
+    IsApprovalManager, IsCategoryManagerOrReadOnly, IsCourseWriter,
 )
 from .serializers import (
     AddFromBankSerializer, AssignmentCreateUpdateSerializer, AssignmentSerializer,
@@ -37,7 +37,7 @@ from .serializers import (
     QuizSettingsUpdateSerializer,
     SessionCreateSerializer, SessionSerializer,
     TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
-    CourseReviewSummarySerializer,
+    CourseReviewSummarySerializer, CourseApprovalRequestSerializer,
 )
 
 User = get_user_model()
@@ -246,7 +246,7 @@ class CourseViewSet(viewsets.ModelViewSet):
             else:
                 queryset = queryset.exclude(status=Course.Status.PUBLISHED)
 
-        if self.action in ('update', 'partial_update', 'destroy'):
+        if self.action in ('update', 'partial_update', 'destroy', 'submit_for_approval'):
             role = getattr(self.request.user, 'role', None)
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(instructor_id=self.request.user.id)
@@ -519,6 +519,59 @@ class CourseViewSet(viewsets.ModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
+        summary='Submit course for approval',
+        description='Submit a draft or rejected course for manager review. Creates an approval request and sets course status to pending_approval. Only the course owner (instructor) or manager/admin can submit.',
+        responses={200: CourseDetailSerializer},
+    )
+    @action(detail=True, methods=['post'], url_path='submit-for-approval')
+    def submit_for_approval(self, request, pk=None):
+        course = self.get_object()
+
+        # Prevent duplicate pending requests (check first, before status)
+        if CourseApprovalRequest.objects.filter(
+            course=course,
+            status=CourseApprovalRequest.Status.PENDING,
+        ).exists():
+            raise ValidationError({
+                'detail': 'This course already has a pending approval request.'
+            })
+
+        # Only draft or rejected courses can be submitted
+        if course.status not in (Course.Status.DRAFT, Course.Status.REJECTED):
+            raise ValidationError({
+                'detail': f'Only draft or rejected courses can be submitted for approval. Current status: {course.status}.'
+            })
+
+        # Determine request_type: create for first submission, edit for resubmission
+        has_prior = CourseApprovalRequest.objects.filter(course=course).exclude(
+            status=CourseApprovalRequest.Status.PENDING,
+        ).exists()
+        request_type = CourseApprovalRequest.RequestType.EDIT if has_prior else CourseApprovalRequest.RequestType.CREATE
+
+        with transaction.atomic():
+            approval = CourseApprovalRequest.objects.create(
+                course=course,
+                request_type=request_type,
+                requested_by=request.user,
+                status=CourseApprovalRequest.Status.PENDING,
+            )
+            course.status = Course.Status.PENDING_APPROVAL
+            course.save(update_fields=['status', 'updated_at'])
+
+        from apps.audit.services import log_event
+        log_event(
+            action='submitted_for_approval',
+            resource='course',
+            resource_id=str(course.id),
+            actor=request.user,
+            request=request,
+            details=f"Course submitted for approval: {course.title} (request #{approval.id})",
+        )
+
+        serializer = CourseDetailSerializer(course, context=self.get_serializer_context())
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
         summary='Delete course',
         description='Delete a course. Only LMS Manager or TASC Admin can delete.',
         responses={204: None},
@@ -550,6 +603,36 @@ class CourseViewSet(viewsets.ModelViewSet):
             details=f"Course deleted: {instance.title} (status={instance.status})",
         )
         return super().destroy(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Catalogue - Course Approvals'],
+    description='List and view course approval requests (LMS Manager / TASC Admin only)',
+)
+class CourseApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for approval requests. List and retrieve only (Phase 1)."""
+    queryset = CourseApprovalRequest.objects.select_related('course', 'requested_by', 'reviewed_by')
+    serializer_class = CourseApprovalRequestSerializer
+    permission_classes = [IsAuthenticated, IsApprovalManager]
+    pagination_class = CataloguePageNumberPagination
+
+    def get_queryset(self):
+        queryset = CourseApprovalRequest.objects.select_related(
+            'course', 'requested_by', 'reviewed_by'
+        )
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        request_type = self.request.query_params.get('request_type')
+        if request_type:
+            queryset = queryset.filter(request_type=request_type)
+        course_id = self.request.query_params.get('course')
+        if course_id is not None:
+            try:
+                queryset = queryset.filter(course_id=int(course_id))
+            except (ValueError, TypeError):
+                pass
+        return queryset.order_by('-created_at')
 
 
 @extend_schema(
