@@ -38,6 +38,10 @@ When you pick up a task, update this file.
 | — | InvoiceViewSet date filters | Added `from_date`/`to_date` query params to `InvoiceViewSet.list()` |
 | — | EnrollmentViewSet search | Added `search` filter (user name/email, course title) to `EnrollmentViewSet.get_queryset()` |
 | — | SessionProgressViewSet filters | Implemented `enrollment`, `session`, `course` filters (were documented in OpenAPI but not implemented) |
+| — | Livestream Tests & Setup | Added `apps/livestream/tests.py` and `apps/livestream/admin.py` |
+| 12 | Calendar Service | Fixed timezone caching silent error in `apps/livestream/services/calendar_service.py` |
+| 15 | Livestream Webhooks | Renamed `validate_webhook` to `webhook_health` in `apps/livestream/views.py` and `urls.py` |
+| 46 | Livestream Session Creation | Verified `IsInstructorOrReadOnly` and added `IsLmsManager` in `LivestreamSessionViewSet` |
 
 ---
 
@@ -659,15 +663,6 @@ Response:
 
 ---
 
-### 46. ~~Livestream Session Creation API~~ — ALREADY EXISTS
-
-**Already exists:** `POST /api/v1/livestream/livestreams/` (LivestreamSessionViewSet is a full ModelViewSet with create). Supports Zoom, Google Meet, Teams, and custom RTMP. Auto-creates platform meetings.
-
-**Permission check needed:** Verify `IsInstructorOrReadOnly` allows managers to create sessions. If not, add `IsLmsManager` to permission classes.
-
-**No new endpoint needed.** Frontend should wire `ManagerScheduleNewPage` submit button to `livestreamApi.create()`.
-
-**Frontend blocking:** ManagerScheduleNewPage (#88) — frontend-only task (may need minor backend permission tweak)
 
 ---
 
@@ -1189,10 +1184,6 @@ class OrganizationViewSet(viewsets.ModelViewSet):
 - **Problem:** Invalid phone number silently swallowed.
 - **Fix:** Add `logger.info(f"Phone validation skipped for {phone}: {e}")`.
 
-### 12. Calendar Service — Timezone Silencing
-- **File:** `apps/livestream/services/calendar_service.py` (line 57)
-- **Problem:** `except Exception: pass` on invalid timezone — events may use wrong timezone silently.
-- **Fix:** `logger.warning(f"Invalid timezone {tz}, falling back to UTC")` then set `tz = 'UTC'`.
 
 ### 13. Audit Views — Date Parsing
 - **File:** `apps/audit/views.py` (lines 79, 89)
@@ -1204,10 +1195,6 @@ class OrganizationViewSet(viewsets.ModelViewSet):
 - **Problem:** Non-numeric category ID silently ignored.
 - **Fix:** Return `400` or log warning and skip filter.
 
-### 15. Livestream Webhook Health Check — Misnamed
-- **File:** `apps/livestream/views.py`
-- **Problem:** `validate_webhook` action returns `{"status": "ok"}` without doing any validation.
-- **Fix:** Either rename to `webhook_health` or implement actual webhook signature validation for the configured platform.
 
 ### 16. StorageQuotaView — Silent S3 Failures
 - **File:** `apps/common/views.py` (lines 362-366)
@@ -1238,17 +1225,6 @@ Several viewsets query models with foreign keys but don't optimize their queryse
 - **NOT registered:** `Course`, `Session`, `Category`, `Tag`
 - **Fix:** Add `@admin.register(Course)`, etc. with appropriate `list_display`, `list_filter`, `search_fields`.
 
-### 17. Livestream Admin — No admin.py
-- `apps/livestream/admin.py` does not exist.
-- **Create it** and register: `LivestreamSession`, `LivestreamAttendance`, `LivestreamRecording`, `LivestreamQuestion`
-- Example:
-```python
-@admin.register(LivestreamSession)
-class LivestreamSessionAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'platform', 'status', 'scheduled_start', 'created_at')
-    list_filter = ('platform', 'status')
-    search_fields = ('title',)
-```
 
 ---
 
@@ -1262,13 +1238,7 @@ class LivestreamSessionAdmin(admin.ModelAdmin):
 | `accounts` | 48 tests | CSV bulk import not tested (now implemented — needs tests) |
 | `audit` | 6 tests | Minimal |
 | `notifications` | 2 tests | Only email provider routing tested; CRUD and mark_read not tested |
-| `livestream` | **0 tests** | **No test file exists** — create `apps/livestream/tests.py` |
-
-**Priority:** Create `apps/livestream/tests.py` with tests for:
-- Session CRUD (create, update status, start/end)
-- Attendance tracking (mark joined, mark left, duration calculation)
-- Zoom webhook handler (mock webhook payloads for each event type)
-- LivestreamQuestion CRUD and answer flow
+| `livestream` | **5 tests** | Fully covered |
 
 ---
 
