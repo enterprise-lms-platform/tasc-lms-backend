@@ -313,6 +313,374 @@ Response:
 
 ---
 
+### 32. Superadmin All Courses — Stats Action (Minor)
+
+**Why:** `AllCoursesPage` displays KPIs (total, published, draft, archived) and a courses table — all hardcoded.
+
+**Already exists:** `CourseViewSet` at `/api/v1/catalogue/courses/` supports list with `status` filter. Frontend can use this for the table.
+
+**Still needed:** Add a `stats` action to `CourseViewSet` (or a new superadmin course view) for efficient KPI counts:
+```
+GET /api/v1/catalogue/courses/stats/
+```
+Response:
+```json
+{
+  "total": 876,
+  "published": 654,
+  "draft": 178,
+  "archived": 44
+}
+```
+- One query: `Course.objects.values('status').annotate(count=Count('id'))`
+- Without this, frontend must fetch all courses just to count statuses
+
+**Frontend can wire now:** Table → `courseApi.getAll({ status, search, page_size })` (existing endpoint)
+**Frontend needs backend for:** KPI stats only
+
+**Frontend blocking:** SuperadminAllCoursesPage (partial — table can be wired now)
+
+---
+
+### 33. Superadmin Assessments — List & Stats Endpoint
+
+**Why:** `AssessmentsPage` shows assessment KPIs and a table of quizzes/assignments — all hardcoded.
+
+**Endpoints needed:**
+
+**a) Assessment stats:**
+```
+GET /api/v1/superadmin/assessments/stats/
+```
+Response:
+```json
+{
+  "total": 892,
+  "pass_rate": 78.5,
+  "active": 34,
+  "total_attempts": 24567
+}
+```
+- Aggregate from `Quiz` + `Assignment` counts, `QuizSubmission` pass rates
+
+**b) Assessment list:**
+```
+GET /api/v1/superadmin/assessments/?type=quiz&status=active&page_size=20
+```
+- Combine quizzes and assignments into a unified list with type, course name, question count, avg score
+
+**Frontend blocking:** SuperadminAssessmentsPage
+
+---
+
+### 34. Superadmin Certifications — Stats Action (Minor)
+
+**Why:** `CertificationsPage` shows certification KPIs (issued, valid, expired, revoked) and a certs table — all hardcoded.
+
+**Already exists:** `CertificateViewSet` at `/api/v1/learning/certificates/` has list + retrieve + verify. Currently scoped to current user's certificates.
+
+**Still needed:**
+- Add superadmin-scoped certificate list (all users' certs, not just mine) — either a new superadmin ViewSet or a role check in existing one
+- Add a `stats` action for KPI counts
+- Optionally add `status` filter if Certificate model has status field
+
+**Frontend can wire now:** Nothing — current endpoint is user-scoped only
+**Frontend needs backend for:** Admin-scoped list + stats
+
+**Frontend blocking:** SuperadminCertificationsPage (depends on #19 Certificate PDF Generation too)
+
+---
+
+### 35. Superadmin Instructors — List & Stats Endpoint
+
+**Why:** `InstructorsPage` shows instructor KPIs and a table — all hardcoded.
+
+**Endpoints needed:**
+
+**a) Instructor stats:**
+```
+GET /api/v1/superadmin/instructors/stats/
+```
+Response:
+```json
+{
+  "total": 156,
+  "active": 142,
+  "avg_rating": 4.6,
+  "total_courses": 876
+}
+```
+- Filter `User.objects.filter(role='instructor')`, annotate with `course_count`, `avg_rating`
+
+**b) Instructor list (may reuse existing users endpoint with `?role=instructor`):**
+```
+GET /api/v1/superadmin/users/?role=instructor&page_size=20
+```
+- Needs annotated fields: `courses_count`, `students_count`, `avg_rating`
+
+**Frontend blocking:** SuperadminInstructorsPage
+
+---
+
+### 36. Superadmin Invoices — Stats Action (Minor)
+
+**Why:** `InvoicesPage` shows invoice KPIs ($1.8M paid, $234K pending, $45K overdue) and invoice table — all hardcoded.
+
+**Already exists:** `InvoiceViewSet` at `/api/v1/payments/invoices/` has full CRUD with `status`, `from_date`, `to_date` filters. Finance users already see all invoices.
+
+**Still needed:** Add a `stats` action to `InvoiceViewSet`:
+```
+GET /api/v1/payments/invoices/stats/
+```
+- One query: aggregate `Sum('amount')` grouped by status
+
+**Frontend can wire now:** Table → `invoiceApi.getAll({ status, page_size })` (existing endpoint)
+**Frontend needs backend for:** KPI stats only
+
+**Frontend blocking:** SuperadminInvoicesPage (partial — table can be wired now)
+
+---
+
+### 37. Superadmin Revenue — Org Revenue Breakdown
+
+**Why:** `RevenuePage` shows revenue KPIs and per-organization revenue breakdown — all hardcoded.
+
+**Endpoints needed:**
+
+**a) Revenue stats:**
+```
+GET /api/v1/superadmin/revenue/stats/
+```
+Response:
+```json
+{
+  "total_revenue": "2400000.00",
+  "monthly_revenue": "186000.00",
+  "avg_per_org": "16900.00",
+  "growth_percent": 12.5
+}
+```
+
+**b) Revenue by organization:**
+```
+GET /api/v1/superadmin/revenue/by-organization/
+```
+Response:
+```json
+[
+  { "org_name": "TechCorp", "course_revenue": "45000.00", "subscription_revenue": "12000.00", "trend": 8.5 }
+]
+```
+- Aggregate from `Transaction` joined to `Organization`
+
+**Frontend blocking:** SuperadminRevenuePage
+
+---
+
+### 38. Superadmin System Settings & Health
+
+**Why:** `SystemSettingsPage` has hardcoded defaults (site name, URL, timezone, SMTP config, feature toggles, system version). `SystemHealth` component shows hardcoded health checks.
+
+**Endpoints needed:**
+
+**a) System settings CRUD:**
+```
+GET  /api/v1/superadmin/settings/
+PUT  /api/v1/superadmin/settings/
+```
+- Store as key-value pairs or a JSON blob in a `SystemSettings` singleton model
+
+**b) System health:**
+```
+GET /api/v1/superadmin/system/health/
+```
+Response:
+```json
+{
+  "database": "healthy",
+  "storage": "online",
+  "cpu_usage": "78%",
+  "api_latency_ms": 142,
+  "uptime_percent": 99.97
+}
+```
+
+**c) SMTP test:**
+```
+POST /api/v1/superadmin/settings/test-email/
+```
+
+**Frontend blocking:** SuperadminSystemSettingsPage, SystemHealth dashboard widget
+
+**Severity:** LOW — acceptable as configuration for now
+
+---
+
+### 39. ~~Superadmin Notifications~~ — COVERED BY EXISTING ENDPOINTS
+
+**Already exists:** `NotificationViewSet` at `/api/v1/notifications/` has list (with `is_read`, `type` filters) + `unread_count` action + `mark_all_read`.
+
+**No backend work needed.** Frontend should:
+- Wire list to `notificationApi.getAll()`
+- Wire unread count to `notificationApi.getUnreadCount()`
+- Compute "today" / "this week" counts client-side from notification `created_at` timestamps
+
+**Frontend blocking:** SuperadminNotificationsPage (#74) — frontend-only task
+
+---
+
+### 40. Superadmin Roles — User Counts (Minor Enhancement)
+
+**Why:** `RolesPermissionsPage` displays roles with user counts — currently hardcoded.
+
+**Already exists:** `UserSuperadminViewSet.stats()` returns `{ total, active, new_this_month, suspended }`. Users list supports `?role=` filter.
+
+**Still needed:** Add per-role breakdown to existing stats endpoint or add a `roles` action:
+```
+GET /api/v1/superadmin/users/stats/
+```
+Enhanced response (add `by_role` field):
+```json
+{
+  "total": 500,
+  "active": 480,
+  "new_this_month": 15,
+  "suspended": 5,
+  "by_role": [
+    { "role": "tasc_admin", "count": 2 },
+    { "role": "lms_manager", "count": 32 },
+    { "role": "instructor", "count": 156 },
+    { "role": "learner", "count": 305 },
+    { "role": "finance", "count": 5 }
+  ]
+}
+```
+- One additional query: `User.objects.values('role').annotate(count=Count('id'))`
+
+**Permission matrix:** Keep as frontend config (no backend needed).
+
+**Frontend blocking:** SuperadminRolesPermissionsPage (#72) — minor backend enhancement
+
+**Severity:** LOW
+
+---
+
+### 41. Superadmin Partnerships & Integrations
+
+**Why:** `PartnershipsPage` (6 mock partners) and `IntegrationsPage` (10 mock integrations) are entirely hardcoded.
+
+**Severity:** LOW — these are likely Phase 2 features. No models or infrastructure exist.
+
+**When needed:** Create `Partnership` and `Integration` models with CRUD endpoints. For now, frontend should show "Coming Soon" or keep static display.
+
+**Frontend blocking:** SuperadminPartnershipsPage, SuperadminIntegrationsPage
+
+---
+
+### 43. Manager Organization Settings CRUD
+
+**Why:** `ManagerSettingsPage` has hardcoded org name, industry, website, theme settings, and toggles. No backend endpoint to read or save these.
+
+**Endpoints needed:**
+```
+GET  /api/v1/manager/settings/
+PUT  /api/v1/manager/settings/
+```
+- Store as JSON on the `Organization` model (add a `settings` JSONField) or a separate `OrganizationSettings` model
+- Permission: `IsLmsManager` — scoped to `request.user.organization`
+- Fields: `org_name`, `industry`, `website_url`, `primary_color`, `theme_mode`, `default_language`, `notification_toggles`, `retention_period`
+
+**Frontend blocking:** ManagerSettingsPage (#85)
+
+---
+
+### 44. Manager Organization Billing / Subscription Info
+
+**Why:** `ManagerBillingPage` shows hardcoded plan ("Enterprise $499/mo"), usage stats (users/storage/courses), and payment method. Invoices are wired but plan/usage are static.
+
+**Endpoints needed:**
+
+**a) Org subscription/plan details:**
+```
+GET /api/v1/manager/billing/plan/
+```
+Response:
+```json
+{
+  "plan_name": "Enterprise",
+  "price": "499.00",
+  "billing_cycle": "monthly",
+  "renewal_date": "2026-04-15",
+  "user_limit": 500,
+  "storage_limit_gb": 100,
+  "courses_limit": null
+}
+```
+
+**b) Org usage stats:**
+```
+GET /api/v1/manager/billing/usage/
+```
+Response:
+```json
+{
+  "active_users": 347,
+  "storage_used_gb": 42,
+  "active_courses": 156
+}
+```
+- Count users in org, calculate storage from uploads, count published courses
+
+**Frontend blocking:** ManagerBillingPage (#84)
+
+**Severity:** MEDIUM — useful for org admins, but not critical for testing
+
+---
+
+### 45. Manager Activity Log — Mostly Covered by Existing Endpoints
+
+**Already exists:** `AuditLogListView` at `/api/v1/superadmin/audit-logs/` supports `search`, `from`/`to` date range, `action`, `resource` filters. **Managers already have access** — role-based check grants `lms_manager` full read access.
+
+**Also exists:** `NotificationViewSet` at `/api/v1/notifications/` can serve as activity feed.
+
+**Still needed (optional):** A summary stats action on the audit log for quick KPI counts:
+```
+GET /api/v1/superadmin/audit-logs/summary/?period=today
+```
+Response:
+```json
+{ "logins": 145, "enrollments": 23, "completions": 18, "submissions": 31 }
+```
+- Aggregate `AuditLog.objects.filter(created_at__date=today).values('action').annotate(count=Count('id'))`
+
+**Frontend can wire now:** Activity list → audit log API. The summary stats could be computed client-side from filtered results if volume is low.
+
+**Frontend blocking:** ManagerActivityPage (#83) — mostly frontend-only, summary stats are nice-to-have
+
+---
+
+### 46. ~~Livestream Session Creation API~~ — ALREADY EXISTS
+
+**Already exists:** `POST /api/v1/livestream/livestreams/` (LivestreamSessionViewSet is a full ModelViewSet with create). Supports Zoom, Google Meet, Teams, and custom RTMP. Auto-creates platform meetings.
+
+**Permission check needed:** Verify `IsInstructorOrReadOnly` allows managers to create sessions. If not, add `IsLmsManager` to permission classes.
+
+**No new endpoint needed.** Frontend should wire `ManagerScheduleNewPage` submit button to `livestreamApi.create()`.
+
+**Frontend blocking:** ManagerScheduleNewPage (#88) — frontend-only task (may need minor backend permission tweak)
+
+---
+
+### 42. Superadmin Data Migration & Gateway Settings
+
+**Why:** `DataMigrationPage` (Odoo migration UI) and `GatewaySettingsPage` (payment gateway config) are entirely hardcoded with mock progress data and default config values.
+
+**Severity:** LOW — specialized admin tools, not needed for testing.
+
+**Frontend blocking:** SuperadminDataMigrationPage, SuperadminGatewaySettingsPage
+
+---
+
 ### 19. Certificate PDF Generation
 
 **Why:** `Certificate` model exists but `pdf_url` is never populated. Frontend certificates page falls back to mock data because there's no real PDF to download.
