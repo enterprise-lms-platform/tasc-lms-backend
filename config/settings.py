@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.audit",
     "apps.livestream",
+    "apps.messaging",
 ]
 
 # ----------------------------------------
