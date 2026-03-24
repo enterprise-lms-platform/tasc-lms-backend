@@ -10,6 +10,10 @@ from apps.catalogue.models import Course, Category
 
 User = get_user_model()
 
+@pytest.fixture(autouse=True)
+def override_allowed_hosts(settings):
+    settings.ALLOWED_HOSTS = ['testserver', '*']
+
 @pytest.fixture
 def api_client():
     return APIClient()
@@ -17,6 +21,7 @@ def api_client():
 @pytest.fixture
 def instructor_user():
     return User.objects.create_user(
+        username='instructor@test.com',
         email='instructor@test.com',
         password='password123',
         role='instructor',
@@ -27,6 +32,7 @@ def instructor_user():
 @pytest.fixture
 def learner_user():
     return User.objects.create_user(
+        username='learner@test.com',
         email='learner@test.com',
         password='password123',
         role='learner',
@@ -103,7 +109,7 @@ class TestAttendanceTracking:
         api_client.force_authenticate(user=learner_user)
         
         # Mark joined
-        join_url = '/api/v1/livestream/attendance/join/'
+        join_url = '/api/v1/livestream/livestream-attendance/join/'
         response = api_client.post(join_url, {'session_id': session.id}, format='json')
         assert response.status_code == status.HTTP_200_OK
         
@@ -112,7 +118,7 @@ class TestAttendanceTracking:
         assert attendance.joined_at is not None
 
         # Mark left
-        leave_url = '/api/v1/livestream/attendance/leave/'
+        leave_url = '/api/v1/livestream/livestream-attendance/leave/'
         response = api_client.post(leave_url, {'session_id': session.id}, format='json')
         assert response.status_code == status.HTTP_200_OK
         

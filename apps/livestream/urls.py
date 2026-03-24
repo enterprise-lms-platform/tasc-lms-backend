@@ -24,7 +24,7 @@ urlpatterns = [
         path('zoom/', LivestreamWebhookView.as_view({'post': 'zoom_webhook'}), name='zoom-webhook'),
         path('google-calendar/', LivestreamWebhookView.as_view({'post': 'google_calendar_webhook'}), name='google-calendar-webhook'),
         path('teams/', LivestreamWebhookView.as_view({'post': 'teams_webhook'}), name='teams-webhook'),
-        path('validate/', LivestreamWebhookView.as_view({'get': 'validate_webhook'}), name='webhook-validate'),
+        path('health/', LivestreamWebhookView.as_view({'get': 'webhook_health'}), name='webhook-health'),
     ])),
     
     # Calendar ICS download (public for sharing)
