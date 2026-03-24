@@ -7,6 +7,12 @@ class IsInstructorOrReadOnly(permissions.BasePermission):
     Custom permission to only allow instructors to edit their sessions.
     """
     
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        from apps.accounts.rbac import is_admin_like, is_instructor
+        return is_instructor(request.user) or is_admin_like(request.user)
+
     def has_object_permission(self, request, view, obj):
         # Read permissions are allowed to any authenticated user
         if request.method in permissions.SAFE_METHODS:

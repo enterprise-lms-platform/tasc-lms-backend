@@ -53,8 +53,10 @@ class CalendarService:
                 user_tz = pytz.timezone(user_timezone)
                 start_time = start_time.astimezone(user_tz)
                 end_time = end_time.astimezone(user_tz)
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Invalid timezone {user_timezone}, falling back to UTC")
 
         event.add('dtstart', start_time)
         event.add('dtend', end_time)

@@ -873,9 +873,9 @@ class LivestreamWebhookView(viewsets.GenericViewSet):
             OpenApiParameter(name='x-zm-request-timestamp', location=OpenApiParameter.HEADER),
         ]
     )
-    @action(detail=False, methods=['get'], url_path='validate')
-    def validate_webhook(self, request):
-        """Validate webhook endpoint"""
+    @action(detail=False, methods=['get'], url_path='health')
+    def webhook_health(self, request):
+        """Webhook health endpoint"""
         return Response({
             'status': 'ok',
             'message': 'Webhook endpoint is active',
