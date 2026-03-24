@@ -42,6 +42,7 @@ When you pick up a task, update this file.
 | 12 | Calendar Service | Fixed timezone caching silent error in `apps/livestream/services/calendar_service.py` |
 | 15 | Livestream Webhooks | Renamed `validate_webhook` to `webhook_health` in `apps/livestream/views.py` and `urls.py` |
 | 46 | Livestream Session Creation | Verified `IsInstructorOrReadOnly` and added `IsLmsManager` in `LivestreamSessionViewSet` |
+| 24 | Messaging API | Created `messaging` app, defined models, and implemented endpoints with 100% test coverage |
 
 ---
 
@@ -824,39 +825,7 @@ Response:
 
 **Severity:** LOW — acceptable as hardcoded marketing content for now.
 
----
 
-### 24. Messaging / Inbox API
-
-**Why:** `InstructorMessagesPage` has 6+ hardcoded conversation objects. No messaging infrastructure exists.
-
-**Models needed:**
-```python
-class Conversation(models.Model):
-    participants = models.ManyToManyField(User)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-class Message(models.Model):
-    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE)
-    sender = models.ForeignKey(User, on_delete=models.CASCADE)
-    content = models.TextField()
-    is_read = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-```
-
-**Endpoints:**
-```
-GET    /api/v1/messaging/conversations/           — list user's conversations
-POST   /api/v1/messaging/conversations/           — start new conversation
-GET    /api/v1/messaging/conversations/{id}/messages/  — list messages
-POST   /api/v1/messaging/conversations/{id}/messages/  — send message
-POST   /api/v1/messaging/conversations/{id}/read/      — mark all read
-```
-
-**Frontend blocking:** InstructorMessagesPage (#11)
-
-**Severity:** LOW — this is a larger feature that can be deferred.
 
 ---
 
