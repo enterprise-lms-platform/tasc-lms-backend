@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 22 March 2026
+**Last updated:** 24 March 2026
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -235,11 +235,11 @@ Bulk grade and statistics actions are now implemented. Still missing:
 
 ### 18. Analytics Aggregation Endpoints
 
-**Why:** Manager, Instructor, Finance, and Superadmin analytics pages all have charts that need time-series data. Currently these charts use hardcoded or `Math.random()` placeholder data on the frontend.
+**Why:** Manager, Instructor, Finance, and Superadmin analytics pages all have charts that need time-series data. Currently these charts use hardcoded or `Math.random()` placeholder data on the frontend. The **Manager dashboard** specifically needs endpoints (a), (b), and (d) for its 3 chart widgets: "Enrollment & Completion Trends", "Learning Statistics", and "Courses by Category".
 
 **Endpoints needed:**
 
-**a) Enrollment trends:**
+**a) Enrollment & Completion trends:**
 ```
 GET /api/v1/learning/analytics/enrollment-trends/?period=monthly&months=6
 ```
@@ -247,25 +247,33 @@ Response:
 ```json
 {
   "labels": ["Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"],
-  "data": [45, 62, 58, 71, 89, 95]
+  "enrollments": [45, 62, 58, 71, 89, 95],
+  "completions": [12, 18, 22, 30, 35, 41]
 }
 ```
-- Aggregate from `Enrollment.created_at`, group by month/week
+- Aggregate from `Enrollment.created_at` (enrollments) and `Enrollment` where `status=completed` grouped by `completed_at` or `updated_at` (completions)
 - Scope by `request.user.role`: managers see their org only, instructors see their courses only, superadmin sees all
+- Use `django.db.models.functions.TruncMonth` for grouping
 
-**b) Engagement metrics:**
+**b) Learning Statistics (engagement metrics):**
 ```
-GET /api/v1/learning/analytics/engagement/?period=weekly&weeks=4
+GET /api/v1/learning/analytics/learning-stats/
 ```
 Response:
 ```json
 {
-  "labels": ["Week 1", "Week 2", "Week 3", "Week 4"],
-  "active_learners": [120, 135, 142, 158],
-  "avg_session_minutes": [45, 52, 48, 55]
+  "total_learners": 458,
+  "active_learners": 312,
+  "avg_completion_rate": 67.5,
+  "total_courses_in_progress": 189,
+  "total_completed_courses": 245,
+  "avg_quiz_score": 78.2
 }
 ```
-- Derive from `SessionProgress` or `Enrollment` activity timestamps
+- `active_learners`: count of users with `Enrollment` activity in the last 30 days
+- `avg_completion_rate`: average `progress_percentage` across all active enrollments
+- `avg_quiz_score`: average score from `QuizSubmission`
+- Scope by role (same as above)
 
 **c) Revenue over time (Finance):**
 ```
@@ -281,7 +289,27 @@ Response:
 ```
 - Aggregate from `Transaction` where `status=completed`, group by month
 
-**Frontend blocking:** Analytics pages #2, #3, #4, #5
+**d) Courses by Category:**
+```
+GET /api/v1/catalogue/analytics/courses-by-category/
+```
+Response:
+```json
+{
+  "categories": [
+    { "name": "Web Development", "count": 24, "color": "#4CAF50" },
+    { "name": "Data Science", "count": 18, "color": "#2196F3" },
+    { "name": "Business", "count": 12, "color": "#FF9800" },
+    { "name": "Design", "count": 8, "color": "#9C27B0" }
+  ],
+  "total": 62
+}
+```
+- Aggregate from `Course` where `status=published`, group by `category__name`
+- Use `Category.objects.annotate(count=Count('courses', filter=Q(courses__status='published')))`
+- Scope by org for managers
+
+**Frontend blocking:** Manager dashboard charts (a, b, d), Instructor analytics (a, b), Finance analytics (c), Superadmin analytics (a, b, c, d)
 
 ---
 
@@ -574,6 +602,177 @@ POST /api/v1/learning/badges/check/    — trigger badge evaluation for current 
 **Seed data:** Create a management command `python manage.py seed_badges` that creates all 22 badge records.
 
 **Frontend blocking:** LearnerBadgesPage (new page, sidebar link already exists), badge earned confetti modal
+
+---
+
+### 29. Saved / Favorited Courses API
+
+**Why:** The frontend has a "Saved Courses" page (`/learner/saved`) and heart icon toggles on the course catalog (`CatalogCourseCard.tsx`), but there is no backend persistence. Favorites are currently stored in React component state only — lost on page refresh. No model, no API, no localStorage fallback.
+
+**Model:**
+```python
+class SavedCourse(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='saved_courses')
+    course = models.ForeignKey('catalogue.Course', on_delete=models.CASCADE, related_name='saved_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'course']
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['user', '-created_at'])]
+```
+
+**Endpoints:**
+```
+GET    /api/v1/learning/saved-courses/          — list user's saved courses (paginated)
+POST   /api/v1/learning/saved-courses/          — save a course
+DELETE /api/v1/learning/saved-courses/{id}/      — unsave a course
+```
+
+**Alternative toggle endpoint (simpler for frontend):**
+```
+POST   /api/v1/learning/saved-courses/toggle/   — toggle save/unsave by course ID
+```
+Request:
+```json
+{ "course": 5 }
+```
+Response:
+```json
+{ "saved": true }   // or { "saved": false } if it was unsaved
+```
+
+**Response — `GET /api/v1/learning/saved-courses/`:**
+```json
+{
+  "count": 3,
+  "results": [
+    {
+      "id": 1,
+      "course": {
+        "id": 5,
+        "title": "Advanced React Patterns",
+        "slug": "advanced-react-patterns",
+        "thumbnail": "https://cdn.../thumb.jpg",
+        "category": { "id": 2, "name": "Web Development" },
+        "instructor_name": "Michael Rodriguez",
+        "rating": 4.8,
+        "review_count": 42,
+        "session_count": 12,
+        "difficulty_level": "advanced",
+        "is_published": true
+      },
+      "created_at": "2026-03-20T14:30:00Z"
+    }
+  ]
+}
+```
+
+**Serializer notes:**
+- Use `select_related('course', 'course__category', 'course__instructor')` to avoid N+1
+- Nest a read-only `CourseListSerializer` for the course field
+- Permission: `IsAuthenticated` (any logged-in user can save courses)
+
+**ViewSet:**
+```python
+class SavedCourseViewSet(viewsets.ModelViewSet):
+    serializer_class = SavedCourseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedCourse.objects.filter(user=self.request.user) \
+            .select_related('course', 'course__category', 'course__instructor')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['post'])
+    def toggle(self, request):
+        course_id = request.data.get('course')
+        obj, created = SavedCourse.objects.get_or_create(
+            user=request.user, course_id=course_id
+        )
+        if not created:
+            obj.delete()
+        return Response({'saved': created})
+```
+
+**Migration:** New migration in `apps/learning/` for `SavedCourse` model.
+
+**Frontend impact:** Once ready, wire:
+1. `SavedCoursesPage.tsx` — replace 6 mock courses with `GET /api/v1/learning/saved-courses/`
+2. `LearnerCourseCatalogPage.tsx` — replace React state favorites with `POST .../toggle/`
+3. `CatalogCourseCard.tsx` — `isFavorite` prop fed from API response instead of local state
+4. Add `savedCourseApi` to `learning.services.ts`
+
+**Frontend blocking:** SavedCoursesPage (mock data), CatalogCourseCard heart toggle (not persisted)
+
+---
+
+### 30. CourseViewSet — Add Ordering Support (for Top Courses widget)
+
+**Why:** The Manager dashboard `TopCourses` widget needs to fetch courses sorted by popularity (`enrollment_count`). The `CourseListSerializer` already exposes `enrollment_count`, but the `CourseViewSet` has no `filter_backends` or `ordering_fields` configured — so `?ordering=-enrollment_count` doesn't work. Courses come back in default order.
+
+**File:** `apps/catalogue/views.py` — `CourseViewSet`
+
+**What to do:**
+```python
+from rest_framework.filters import OrderingFilter, SearchFilter
+
+class CourseViewSet(viewsets.ModelViewSet):
+    filter_backends = [OrderingFilter, SearchFilter]
+    ordering_fields = ['title', 'published_at', 'enrollment_count', 'created_at']
+    ordering = ['-created_at']  # default
+    search_fields = ['title', 'short_description']
+    # ... rest of viewset
+```
+
+**Impact:** Enables `?ordering=-enrollment_count&page_size=4` for top courses by popularity. Also enables search.
+
+**Frontend blocking:** Manager TopCourses widget currently fetches first 4 courses in default order instead of most-enrolled.
+
+---
+
+### 31. Organization Serializer — Add `user_count` and `course_count` Annotations
+
+**Why:** The Superadmin dashboard `OrganizationsTable` widget shows user count and course count per org, but the `OrganizationSerializer` doesn't expose these fields. The serializer returns `name`, `is_active`, `contact_email`, etc. but no aggregated counts.
+
+**File:** `apps/accounts/serializers_superadmin.py` — `OrganizationSerializer`
+
+**What to do:**
+
+**a) Add annotated fields to the serializer:**
+```python
+class OrganizationSerializer(serializers.ModelSerializer):
+    user_count = serializers.IntegerField(read_only=True)
+    course_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Organization
+        fields = [..., 'user_count', 'course_count']
+```
+
+**b) Annotate the queryset in the view:**
+```python
+from django.db.models import Count, Q
+
+class OrganizationViewSet(viewsets.ModelViewSet):
+    def get_queryset(self):
+        return Organization.objects.annotate(
+            user_count=Count('memberships', distinct=True),
+            course_count=Count(
+                'courses',  # or through membership → user → courses
+                filter=Q(courses__status='published'),
+                distinct=True
+            ),
+        )
+```
+
+**Note:** The exact reverse relation names depend on how `Membership` and `Course` relate to `Organization`. Check the model for the correct `related_name`.
+
+**Impact:** Superadmin OrganizationsTable will show real user/course counts instead of empty columns.
+
+**Frontend blocking:** OrganizationsTable widget references `org.user_count` and `org.course_count` which are currently `undefined`.
 
 ---
 
