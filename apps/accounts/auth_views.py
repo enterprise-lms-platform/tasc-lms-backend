@@ -550,6 +550,43 @@ def verify_email(request, uidb64, token):
             update_fields=["is_active"]
             + (["email_verified"] if hasattr(user, "email_verified") else [])
         )
+
+        # Phase 1: grant one-time 7-day trial on successful email verification.
+        # Access gating uses UserSubscription.status + end_date.
+        try:
+            from apps.payments.models import Subscription, UserSubscription
+
+            has_used_trial = UserSubscription.objects.filter(
+                user=user,
+                trial_end_date__isnull=False,
+            ).exists()
+            if not has_used_trial:
+                now = timezone.now()
+                trial_end = now + timedelta(days=7)
+                trial_plan, _ = Subscription.objects.get_or_create(
+                    name="Free Trial (7 Days)",
+                    defaults={
+                        "description": "One-time learner trial with platform-wide course access.",
+                        "price": 0,
+                        "currency": "UGX",
+                        "billing_cycle": "monthly",
+                        "trial_days": 7,
+                        "status": Subscription.Status.ACTIVE,
+                    },
+                )
+                UserSubscription.objects.create(
+                    user=user,
+                    subscription=trial_plan,
+                    status=UserSubscription.Status.ACTIVE,
+                    end_date=trial_end,
+                    trial_end_date=trial_end,
+                    auto_renew=False,
+                    price=trial_plan.price,
+                    currency=trial_plan.currency or "UGX",
+                )
+        except Exception:
+            logger.exception("Failed to provision one-time trial subscription", extra={"user_id": user.id})
+
         from apps.audit.services import log_event
 
         log_event(

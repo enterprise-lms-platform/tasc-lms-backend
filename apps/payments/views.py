@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
+from datetime import timedelta
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.decorators import action
@@ -507,51 +508,52 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         responses={201: UserSubscriptionSerializer},
     )
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         
         # Set the user
+        is_trial = serializer.validated_data.get('is_trial', False)
         serializer.save(user=request.user)
         
-        # Create invoice for subscription
+        # Configure active access window for Phase 1 gating.
         subscription = serializer.instance
         subscription_plan = subscription.subscription
-        
-        # Calculate end date based on billing cycle
-        if subscription_plan.billing_cycle == 'monthly':
-            end_date = timezone.now() + timezone.timedelta(days=30)
-        elif subscription_plan.billing_cycle == 'quarterly':
-            end_date = timezone.now() + timezone.timedelta(days=90)
-        else:  # yearly
-            end_date = timezone.now() + timezone.timedelta(days=365)
-        
+
+        if is_trial:
+            end_date = timezone.now() + timedelta(days=7)
+            subscription.trial_end_date = end_date
+        else:
+            end_date = timezone.now() + timedelta(days=180)  # biannual paid access
+            subscription.trial_end_date = None
+
+        subscription.status = UserSubscription.Status.ACTIVE
         subscription.end_date = end_date
         subscription.save()
-        
-        # Create invoice
-        invoice = Invoice.objects.create(
-            user=request.user,
-            invoice_type='subscription',
-            customer_name=request.user.get_full_name() or request.user.email,
-            customer_email=request.user.email,
-            subtotal=subscription_plan.price,
-            total_amount=subscription_plan.price,
-            currency=subscription_plan.currency,
-            status='pending',
-            due_date=timezone.now() + timezone.timedelta(days=7)
-        )
-        
-        # Create invoice item
-        InvoiceItem.objects.create(
-            invoice=invoice,
-            item_type='subscription',
-            item_id=subscription_plan.id,
-            description=f"{subscription_plan.name} - {subscription_plan.billing_cycle} subscription",
-            quantity=1,
-            unit_price=subscription_plan.price
-        )
-        
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        # Keep invoice workflow for paid subscriptions.
+        if not is_trial:
+            invoice = Invoice.objects.create(
+                user=request.user,
+                invoice_type='subscription',
+                customer_name=request.user.get_full_name() or request.user.email,
+                customer_email=request.user.email,
+                subtotal=subscription_plan.price,
+                total_amount=subscription_plan.price,
+                currency=subscription_plan.currency or 'UGX',
+                status='pending',
+                due_date=timezone.now() + timedelta(days=7)
+            )
+
+            InvoiceItem.objects.create(
+                invoice=invoice,
+                item_type='subscription',
+                item_id=subscription_plan.id,
+                description=f"{subscription_plan.name} - biannual subscription",
+                quantity=1,
+                unit_price=subscription_plan.price
+            )
+
+        return Response(UserSubscriptionSerializer(subscription).data, status=status.HTTP_201_CREATED)
     
     @extend_schema(
         summary='Cancel subscription',
@@ -595,14 +597,8 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         subscription.status = 'active'
         subscription.cancelled_at = None
         
-        # Extend end date
-        subscription_plan = subscription.subscription
-        if subscription_plan.billing_cycle == 'monthly':
-            subscription.end_date = timezone.now() + timezone.timedelta(days=30)
-        elif subscription_plan.billing_cycle == 'quarterly':
-            subscription.end_date = timezone.now() + timezone.timedelta(days=90)
-        else:  # yearly
-            subscription.end_date = timezone.now() + timezone.timedelta(days=365)
+        # Extend end date using the paid Phase 1 duration (6 months).
+        subscription.end_date = timezone.now() + timedelta(days=180)
         
         subscription.save()
         
