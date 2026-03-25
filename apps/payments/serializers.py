@@ -331,10 +331,31 @@ class SubscriptionStatusSerializer(serializers.Serializer):
 
 class UserSubscriptionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating user subscriptions."""
-    
+    is_trial = serializers.BooleanField(write_only=True, required=False, default=False)
+
     class Meta:
         model = UserSubscription
         fields = [
             'subscription', 'organization',
-            'end_date', 'trial_end_date', 'auto_renew'
+            'end_date', 'trial_end_date', 'auto_renew', 'is_trial'
         ]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        is_trial = attrs.get('is_trial', False)
+
+        # One-time trial enforcement. We key this off trial_end_date markers.
+        if is_trial and user and UserSubscription.objects.filter(user=user, trial_end_date__isnull=False).exists():
+            raise serializers.ValidationError({'is_trial': 'Free trial has already been used.'})
+        return attrs
+
+    def create(self, validated_data):
+        # Prevent client price tampering by snapshotting from the selected plan.
+        validated_data.pop('is_trial', None)
+        subscription_plan = validated_data['subscription']
+        validated_data.setdefault('price', subscription_plan.price)
+        validated_data.setdefault('currency', subscription_plan.currency or 'UGX')
+        validated_data.setdefault('status', UserSubscription.Status.ACTIVE)
+        return super().create(validated_data)
