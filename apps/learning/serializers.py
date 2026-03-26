@@ -251,6 +251,15 @@ class DiscussionReplyCreateSerializer(serializers.ModelSerializer):
             'discussion', 'parent', 'content'
         ]
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        discussion = attrs.get('discussion')
+        if discussion and discussion.is_locked:
+            raise serializers.ValidationError(
+                {'discussion': 'This discussion is locked and cannot receive new replies.'}
+            )
+        return attrs
+
 
 class SessionProgressUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating session progress."""
@@ -295,7 +304,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'enrollment', 'assignment',
             'assignment_title', 'session_title', 'max_points',
-            'status', 'submitted_at',
+            'status', 'submitted_at', 'attempt_number',
             'submitted_text', 'submitted_file_url', 'submitted_file_name',
             'grade', 'feedback', 'internal_notes',
             'graded_at', 'graded_by', 'graded_by_name',
@@ -362,10 +371,14 @@ class SubmissionCreateSerializer(serializers.ModelSerializer):
                 {'assignment': "Assignment does not belong to this enrollment's course."}
             )
 
-        if Submission.objects.filter(enrollment=enrollment, assignment=assignment).exists():
+        # Check attempts
+        existing_attempts = Submission.objects.filter(enrollment=enrollment, assignment=assignment).count()
+        if assignment.max_attempts and existing_attempts >= assignment.max_attempts:
             raise serializers.ValidationError(
-                {'non_field_errors': ['A submission already exists for this enrollment and assignment.']}
+                {'non_field_errors': [f'Maximum attempts ({assignment.max_attempts}) reached for this assignment.']}
             )
+            
+        attrs['attempt_number'] = existing_attempts + 1
 
         status_val = attrs.get('status', Submission.Status.DRAFT)
         if status_val == Submission.Status.GRADED:
@@ -376,10 +389,21 @@ class SubmissionCreateSerializer(serializers.ModelSerializer):
         if status_val == Submission.Status.SUBMITTED:
             text = (attrs.get('submitted_text') or '').strip()
             file_url = attrs.get('submitted_file_url')
+            file_name = attrs.get('submitted_file_name')
+            
             if not text and not file_url:
                 raise serializers.ValidationError(
                     {'non_field_errors': ['Submitted text or file URL is required when submitting.']}
                 )
+                
+            if file_url and file_name and assignment.allowed_file_types:
+                import os
+                ext = os.path.splitext(file_name)[1].lower()
+                allowed_exts = [e.lower() if e.startswith('.') else f'.{e.lower()}' for e in assignment.allowed_file_types]
+                if ext not in allowed_exts:
+                    raise serializers.ValidationError(
+                        {'submitted_file_name': f'File type {ext} is not allowed. Allowed types: {", ".join(allowed_exts)}'}
+                    )
 
         return attrs
 
@@ -413,10 +437,21 @@ class SubmissionUpdateSerializer(serializers.ModelSerializer):
         if status_val == Submission.Status.SUBMITTED:
             text = (attrs.get('submitted_text', instance.submitted_text) or '').strip()
             file_url = attrs.get('submitted_file_url', instance.submitted_file_url)
+            file_name = attrs.get('submitted_file_name', instance.submitted_file_name)
+            
             if not text and not file_url:
                 raise serializers.ValidationError(
                     {'non_field_errors': ['Submitted text or file URL is required when submitting.']}
                 )
+                
+            if file_url and file_name and instance.assignment.allowed_file_types:
+                import os
+                ext = os.path.splitext(file_name)[1].lower()
+                allowed_exts = [e.lower() if e.startswith('.') else f'.{e.lower()}' for e in instance.assignment.allowed_file_types]
+                if ext not in allowed_exts:
+                    raise serializers.ValidationError(
+                        {'submitted_file_name': f'File type {ext} is not allowed. Allowed types: {", ".join(allowed_exts)}'}
+                    )
 
         return attrs
 

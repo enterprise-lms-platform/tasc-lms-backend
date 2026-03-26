@@ -258,7 +258,22 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         return DiscussionSerializer
     
     def get_queryset(self):
-        return Discussion.objects.all()
+        qs = Discussion.objects.all()
+        
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            qs = qs.filter(course_id=course_id)
+            
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            qs = qs.filter(session_id=session_id)
+            
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(title__icontains=search) | Q(content__icontains=search))
+            
+        return qs
     
     @extend_schema(
         summary='List discussions',
@@ -266,6 +281,7 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         parameters=[
             OpenApiParameter(name='course', type=int, description='Filter by course ID'),
             OpenApiParameter(name='session', type=int, description='Filter by session ID'),
+            OpenApiParameter(name='search', type=str, description='Search in title and content'),
         ],
     )
     def list(self, request, *args, **kwargs):
@@ -285,6 +301,42 @@ class DiscussionViewSet(viewsets.ModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Pin/unpin discussion',
+        description='Toggle pin status (Instructor/Manager only)',
+        responses={200: OpenApiResponse(response={'type': 'object', 'properties': {'is_pinned': {'type': 'boolean'}}})},
+    )
+    @action(detail=True, methods=['post'])
+    def pin(self, request, pk=None):
+        """Pin or unpin a discussion thread."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response({'detail': 'Only instructors and admins can pin discussions.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        discussion = self.get_object()
+        discussion.is_pinned = not discussion.is_pinned
+        discussion.save()
+        return Response({'is_pinned': discussion.is_pinned})
+
+    @extend_schema(
+        summary='Lock/unlock discussion',
+        description='Toggle lock status (Instructor/Manager only). When locked, no new replies are allowed.',
+        responses={200: OpenApiResponse(response={'type': 'object', 'properties': {'is_locked': {'type': 'boolean'}}})},
+    )
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        """Lock or unlock a discussion thread."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response({'detail': 'Only instructors and admins can lock discussions.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        discussion = self.get_object()
+        discussion.is_locked = not discussion.is_locked
+        discussion.save()
+        return Response({'is_locked': discussion.is_locked})
 
 
 @extend_schema(

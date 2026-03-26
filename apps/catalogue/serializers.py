@@ -287,7 +287,7 @@ class QuizQuestionSerializer(serializers.ModelSerializer):
     """Serializer for QuizQuestion in quiz detail and write payloads."""
     class Meta:
         model = QuizQuestion
-        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload']
+        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload', 'explanation']
         read_only_fields = ['id']
 
     def validate_question_type(self, value):
@@ -532,6 +532,12 @@ class AssignmentCreateUpdateSerializer(serializers.Serializer):
             raise serializers.ValidationError({'settings': 'settings must be a JSON object.'})
 
         return attrs
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 
 class QuestionCategorySerializer(serializers.ModelSerializer):

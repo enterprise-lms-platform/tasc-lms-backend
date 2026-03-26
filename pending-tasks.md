@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 24 March 2026
+**Last updated:** 26 March 2026
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -43,6 +43,8 @@ When you pick up a task, update this file.
 | 15 | Livestream Webhooks | Renamed `validate_webhook` to `webhook_health` in `apps/livestream/views.py` and `urls.py` |
 | 46 | Livestream Session Creation | Verified `IsInstructorOrReadOnly` and added `IsLmsManager` in `LivestreamSessionViewSet` |
 | 24 | Messaging API | Created `messaging` app, defined models, and implemented endpoints with 100% test coverage |
+| 4 | DiscussionViewSet Moderation | Added `@action` endpoints `/pin/` and `/lock/` (toggle) with RBAC, search/filter query params (`course`, `session`, `search`) in `get_queryset()`, locked-reply validation in `DiscussionReplyCreateSerializer` [26 Mar] |
+| 7 | SubmissionViewSet Validation | Added `attempt_number` to Submission model, `unique_together` updated, file-type validation against `Assignment.allowed_file_types`, attempt-limit enforcement against `Assignment.max_attempts`, `attempt_number` exposed in serializer [26 Mar] |
 
 ---
 
@@ -127,31 +129,16 @@ GET /api/v1/manager/users/csv_template/
 
 ## MEDIUM — Incomplete Views & Actions
 
-### 4. DiscussionViewSet — Moderation
+### ~~4. DiscussionViewSet — Moderation~~ ✅ COMPLETED [26 Mar]
 
 **File:** `apps/learning/views.py`
 
-**What works:** Full CRUD + replies. The `Discussion` model already has `is_pinned`, `is_locked`, `is_deleted` boolean fields.
-
-**What's missing — add these as `@action` endpoints:**
-
-**a) Pin/unpin:**
-```
-POST /api/v1/learning/discussions/{id}/pin/
-```
-Response: `{ "is_pinned": true }` — toggles pin state. Instructor/manager only.
-
-**b) Lock/unlock:**
-```
-POST /api/v1/learning/discussions/{id}/lock/
-```
-Response: `{ "is_locked": true }` — toggles lock state. When locked, no new replies allowed. Instructor/manager only.
-
-**c) Filter by course/session** — add query params to list action:
-```
-GET /api/v1/learning/discussions/?course=5&session=12&search=networking
-```
-Currently only basic queryset. Add `course`, `session`, and `search` (title/content) filters.
+**Implemented:**
+- `POST /api/v1/learning/discussions/{id}/pin/` — toggles `is_pinned`, Instructor/Manager/Admin only
+- `POST /api/v1/learning/discussions/{id}/lock/` — toggles `is_locked`, Instructor/Manager/Admin only
+- Query params `?course=`, `?session=`, `?search=` added to `get_queryset()`
+- `DiscussionReplyCreateSerializer.validate()` blocks replies on locked discussions
+- **Frontend wired:** `discussionApi.pin()`/`lock()` in `learning.services.ts`, Pin/Lock UI in `CoursePlayerPage.tsx`
 
 ---
 
@@ -224,15 +211,17 @@ Request:
 
 ---
 
-### 7. SubmissionViewSet — Remaining Enhancements
+### ~~7. SubmissionViewSet — Remaining Enhancements~~ ✅ COMPLETED [26 Mar]
 
-**File:** `apps/learning/views.py`
+**File:** `apps/learning/views.py`, `apps/learning/serializers.py`, `apps/learning/models.py`
 
-Bulk grade and statistics actions are now implemented. Still missing:
-
-**a) File upload validation:** In `create()`, check `submitted_file_name` extension against `Assignment.allowed_file_types` and file size against `Assignment.max_file_size_mb`.
-
-**b) Resubmission tracking:** Currently allows only one submission per enrollment+assignment. Add `attempt_number` field and allow multiple submissions up to `Assignment.max_attempts`.
+**Implemented:**
+- `attempt_number` field added to `Submission` model, `unique_together` updated to `(enrollment, assignment, attempt_number)`
+- `SubmissionCreateSerializer.validate()` enforces `Assignment.max_attempts` limits
+- File extension validation against `Assignment.allowed_file_types` in both Create and Update serializers
+- Migration generated: `0005_alter_submission_unique_together_and_more.py`
+- `attempt_number` exposed in `SubmissionSerializer` read fields
+- **Frontend wired:** Backend validation errors parsed and displayed in `LearnerAssignmentsPage.tsx` toast messages
 
 ---
 

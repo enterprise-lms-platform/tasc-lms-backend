@@ -228,11 +228,13 @@ class Submission(models.Model):
         related_name='graded_submissions',
     )
 
+    attempt_number = models.PositiveIntegerField(default=1)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('enrollment', 'assignment')
+        unique_together = ('enrollment', 'assignment', 'attempt_number')
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['enrollment', 'assignment']),

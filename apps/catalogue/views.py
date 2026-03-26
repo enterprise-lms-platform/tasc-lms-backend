@@ -1094,6 +1094,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                 ap = item.get('answer_payload')
                 if ap is None:
                     ap = {}
+                expl = (item.get('explanation') or '').strip()
 
                 if qid is not None:
                     qid = int(qid) if not isinstance(qid, int) else qid
@@ -1112,6 +1113,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                     qobj.question_text = qtext
                     qobj.points = max(0, int(pts))
                     qobj.answer_payload = ap if isinstance(ap, dict) else {}
+                    qobj.explanation = expl
                     qobj.save()
                 else:
                     QuizQuestion.objects.create(
@@ -1121,6 +1123,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                         question_text=qtext,
                         points=max(0, int(pts)),
                         answer_payload=ap if isinstance(ap, dict) else {},
+                        explanation=expl,
                     )
             to_delete = existing_ids - seen_ids
             if to_delete:
@@ -1178,6 +1181,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                     question_text=bq.question_text,
                     points=bq.points,
                     answer_payload=dict(bq.answer_payload or {}),
+                    explanation=bq.explanation or '',
                     source_bank_question=bq,
                 )
                 created.append(qq)
@@ -1217,11 +1221,9 @@ class SessionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
         partial = request.method == 'PATCH'
-        serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=partial)
+        serializer = AssignmentCreateUpdateSerializer(assignment, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        for key, value in serializer.validated_data.items():
-            setattr(assignment, key, value)
-        assignment.save()
+        assignment = serializer.save()
         return Response(AssignmentSerializer(assignment).data)
 
 
