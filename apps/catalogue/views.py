@@ -31,7 +31,7 @@ from .serializers import (
     BankQuestionListSerializer, BankQuestionSerializer,
     CategoryDetailSerializer, CategorySerializer,
     CourseCreateSerializer, CourseDetailSerializer, CourseListSerializer,
-    ModuleSerializer,
+    ModuleSerializer, ModuleBulkReorderSerializer,
     QuestionCategorySerializer,
     QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
     QuizSettingsUpdateSerializer,
@@ -791,6 +791,40 @@ class ModuleViewSet(viewsets.ModelViewSet):
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Bulk reorder modules',
+        description='Update the order of multiple modules for a specific course in a single request.',
+        request=ModuleBulkReorderSerializer,
+        responses={200: dict},
+        examples=[
+            OpenApiExample(
+                'Reorder example',
+                value={'course': 5, 'order': [{'id': 10, 'order': 0}, {'id': 11, 'order': 1}]},
+                request_only=True,
+            ),
+        ]
+    )
+    @action(detail=False, methods=['post'])
+    def reorder(self, request):
+        serializer = ModuleBulkReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course_id = serializer.validated_data['course']
+        order_data = serializer.validated_data['order']
+        course = get_object_or_404(Course, id=course_id)
+        role = getattr(request.user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != request.user.id:
+            raise PermissionDenied('You can only reorder modules in your own courses.')
+        module_ids = [item['id'] for item in order_data]
+        modules = list(Module.objects.filter(id__in=module_ids, course_id=course_id))
+        if len(modules) != len(module_ids):
+            raise ValidationError('One or more modules do not belong to the specified course or do not exist.')
+        order_map = {item['id']: item['order'] for item in order_data}
+        for module in modules:
+            module.order = order_map[module.id]
+        with transaction.atomic():
+            Module.objects.bulk_update(modules, ['order'])
+        return Response({'updated': len(modules)}, status=status.HTTP_200_OK)
 
 
 @extend_schema(
