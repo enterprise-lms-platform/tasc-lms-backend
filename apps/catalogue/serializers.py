@@ -137,6 +137,18 @@ class ModuleSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class ModuleReorderItemSerializer(serializers.Serializer):
+    """Serializer for a single module reorder item."""
+    id = serializers.IntegerField()
+    order = serializers.IntegerField(min_value=0)
+
+
+class ModuleBulkReorderSerializer(serializers.Serializer):
+    """Serializer for bulk reordering course modules."""
+    course = serializers.IntegerField()
+    order = ModuleReorderItemSerializer(many=True)
+
+
 class SessionSerializer(serializers.ModelSerializer):
     """Serializer for Session model."""
     duration_minutes = serializers.ReadOnlyField()
