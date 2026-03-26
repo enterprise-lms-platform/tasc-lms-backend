@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 26 March 2026
+**Last updated:** 27 March 2026
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
@@ -45,11 +45,8 @@ When you pick up a task, update this file.
 | 24 | Messaging API | Created `messaging` app, defined models, and implemented endpoints with 100% test coverage |
 | 4 | DiscussionViewSet Moderation | Added `@action` endpoints `/pin/` and `/lock/` (toggle) with RBAC, search/filter query params (`course`, `session`, `search`) in `get_queryset()`, locked-reply validation in `DiscussionReplyCreateSerializer` [26 Mar] |
 | 7 | SubmissionViewSet Validation | Added `attempt_number` to Submission model, `unique_together` updated, file-type validation against `Assignment.allowed_file_types`, attempt-limit enforcement against `Assignment.max_attempts`, `attempt_number` exposed in serializer [26 Mar] |
-| 0b | Manager Bulk Import | Implemented `ManagerBulkImport` endpoint mapping frontend keys and scoping to manager's organization |
-| DB | Analytics ViewSets | Implemented `LearningAnalyticsViewSet`, `PaymentAnalyticsViewSet`, and `CatalogueAnalyticsViewSet` for LMS dashboards |
-
----
-
+| 0b | Manager Bulk Import | Implemented manager-scoped bulk import with frontend CSV header mapping (`email_address`→`email`, `user_role`→`role`, `full_name`→`first_name`/`last_name`) and auto org-assignment [26 Mar] |
+| DB | Analytics ViewSets | `LearningAnalyticsViewSet` (enrollment-trends, learning-stats), `PaymentAnalyticsViewSet` (revenue), `CatalogueAnalyticsViewSet` (courses-by-category) — all role-scoped [26 Mar] |
 
 ---
 
