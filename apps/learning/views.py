@@ -2,7 +2,7 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins, serializers
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from apps.payments.permissions import HasActiveSubscription
@@ -197,6 +197,11 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CertificateSerializer
     permission_classes = [IsAuthenticated]
     
+    def get_permissions(self):
+        if self.action == 'verify':
+            return [AllowAny()]
+        return super().get_permissions()
+    
     def get_queryset(self):
         return Certificate.objects.filter(enrollment__user=self.request.user)
     
@@ -213,6 +218,25 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+        
+    @extend_schema(
+        summary='Get latest certificate',
+        description='Returns the most recently issued certificate for the authenticated user',
+        responses={
+            200: CertificateSerializer,
+            404: OpenApiResponse(description='No certificates found'),
+        },
+    )
+    @action(detail=False, methods=['get'])
+    def latest(self, request):
+        certificate = self.get_queryset().order_by('-issued_at').first()
+        if not certificate:
+            return Response(
+                {'detail': 'No certificates found for this user.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(certificate)
+        return Response(serializer.data)
     
     @extend_schema(
         summary='Verify certificate',

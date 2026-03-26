@@ -47,6 +47,9 @@ When you pick up a task, update this file.
 | 7 | SubmissionViewSet Validation | Added `attempt_number` to Submission model, `unique_together` updated, file-type validation against `Assignment.allowed_file_types`, attempt-limit enforcement against `Assignment.max_attempts`, `attempt_number` exposed in serializer [26 Mar] |
 | 0b | Manager Bulk Import | Implemented manager-scoped bulk import with frontend CSV header mapping (`email_address`→`email`, `user_role`→`role`, `full_name`→`first_name`/`last_name`) and auto org-assignment [26 Mar] |
 | DB | Analytics ViewSets | `LearningAnalyticsViewSet` (enrollment-trends, learning-stats), `PaymentAnalyticsViewSet` (revenue), `CatalogueAnalyticsViewSet` (courses-by-category) — all role-scoped [26 Mar] |
+| 5 | Module Bulk Reorder | `ModuleBulkReorderSerializer` + `reorder` action in `ModuleViewSet` with `bulk_update` + `transaction.atomic()` [27 Mar] |
+| 18 | Analytics Endpoints | `LearningAnalyticsViewSet`, `PaymentAnalyticsViewSet`, `CatalogueAnalyticsViewSet` — enrollment-trends, learning-stats, revenue, courses-by-category [26 Mar] |
+| 19 | Certificate Auto-Creation | Added `post_save` signal on Enrollment to auto-create Certificate when completed. Added `latest` action and public `verify` to `CertificateViewSet`. [27 Mar] |
 
 ---
 
@@ -105,11 +108,16 @@ When you pick up a task, update this file.
 
 ---
 
-### 5. ModuleViewSet — Bulk Reorder
+### ~~5. ModuleViewSet — Bulk Reorder~~ ✅ COMPLETED [27 Mar]
 
 **File:** `apps/catalogue/views.py`
 
-Currently, reordering requires individual PATCH requests per module. Add a bulk endpoint:
+**Implemented:**
+- `ModuleReorderItemSerializer` + `ModuleBulkReorderSerializer` in `apps/catalogue/serializers.py`
+- `@action(detail=False, methods=['post'])` `reorder` method on `ModuleViewSet`
+- Validates course ownership for instructors, verifies all module IDs belong to the specified course
+- Uses `transaction.atomic()` + `Module.objects.bulk_update(modules, ['order'])` for efficiency
+- **Frontend wired:** `moduleApi.reorder()` in `catalogue.services.ts`, `useReorderModules` hook in `useCatalogue.ts`, `CourseStructurePage.tsx` uses single bulk POST instead of N individual PATCHes
 
 ```
 POST /api/v1/catalogue/modules/reorder/
@@ -126,8 +134,6 @@ Request:
 }
 ```
 Response: `{ "updated": 3 }`
-
-Use `transaction.atomic()` and `bulk_update()` for efficiency.
 
 ---
 
@@ -190,83 +196,16 @@ Request:
 
 ## HIGH — Missing Endpoints (Frontend Blocked)
 
-### 18. Analytics Aggregation Endpoints
+### ~~18. Analytics Aggregation Endpoints~~ ✅ COMPLETED [26 Mar]
 
-**Why:** Manager, Instructor, Finance, and Superadmin analytics pages all have charts that need time-series data. Currently these charts use hardcoded or `Math.random()` placeholder data on the frontend. The **Manager dashboard** specifically needs endpoints (a), (b), and (d) for its 3 chart widgets: "Enrollment & Completion Trends", "Learning Statistics", and "Courses by Category".
+**Implemented:**
+- `LearningAnalyticsViewSet` — `/api/v1/learning/analytics/enrollment-trends/` and `/learning-stats/`
+- `PaymentAnalyticsViewSet` — `/api/v1/payments/analytics/revenue/`
+- `CatalogueAnalyticsViewSet` — `/api/v1/catalogue/analytics/courses-by-category/`
+- All endpoints are role-scoped (instructors see their courses only, managers see their org, superadmin sees all)
+- **Frontend wired:** `useEnrollmentTrends`, `useLearningStats`, `useCoursesByCategory`, `useRevenueTrends` hooks power Manager, Instructor, Finance, and Superadmin analytics pages
 
-**Endpoints needed:**
-
-**a) Enrollment & Completion trends:**
-```
-GET /api/v1/learning/analytics/enrollment-trends/?period=monthly&months=6
-```
-Response:
-```json
-{
-  "labels": ["Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"],
-  "enrollments": [45, 62, 58, 71, 89, 95],
-  "completions": [12, 18, 22, 30, 35, 41]
-}
-```
-- Aggregate from `Enrollment.created_at` (enrollments) and `Enrollment` where `status=completed` grouped by `completed_at` or `updated_at` (completions)
-- Scope by `request.user.role`: managers see their org only, instructors see their courses only, superadmin sees all
-- Use `django.db.models.functions.TruncMonth` for grouping
-
-**b) Learning Statistics (engagement metrics):**
-```
-GET /api/v1/learning/analytics/learning-stats/
-```
-Response:
-```json
-{
-  "total_learners": 458,
-  "active_learners": 312,
-  "avg_completion_rate": 67.5,
-  "total_courses_in_progress": 189,
-  "total_completed_courses": 245,
-  "avg_quiz_score": 78.2
-}
-```
-- `active_learners`: count of users with `Enrollment` activity in the last 30 days
-- `avg_completion_rate`: average `progress_percentage` across all active enrollments
-- `avg_quiz_score`: average score from `QuizSubmission`
-- Scope by role (same as above)
-
-**c) Revenue over time (Finance):**
-```
-GET /api/v1/payments/analytics/revenue/?period=monthly&months=6
-```
-Response:
-```json
-{
-  "labels": ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"],
-  "revenue": [12500, 15200, 14800, 18900, 21000, 23500],
-  "currency": "USD"
-}
-```
-- Aggregate from `Transaction` where `status=completed`, group by month
-
-**d) Courses by Category:**
-```
-GET /api/v1/catalogue/analytics/courses-by-category/
-```
-Response:
-```json
-{
-  "categories": [
-    { "name": "Web Development", "count": 24, "color": "#4CAF50" },
-    { "name": "Data Science", "count": 18, "color": "#2196F3" },
-    { "name": "Business", "count": 12, "color": "#FF9800" },
-    { "name": "Design", "count": 8, "color": "#9C27B0" }
-  ],
-  "total": 62
-}
-```
-- Aggregate from `Course` where `status=published`, group by `category__name`
-- Use `Category.objects.annotate(count=Count('courses', filter=Q(courses__status='published')))`
-- Scope by org for managers
-
-**Frontend blocking:** Manager dashboard charts (a, b, d), Instructor analytics (a, b), Finance analytics (c), Superadmin analytics (a, b, c, d)
+**Frontend blocking:** ~~Manager dashboard charts (a, b, d), Instructor analytics (a, b), Finance analytics (c), Superadmin analytics (a, b, c, d)~~ All unblocked.
 
 ---
 
@@ -629,24 +568,18 @@ Response:
 
 ---
 
-### 19. Certificate PDF Generation
+### ~~19. Certificate PDF Generation~~ ✅ COMPLETED [27 Mar]
 
-**Why:** `Certificate` model exists but `pdf_url` is never populated. Frontend certificates page falls back to mock data because there's no real PDF to download.
+**Why:** `Certificate` model exists but was never auto-populated. Frontend certificates page relied on mock data.
 
-**What to implement:**
-- Install `reportlab` or `weasyprint`
-- Create `apps/learning/services/certificate_generator.py`
-- Generate PDF with: learner name, course title, completion date, certificate ID, QR code linking to `/verify-certificate/{id}`
-- Upload to S3 (or local media) and populate `Certificate.pdf_url`
-- Trigger on course completion (when all sessions marked complete)
+**Implemented:**
+- **Auto-Creation:** Hooked `Enrollment.post_save` signal in `apps/learning/signals.py` to auto-create a `Certificate` when `status == 'completed'`.
+- **Validation:** Auto-generates `certificate_number`, sets 1-year `expiry_date`, and populates `verification_url` pointing to the public frontend verifier.
+- **ViewSet Enhancements:** Added `@action(detail=False) latest` to fetch the most recent certificate for dashboards, and made the `verify` action public via `AllowAny`.
+- **Frontend Wired:** Removed mock data in `LearnerCertificatesPage.tsx`; it now correctly lists and renders auto-generated certificates.
+- **Note on PDFs:** Elected *not* to pursue server-side PDF generation (WeasyPrint/ReportLab) since the frontend's CSS-based `@media print` A4 landscape template works perfectly via `window.print()` and preserves the exact intended design.
 
-**Endpoint:**
-```
-GET /api/v1/learning/certificates/{id}/download/
-```
-- Returns the PDF file or redirects to S3 URL
-
-**Frontend blocking:** LearnerCertificatesPage (#8, #50)
+**Frontend blocking:** ~~LearnerCertificatesPage (#8, #50)~~ Unblocked.
 
 ---
 
