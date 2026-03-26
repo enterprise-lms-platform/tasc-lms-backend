@@ -11,9 +11,11 @@ from .views import (
     QuestionCategoryViewSet,
     BankQuestionViewSet,
     CourseReviewViewSet,
+    CatalogueAnalyticsViewSet,
 )
 
 router = DefaultRouter()
+router.register(r'analytics', CatalogueAnalyticsViewSet, basename='catalogue-analytics')
 router.register(r'tags', TagViewSet, basename='tag')
 router.register(r'question-categories', QuestionCategoryViewSet, basename='question-category')
 router.register(r'bank-questions', BankQuestionViewSet, basename='bank-question')

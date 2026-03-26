@@ -9,9 +9,11 @@ from .views import (
     PaymentMethodViewSet,
     SubscriptionViewSet,
     UserSubscriptionViewSet,
+    PaymentAnalyticsViewSet,
 )
 
 router = DefaultRouter()
+router.register(r'analytics', PaymentAnalyticsViewSet, basename='payment-analytics')
 router.register(r'invoices', InvoiceViewSet, basename='invoice')
 router.register(r'transactions', TransactionViewSet, basename='transaction')
 router.register(r'payment-methods', PaymentMethodViewSet, basename='payment-method')

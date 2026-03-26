@@ -722,3 +722,100 @@ class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixi
             QuizSubmissionSerializer(submission).data,
             status=status.HTTP_201_CREATED
         )
+
+from django.db.models import Count, Avg
+from django.db.models.functions import TruncMonth
+from datetime import timedelta
+
+@extend_schema(tags=['Learning - Analytics'])
+class LearningAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding enrollments and completion."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='enrollment-trends')
+    def enrollment_trends(self, request):
+        months = int(request.query_params.get('months', 6))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        user = request.user
+        base_qs = Enrollment.objects.filter(created_at__gte=start_date)
+
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(user__organization=user.organization)
+        elif user.role == 'instructor':
+            base_qs = base_qs.filter(course__instructor=user)
+
+        # Enrolls by month
+        enrolls = base_qs.annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+
+        # Completions by month
+        comps = base_qs.filter(status='completed').annotate(
+            month=TruncMonth('completed_at')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+
+        # Build consistent month list
+        labels_map = {}
+        for i in range(months-1, -1, -1):
+            d = timezone.now() - timedelta(days=i*30)
+            label = d.strftime('%b %Y')
+            labels_map[label] = {'enrollments': 0, 'completions': 0}
+
+        for e in enrolls:
+            if e['month']:
+                labels_map[e['month'].strftime('%b %Y')]['enrollments'] = e['count']
+        for c in comps:
+            if c['month']:
+                labels_map[c['month'].strftime('%b %Y')]['completions'] = c['count']
+
+        labels = list(labels_map.keys())
+        enrollments = [labels_map[l]['enrollments'] for l in labels]
+        completions = [labels_map[l]['completions'] for l in labels]
+
+        return Response({
+            "labels": labels,
+            "enrollments": enrollments,
+            "completions": completions
+        })
+
+    @action(detail=False, methods=['get'], url_path='learning-stats')
+    def learning_stats(self, request):
+        user = request.user
+        base_qs = Enrollment.objects.all()
+
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(user__organization=user.organization)
+        elif user.role == 'instructor':
+            base_qs = base_qs.filter(course__instructor=user)
+
+        total_learners = base_qs.values('user').distinct().count()
+        
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        active_learners = base_qs.filter(updated_at__gte=thirty_days_ago).values('user').distinct().count()
+        
+        avg_completion = base_qs.aggregate(avg=Avg('progress_percentage'))['avg'] or 0.0
+
+        in_progress = base_qs.filter(status='in_progress').count()
+        completed = base_qs.filter(status='completed').count()
+
+        quiz_qs = QuizSubmission.objects.all()
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            quiz_qs = quiz_qs.filter(enrollment__user__organization=user.organization)
+        elif user.role == 'instructor':
+            quiz_qs = quiz_qs.filter(enrollment__course__instructor=user)
+            
+        avg_quiz = quiz_qs.aggregate(avg=Avg('score'))['avg'] or 0.0
+
+        return Response({
+            "total_learners": total_learners,
+            "active_learners": active_learners,
+            "avg_completion_rate": round(avg_completion, 1),
+            "total_courses_in_progress": in_progress,
+            "total_completed_courses": completed,
+            "avg_quiz_score": round(avg_quiz, 1)
+        })

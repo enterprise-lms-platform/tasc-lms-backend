@@ -379,12 +379,6 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
         # Set the user
         serializer.save(user=request.user)
         
-        # If this is the first payment method, make it default
-        if PaymentMethod.objects.filter(user=request.user).count() == 1:
-            payment_method = PaymentMethod.objects.get(id=serializer.data['id'])
-            payment_method.is_default = True
-            payment_method.save()
-        
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     @extend_schema(

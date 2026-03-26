@@ -1349,4 +1349,33 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
         })
 
 
-from django.db.models import Avg
+from django.db.models import Avg, Count, Q
+
+@extend_schema(tags=['Catalogue - Analytics'])
+class CatalogueAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding catalogue."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='courses-by-category')
+    def courses_by_category(self, request):
+        user = request.user
+        
+        course_filter = Q(courses__status='published')
+        
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            course_filter &= Q(courses__organization=user.organization)
+        elif user.role == 'instructor':
+            course_filter &= Q(courses__instructor=user)
+            # Instructors might want to see drafts too in their analytics
+            course_filter = Q(courses__instructor=user) & ~Q(courses__status='archived')
+
+        categories = Category.objects.annotate(
+            course_count=Count('courses', filter=course_filter)
+        ).filter(course_count__gt=0).order_by('-course_count')[:10]
+
+        data = [
+            {"name": c.name, "count": c.course_count}
+            for c in categories
+        ]
+
+        return Response(data)

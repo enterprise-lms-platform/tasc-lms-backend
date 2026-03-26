@@ -45,45 +45,11 @@ When you pick up a task, update this file.
 | 24 | Messaging API | Created `messaging` app, defined models, and implemented endpoints with 100% test coverage |
 | 4 | DiscussionViewSet Moderation | Added `@action` endpoints `/pin/` and `/lock/` (toggle) with RBAC, search/filter query params (`course`, `session`, `search`) in `get_queryset()`, locked-reply validation in `DiscussionReplyCreateSerializer` [26 Mar] |
 | 7 | SubmissionViewSet Validation | Added `attempt_number` to Submission model, `unique_together` updated, file-type validation against `Assignment.allowed_file_types`, attempt-limit enforcement against `Assignment.max_attempts`, `attempt_number` exposed in serializer [26 Mar] |
+| 0b | Manager Bulk Import | Implemented `ManagerBulkImport` endpoint mapping frontend keys and scoping to manager's organization |
+| DB | Analytics ViewSets | Implemented `LearningAnalyticsViewSet`, `PaymentAnalyticsViewSet`, and `CatalogueAnalyticsViewSet` for LMS dashboards |
 
 ---
 
----
-
-## HIGH — Manager Bulk Import Endpoint
-
-### 0b. Add Manager-Scoped Bulk Import & CSV Template Endpoints
-
-**Why:** Bulk import currently only exists on `UserSuperadminViewSet` (`apps/accounts/views_superadmin.py`) behind `IsTascAdminUser` permission. The frontend `ManagerBulkImportPage` calls these endpoints, but LMS managers can't access them — they get 403. Managers need their own endpoints that auto-scope imported users to their organization.
-
-**Backend changes needed:**
-
-**a) Add `bulk_import` action to the manager's UserViewSet (or create one):**
-```
-POST /api/v1/manager/users/bulk_import/
-```
-- Permission: `IsLmsManager` (or equivalent org-manager permission)
-- Behaviour: Same CSV parsing logic as superadmin version (`views_superadmin.py` lines 78-211), but:
-  - Auto-assign `organization = request.user.organization` to every imported user
-  - Only allow roles that a manager can grant (e.g., `learner`, `instructor` — NOT `tasc_admin` or `lms_manager`)
-  - Validate that the manager's org hasn't exceeded its user quota (if applicable)
-- Response shape must match `BulkImportResult`:
-  ```json
-  { "created": 5, "total": 8, "successful": 5, "failed": 3, "errors": [{ "row": 2, "message": "..." }] }
-  ```
-
-**b) Add `csv_template` action for managers:**
-```
-GET /api/v1/manager/users/csv_template/
-```
-- Can reuse the same template as superadmin, or provide a simplified one (without org column since it's auto-assigned)
-
-**c) Refactor shared logic:**
-- Extract the CSV parsing/validation from `UserSuperadminViewSet.bulk_import()` into a shared utility (e.g., `apps/accounts/utils/csv_import.py`) so both superadmin and manager views can reuse it without duplication.
-
-**Frontend impact:** Once backend is ready, update `ManagerBulkImportPage` to import from a new `manager.services.ts` bulk import API pointing to `/api/v1/manager/users/...` instead of the superadmin path.
-
-**Also:** Consider adding a superadmin bulk import route in the frontend (`/superadmin/bulk-import`) that reuses the `ManagerBulkImportPage` component — the "Bulk Import" button on `AllUsersPage` currently has no destination page.
 
 ---
 

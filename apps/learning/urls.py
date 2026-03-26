@@ -10,9 +10,11 @@ from .views import (
     ReportViewSet,
     SubmissionViewSet,
     QuizSubmissionViewSet,
+    LearningAnalyticsViewSet,
 )
 
 router = DefaultRouter()
+router.register(r'analytics', LearningAnalyticsViewSet, basename='learning-analytics')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r'session-progress', SessionProgressViewSet, basename='session-progress')
 router.register(r'certificates', CertificateViewSet, basename='certificate')

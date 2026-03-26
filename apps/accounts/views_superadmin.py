@@ -126,12 +126,22 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
         for row_num, row in enumerate(reader, start=2):
             total_rows += 1
             
-            email = row.get('email', '').strip()
-            first_name = row.get('first_name', '').strip()
-            last_name = row.get('last_name', '').strip()
-            role = row.get('role', 'learner').strip().lower()
+            # Map frontend export columns to backend expected columns
+            email = (row.get('email') or row.get('email_address') or '').strip()
+            role = (row.get('role') or row.get('user_role') or 'learner').strip().lower()
             department = row.get('department', '').strip()
             phone_number = row.get('phone_number', '').strip()
+            
+            # Handle full_name splitting if first_name/last_name are missing
+            first_name = row.get('first_name', '').strip()
+            last_name = row.get('last_name', '').strip()
+            full_name = row.get('full_name', '').strip()
+            
+            if not first_name and not last_name and full_name:
+                parts = full_name.split(' ', 1)
+                first_name = parts[0]
+                if len(parts) > 1:
+                    last_name = parts[1]
             
             if not email:
                 errors.append({
