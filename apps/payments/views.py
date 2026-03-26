@@ -879,6 +879,59 @@ class PaymentViewSet(viewsets.ModelViewSet):
             )
 
 
+from django.db.models import Sum, Count
+from django.db.models.functions import TruncMonth
+
+@extend_schema(tags=['Payments - Analytics'])
+class PaymentAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding revenue."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='revenue')
+    def revenue(self, request):
+        months = int(request.query_params.get('months', 6))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        user = request.user
+        base_qs = Transaction.objects.filter(
+            status='completed',
+            created_at__gte=start_date
+        )
+
+        # Scope by role
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(organization=user.organization)
+
+        monthly = base_qs.annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            total=Sum('amount')
+        ).order_by('month')
+
+        # Build consistent month list
+        labels_map = {}
+        for i in range(months - 1, -1, -1):
+            d = timezone.now() - timedelta(days=i * 30)
+            label = d.strftime('%b %Y')
+            labels_map[label] = 0
+
+        for m in monthly:
+            if m['month']:
+                key = m['month'].strftime('%b %Y')
+                if key in labels_map:
+                    labels_map[key] = float(m['total'] or 0)
+
+        labels = list(labels_map.keys())
+        revenue = list(labels_map.values())
+        total_revenue = sum(revenue)
+
+        return Response({
+            "labels": labels,
+            "revenue": revenue,
+            "total_revenue": total_revenue,
+        })
+
+
 @extend_schema(
     tags=['Payments - Webhooks'],
     description='Handle Flutterwave webhooks',
