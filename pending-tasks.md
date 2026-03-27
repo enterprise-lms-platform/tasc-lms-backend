@@ -79,15 +79,15 @@ Invoice.transactions -> Transaction (related_name="transactions")
 
 | Pri | # | Task | Backend File(s) | Frontend Blocked Page(s) |
 |-----|---|------|-----------------|--------------------------|
-| HIGH | 29 | Saved/Favorited Courses API | `apps/learning/` (new) | `SavedCoursesPage`, `CatalogCourseCard` |
-| HIGH | 30 | CourseViewSet Ordering/Search | `apps/catalogue/views.py:215` | Manager TopCourses widget |
+| ✅ | 29 | ~~Saved/Favorited Courses API~~ | `apps/learning/` | `SavedCoursesPage`, `CatalogCourseCard` |
+| ✅ | 30 | ~~CourseViewSet Ordering/Search~~ | `apps/catalogue/views.py` | Manager TopCourses widget |
 | HIGH | 31 | Organization annotations | `apps/accounts/serializers_superadmin.py:8`, `views_superadmin.py:13` | SuperadminOrganizationsTable |
-| HIGH | 32 | Course stats action | `apps/catalogue/views.py:215` | `AllCoursesPage` KPIs |
-| HIGH | 33 | Assessments list+stats | new superadmin view | `AssessmentsPage` |
-| HIGH | 34 | Certificates admin-scoped | `apps/learning/views.py:254` | `CertificationsPage` |
-| HIGH | 35 | Instructor stats+list | `apps/accounts/views_superadmin.py:44` | `InstructorsPage` |
-| HIGH | 36 | Invoice stats action | `apps/payments/views.py:89` | `InvoicesPage` KPIs |
-| HIGH | 37 | Revenue breakdown | new superadmin view | `RevenuePage` |
+| ✅ | 32 | ~~Course stats action~~ | `apps/catalogue/views.py` | `AllCoursesPage` KPIs |
+| ✅ | 33 | ~~Assessments stats~~ (via SubmissionViewSet) | `apps/learning/views.py` | `AssessmentsPage` |
+| ✅ | 34 | ~~Certificates admin-scoped + stats~~ | `apps/learning/views.py` | `CertificationsPage` |
+| ✅ | 35 | ~~Instructor stats~~ | `apps/accounts/views_superadmin.py` | `InstructorsPage` |
+| ✅ | 36 | ~~Invoice stats action~~ | `apps/payments/views.py` | `InvoicesPage` KPIs |
+| ✅ | 37 | ~~Revenue breakdown~~ | `apps/payments/views.py` | `RevenuePage` |
 | HIGH | 6 | Session quiz/assignment POST | `apps/catalogue/views.py:834` | Quiz/Assignment creation |
 | HIGH | 60 | Mobile money (Flutterwave) | `apps/payments/` | `CheckoutPaymentPage` |
 | MED | 1 | Assignment serializer `update()` | `apps/catalogue/serializers.py:463` | Assignment editing |
@@ -116,7 +116,7 @@ Invoice.transactions -> Transaction (related_name="transactions")
 
 ---
 
-### Task 29: Saved / Favorited Courses API
+### Task 29: Saved / Favorited Courses API ✅ DONE (27 Mar)
 
 **Problem:** Frontend `SavedCoursesPage.tsx` and `CatalogCourseCard.tsx` heart icon have no backend persistence. Favorites stored in React state only.
 
@@ -263,7 +263,7 @@ The nested `course` object is produced by `CourseListSerializer` (line 619 of `a
 
 ---
 
-### Task 30: CourseViewSet — Add Ordering & Search
+### Task 30: CourseViewSet — Add Ordering & Search ✅ DONE (27 Mar)
 
 **File:** `apps/catalogue/views.py`, line 215 — `class CourseViewSet(viewsets.ModelViewSet)`
 
@@ -351,7 +351,7 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 32: Superadmin Course Stats Action
+### Task 32: Superadmin Course Stats Action ✅ DONE (27 Mar)
 
 **File:** `apps/catalogue/views.py` line 215 — `CourseViewSet`
 
@@ -404,7 +404,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 33: Superadmin Assessments — List & Stats
+### Task 33: Superadmin Assessments — Stats ✅ DONE (27 Mar, via SubmissionViewSet stats action)
 
 **Problem:** `AssessmentsPage` at route `/superadmin/assessments` shows hardcoded KPIs and table.
 
@@ -501,7 +501,7 @@ path("superadmin/", include("apps.catalogue.urls_superadmin")),
 
 ---
 
-### Task 34: Superadmin Certificates — Admin-Scoped List + Stats
+### Task 34: Superadmin Certificates — Admin-Scoped List + Stats ✅ DONE (27 Mar)
 
 **File:** `apps/learning/views.py` line 254 — `CertificateViewSet(viewsets.ReadOnlyModelViewSet)`
 
@@ -551,7 +551,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 
 ---
 
-### Task 35: Superadmin Instructors — Stats & List
+### Task 35: Superadmin Instructors — Stats & List ✅ DONE (27 Mar)
 
 **File:** `apps/accounts/views_superadmin.py` line 44 — `UserSuperadminViewSet`
 
@@ -617,7 +617,7 @@ And expose `courses_count`, `students_count` in `UserSuperadminSerializer` as `I
 
 ---
 
-### Task 36: Invoice Stats Action
+### Task 36: Invoice Stats Action ✅ DONE (27 Mar)
 
 **File:** `apps/payments/views.py` line 89 — `InvoiceViewSet(viewsets.ModelViewSet)`
 
@@ -652,7 +652,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 37: Superadmin Revenue Breakdown
+### Task 37: Superadmin Revenue Breakdown ✅ DONE (27 Mar)
 
 **Problem:** `RevenuePage` shows hardcoded revenue KPIs and per-org breakdown.
 
