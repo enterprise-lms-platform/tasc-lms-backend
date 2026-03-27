@@ -47,6 +47,26 @@ from apps.learning.serializers import (
 User = get_user_model()
 
 
+def _coerce_quiz_question_points(pts, existing_points=None):
+    """
+    Parse points for quiz_questions PUT. None preserves existing on update, else defaults to 0.
+    Raises ValidationError (400) for invalid values.
+    """
+    if pts is None:
+        if existing_points is not None:
+            return max(0, int(existing_points))
+        return 0
+    try:
+        v = int(pts)
+    except (TypeError, ValueError):
+        raise ValidationError(
+            {'questions': ['Invalid points value; must be a non-negative integer.']}
+        )
+    if v < 0:
+        raise ValidationError({'questions': ['points must be >= 0.']})
+    return v
+
+
 class CataloguePageNumberPagination(PageNumberPagination):
     """Pagination for catalogue list endpoints (tags, categories)."""
     page_size = 50
@@ -1140,6 +1160,7 @@ class SessionViewSet(viewsets.ModelViewSet):
         }
         questions = quiz.questions.all().order_by('order', 'id')
         return {
+            'quiz_id': quiz.id,
             'session': session_data,
             'settings': quiz.settings or {},
             'questions': QuizQuestionSerializer(questions, many=True).data,
@@ -1229,7 +1250,12 @@ class SessionViewSet(viewsets.ModelViewSet):
                 expl = (item.get('explanation') or '').strip()
 
                 if qid is not None:
-                    qid = int(qid) if not isinstance(qid, int) else qid
+                    try:
+                        qid = int(qid) if not isinstance(qid, int) else qid
+                    except (TypeError, ValueError):
+                        raise ValidationError(
+                            {'questions': [f'Invalid question id: {qid!r}']}
+                        )
                     if qid not in existing_ids:
                         raise ValidationError(
                             {'questions': [f'Question id {qid} does not belong to this quiz.']}
@@ -1243,7 +1269,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                     qobj.order = order_val
                     qobj.question_type = qt
                     qobj.question_text = qtext
-                    qobj.points = max(0, int(pts))
+                    qobj.points = _coerce_quiz_question_points(pts, existing_points=qobj.points)
                     qobj.answer_payload = ap if isinstance(ap, dict) else {}
                     qobj.explanation = expl
                     qobj.save()
@@ -1253,7 +1279,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                         order=order_val,
                         question_type=qt,
                         question_text=qtext,
-                        points=max(0, int(pts)),
+                        points=_coerce_quiz_question_points(pts, existing_points=None),
                         answer_payload=ap if isinstance(ap, dict) else {},
                         explanation=expl,
                     )

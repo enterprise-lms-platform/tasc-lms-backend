@@ -553,9 +553,9 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
         enrollment = attrs.get('enrollment')
         quiz = attrs.get('quiz')
 
-        if enrollment.quiz != quiz:
+        if quiz.session.course_id != enrollment.course_id:
             raise serializers.ValidationError(
-                {"quiz": "The quiz does not belong to the enrolled course."}
+                {"quiz": "The quiz does not belong to the enrollment's course."}
             )
 
         existing_attempts = QuizSubmission.objects.filter(
