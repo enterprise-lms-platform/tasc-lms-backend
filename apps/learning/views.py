@@ -12,7 +12,7 @@ from .models import (
     QuizSubmission, QuizAnswer
 )
 from .serializers import (
-    EnrollmentSerializer, EnrollmentCreateSerializer,
+    EnrollmentSerializer, EnrollmentCreateSerializer, BulkEnrollmentSerializer,
     SessionProgressSerializer, SessionProgressUpdateSerializer,
     CertificateSerializer,
     DiscussionSerializer, DiscussionCreateSerializer,
@@ -133,6 +133,66 @@ class EnrollmentViewSet(
         
         serializer = CertificateSerializer(certificate)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary='Bulk enroll users',
+        description='Manager only. Enrolls multiple users from the manager\'s organization into a course.',
+        request=BulkEnrollmentSerializer,
+        responses={
+            200: OpenApiResponse(description='Bulk enrollment results'),
+            403: OpenApiResponse(description='Not an LMS manager'),
+        },
+    )
+    @action(detail=False, methods=['post'])
+    def bulk(self, request):
+        from apps.accounts.rbac import is_lms_manager
+        from django.db import transaction
+        from django.contrib.auth import get_user_model
+        
+        user = request.user
+        if not is_lms_manager(user):
+            return Response({'error': 'Only LMS Managers can bulk enroll users.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        serializer = BulkEnrollmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        course = serializer.validated_data['course']
+        user_ids = serializer.validated_data['user_ids']
+        
+        User = get_user_model()
+        valid_users = User.objects.filter(id__in=user_ids, organization=user.organization)
+        valid_user_ids = set(valid_users.values_list('id', flat=True))
+        
+        existing_enrollments = set(Enrollment.objects.filter(
+            course=course, 
+            user_id__in=valid_user_ids
+        ).values_list('user_id', flat=True))
+        
+        new_user_ids = valid_user_ids - existing_enrollments
+        
+        enrollments_to_create = [
+            Enrollment(
+                user_id=uid,
+                course=course,
+                organization=user.organization,
+                paid_amount=0,
+                currency='USD'
+            )
+            for uid in new_user_ids
+        ]
+        
+        if enrollments_to_create:
+            with transaction.atomic():
+                Enrollment.objects.bulk_create(enrollments_to_create, ignore_conflicts=True)
+                
+        failed = len(user_ids) - len(valid_user_ids)
+        
+        return Response({
+            'enrolled': len(new_user_ids),
+            'already_enrolled': len(existing_enrollments),
+            'failed': failed,
+            'errors': ['Some users were not found or do not belong to your organization.'] if failed > 0 else []
+        }, status=status.HTTP_200_OK)
 
 
 @extend_schema(

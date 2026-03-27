@@ -19,7 +19,7 @@ from apps.learning.models import Enrollment
 
 from .models import (
     Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module,
-    Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
+    Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview, SessionAttachment
 )
 from .permissions import (
     CanEditBankQuestion, CanEditQuestionCategory, CanEditCourse,
@@ -37,7 +37,7 @@ from .serializers import (
     QuizSettingsUpdateSerializer,
     SessionCreateSerializer, SessionSerializer,
     TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
-    CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer,
+    CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer, SessionAttachmentSerializer,
 )
 
 User = get_user_model()
@@ -1413,3 +1413,49 @@ class CatalogueAnalyticsViewSet(viewsets.ViewSet):
         ]
 
         return Response(data)
+
+
+@extend_schema(tags=['Catalogue - Attachments'])
+class SessionAttachmentViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing session attachments (resources)."""
+    serializer_class = SessionAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = SessionAttachment.objects.all().select_related('uploaded_by')
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            qs = qs.filter(session_id=session_id)
+        return qs
+
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+        session = serializer.validated_data['session']
+        course = session.module.course
+        user = self.request.user
+        
+        is_owner = course.instructor == user
+        from apps.accounts.rbac import is_admin_like, is_lms_manager
+        if not (is_owner or is_admin_like(user) or is_lms_manager(user)):
+             raise PermissionDenied("You do not have permission to add attachments to this course.")
+
+        file_obj = self.request.FILES.get('file')
+        file_size = file_obj.size if file_obj else 0
+        file_name = file_obj.name.lower() if file_obj else ''
+        file_type = file_name.split('.')[-1] if '.' in file_name else 'unknown'
+
+        serializer.save(
+            uploaded_by=user,
+            file_size=file_size,
+            file_type=file_type
+        )
+
+    def perform_destroy(self, instance):
+        from rest_framework.exceptions import PermissionDenied
+        course = instance.session.module.course
+        user = self.request.user
+        is_owner = course.instructor == user
+        from apps.accounts.rbac import is_admin_like, is_lms_manager
+        if not (is_owner or is_admin_like(user) or is_lms_manager(user)):
+             raise PermissionDenied("You do not have permission to delete this attachment.")
+        instance.delete()

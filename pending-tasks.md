@@ -50,6 +50,8 @@ When you pick up a task, update this file.
 | 5 | Module Bulk Reorder | `ModuleBulkReorderSerializer` + `reorder` action in `ModuleViewSet` with `bulk_update` + `transaction.atomic()` [27 Mar] |
 | 18 | Analytics Endpoints | `LearningAnalyticsViewSet`, `PaymentAnalyticsViewSet`, `CatalogueAnalyticsViewSet` — enrollment-trends, learning-stats, revenue, courses-by-category [26 Mar] |
 | 19 | Certificate Auto-Creation | Added `post_save` signal on Enrollment to auto-create Certificate when completed. Added `latest` action and public `verify` to `CertificateViewSet`. [27 Mar] |
+| 20 | Bulk Enrollment Endpoint | `BulkEnrollmentSerializer` + `bulk` action on `EnrollmentViewSet`. Manager-only, org-scoped, `bulk_create` with `ignore_conflicts`. Frontend wired with user selection checkboxes. [27 Mar] |
+| 21 | Session Attachments | `SessionAttachment` model + `SessionAttachmentViewSet` at `/api/v1/catalogue/session-attachments/`. Frontend `CoursePlayerPage` Resources tab now uses real data. [27 Mar] |
 
 ---
 
@@ -583,7 +585,7 @@ Response:
 
 ---
 
-### 20. Bulk Enrollment Endpoint
+### ~~20. Bulk Enrollment Endpoint~~ ✅ COMPLETED [27 Mar]
 
 **Why:** `ManagerBulkEnrollPage` needs to enroll multiple users into a course at once. Currently no bulk endpoint exists.
 
@@ -614,7 +616,7 @@ Response:
 
 ---
 
-### 21. Session Attachments / Resources Endpoint
+### ~~21. Session Attachments / Resources Endpoint~~ ✅ COMPLETED [27 Mar]
 
 **Why:** CoursePlayerPage has a "Resources" tab that currently uses `sampleResources[]` hardcoded data. There's no backend support for attaching downloadable files to lessons/sessions.
 

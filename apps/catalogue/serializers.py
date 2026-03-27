@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
+from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview, SessionAttachment
 
 
 def _get_user_enrollment(user, course):
@@ -976,3 +976,16 @@ class ApproveActionSerializer(serializers.Serializer):
 class RejectActionSerializer(serializers.Serializer):
     """Required body for reject action."""
     reviewer_comments = serializers.CharField(required=True, allow_blank=False)
+
+
+class SessionAttachmentSerializer(serializers.ModelSerializer):
+    uploaded_by_name = serializers.SerializerMethodField()
+    file_url = serializers.FileField(source='file', read_only=True)
+
+    class Meta:
+        model = SessionAttachment
+        fields = ['id', 'session', 'title', 'file', 'file_url', 'file_type', 'file_size', 'uploaded_by', 'uploaded_by_name', 'created_at']
+        read_only_fields = ['id', 'file_url', 'file_type', 'file_size', 'uploaded_by', 'uploaded_by_name', 'created_at']
+
+    def get_uploaded_by_name(self, obj):
+        return obj.uploaded_by.get_full_name() if obj.uploaded_by else None

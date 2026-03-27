@@ -93,6 +93,15 @@ class EnrollmentCreateSerializer(serializers.ModelSerializer):
         return enrollment
 
 
+class BulkEnrollmentSerializer(serializers.Serializer):
+    """Serializer for bulk enrolling users."""
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all())
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+
+
 class SessionProgressSerializer(serializers.ModelSerializer):
     """Serializer for SessionProgress model."""
     session_title = serializers.SerializerMethodField()

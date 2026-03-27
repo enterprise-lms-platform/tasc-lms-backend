@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    SessionAttachmentViewSet,
     TagViewSet,
     CategoryViewSet,
     CourseViewSet,
@@ -24,6 +25,7 @@ router.register(r'courses', CourseViewSet, basename='course')
 router.register(r'approval-requests', CourseApprovalRequestViewSet, basename='approval-request')
 router.register(r'modules', ModuleViewSet, basename='module')
 router.register(r'sessions', SessionViewSet, basename='session')
+router.register(r'session-attachments', SessionAttachmentViewSet, basename='session-attachment')
 router.register(r'course-reviews', CourseReviewViewSet, basename='course-review')
 
 urlpatterns = [
