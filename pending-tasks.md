@@ -88,7 +88,7 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | ✅ | 35 | ~~Instructor stats~~ | `apps/accounts/views_superadmin.py` | `InstructorsPage` |
 | ✅ | 36 | ~~Invoice stats action~~ | `apps/payments/views.py` | `InvoicesPage` KPIs |
 | ✅ | 37 | ~~Revenue breakdown~~ | `apps/payments/views.py` | `RevenuePage` |
-| HIGH | 6 | Session quiz/assignment POST | `apps/catalogue/views.py:834` | Quiz/Assignment creation |
+| ✅ | 6 | ~~Session quiz/assignment POST & Learner Submit~~ | `apps/catalogue/views.py:834` | Quiz/Assignment/Submission flow |
 | HIGH | 60 | Mobile money (Flutterwave) | `apps/payments/` | `CheckoutPaymentPage` |
 | MED | 1 | Assignment serializer `update()` | `apps/catalogue/serializers.py:463` | Assignment editing |
 | MED | 43 | Manager org settings | new endpoint | `ManagerSettingsPage` |
@@ -723,7 +723,7 @@ This gives:
 
 ---
 
-### Task 6: SessionViewSet — Quiz/Assignment POST + Preview
+### Task 6: SessionViewSet — Quiz/Assignment POST + Learner Submit ✅ DONE (28 Mar)
 
 **File:** `apps/catalogue/views.py` line 834 — `SessionViewSet(viewsets.ModelViewSet)`
 

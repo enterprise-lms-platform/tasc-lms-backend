@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from apps.accounts.rbac import is_admin_like
 from apps.common.spaces import create_boto3_client, delete_spaces_object
 from apps.payments.permissions import HasActiveSubscription
-from apps.learning.models import Enrollment
+from apps.learning.models import Enrollment, QuizSubmission, Submission
 
 from .models import (
     Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module,
@@ -34,10 +34,14 @@ from .serializers import (
     ModuleSerializer, ModuleBulkReorderSerializer,
     QuestionCategorySerializer,
     QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
-    QuizSettingsUpdateSerializer,
+    QuizSettingsUpdateSerializer, QuizSessionSummarySerializer,
     SessionCreateSerializer, SessionSerializer,
     TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
     CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer, SessionAttachmentSerializer,
+)
+from apps.learning.serializers import (
+    QuizSubmissionCreateSerializer, QuizSubmissionSerializer,
+    SubmissionCreateSerializer, SubmissionSerializer
 )
 
 User = get_user_model()
@@ -861,6 +865,8 @@ class SessionViewSet(viewsets.ModelViewSet):
     pagination_class = CataloguePageNumberPagination
 
     def get_permissions(self):
+        if self.action == 'submit':
+            return [IsAuthenticated()]
         perms = list(super().get_permissions())
         if self.action == 'asset_url':
             perms.append(HasActiveSubscription())
@@ -1069,6 +1075,61 @@ class SessionViewSet(viewsets.ModelViewSet):
             'method': 'GET',
         })
 
+    @extend_schema(
+        summary='Submit quiz or assignment (Learner)',
+        description='Learner-facing endpoint to submit work for this session. '
+                    'Infers Enrollment and Quiz/Assignment from session context.',
+        request=None,
+        responses={201: dict, 403: dict, 404: dict},
+    )
+    @action(detail=True, methods=['post'], url_path='submit')
+    def submit(self, request, pk=None):
+        session = self.get_object()
+        user = request.user
+
+        # 1. Find Enrollment
+        enrollment = Enrollment.objects.filter(user=user, course=session.course).first()
+        if not enrollment:
+            return Response(
+                {'detail': 'You must be enrolled in this course to submit work.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 2. Identify Work Type and Submit
+        if session.session_type == Session.SessionType.QUIZ:
+            quiz = self._get_or_create_quiz(session)
+            if not quiz:
+                return Response({'detail': 'Quiz not found for this session.'}, status=status.HTTP_404_NOT_FOUND)
+
+            data = request.data.copy()
+            data['quiz'] = quiz.id
+            data['enrollment'] = enrollment.id
+
+            serializer = QuizSubmissionCreateSerializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            submission = serializer.save()
+            return Response(QuizSubmissionSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+        elif session.session_type == Session.SessionType.ASSIGNMENT:
+            assignment = self._get_assignment(session)
+            if not assignment:
+                return Response({'detail': 'Assignment not found for this session.'}, status=status.HTTP_404_NOT_FOUND)
+
+            data = request.data.copy()
+            data['assignment'] = assignment.id
+            data['enrollment'] = enrollment.id
+
+            serializer = SubmissionCreateSerializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            submission = serializer.save()
+            return Response(SubmissionSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+        else:
+            return Response(
+                {'detail': 'This session type does not support submissions.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
     def _build_quiz_detail_response(self, session, quiz):
         """Build QuizDetailSerializer payload for GET/PATCH responses."""
         session_data = {
@@ -1086,25 +1147,39 @@ class SessionViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Get or update quiz for a session',
-        description='GET: Returns quiz detail. PATCH: Merges settings. Only for session_type=quiz.',
+        description='GET: Returns quiz detail. POST: Create quiz. PATCH: Merges settings. Only for session_type=quiz.',
         request=QuizSettingsUpdateSerializer,
         responses={
             200: OpenApiResponse(description='Quiz detail'),
+            201: OpenApiResponse(description='Quiz created'),
+            400: OpenApiResponse(description='Quiz already exists'),
             404: OpenApiResponse(description='Session not found or not a quiz session'),
         },
     )
-    @action(detail=True, methods=['get', 'patch'], url_path='quiz')
+    @action(detail=True, methods=['get', 'post', 'patch'], url_path='quiz')
     def quiz(self, request, pk=None):
         session = self.get_object()
-        quiz = self._get_or_create_quiz(session)
-        if quiz is None:
+        if session.session_type != Session.SessionType.QUIZ:
             return Response(
                 {'detail': 'Session is not a quiz session.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
         if request.method == 'GET':
+            quiz = self._get_or_create_quiz(session)
             return Response(self._build_quiz_detail_response(session, quiz))
+
+        if request.method == 'POST':
+            if Quiz.objects.filter(session=session).exists():
+                return Response(
+                    {'detail': 'Quiz already exists for this session.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            quiz = Quiz.objects.create(session=session, settings=request.data.get('settings', {}))
+            return Response(self._build_quiz_detail_response(session, quiz), status=status.HTTP_201_CREATED)
+
         # PATCH
+        quiz = self._get_or_create_quiz(session)
         serializer = QuizSettingsUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         incoming = serializer.validated_data.get('settings', {})
@@ -1250,33 +1325,47 @@ class SessionViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Assignment config',
-        description='GET: Return assignment config. 404 if not assignment session or no config. '
-                    'PUT: Create/replace config. PATCH: Partial update.',
+        description='GET: Return assignment config. 404 if not assignment session. '
+                    'POST: Create config. PUT: Replace config. PATCH: Partial update.',
         request=AssignmentCreateUpdateSerializer,
         responses={
             200: AssignmentSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            404: OpenApiResponse(description='Session not assignment type or no config'),
+            201: AssignmentSerializer,
+            400: OpenApiResponse(description='Validation error or Assignment already exists'),
+            404: OpenApiResponse(description='Session not assignment type'),
         },
     )
-    @action(detail=True, methods=['get', 'put', 'patch'], url_path='assignment')
+    @action(detail=True, methods=['get', 'post', 'put', 'patch'], url_path='assignment')
     def assignment(self, request, pk=None):
         session = self.get_object()
-        if request.method == 'GET':
-            assignment = self._get_assignment(session)
-            if assignment is None:
-                return Response(
-                    {'detail': 'Assignment config not found or session is not an assignment session.'},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-            return Response(AssignmentSerializer(assignment).data)
-        # PUT / PATCH: create if missing, then update
-        assignment = self._get_or_create_assignment(session)
-        if assignment is None:
+        if session.session_type != Session.SessionType.ASSIGNMENT:
             return Response(
                 {'detail': 'Session is not an assignment session.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if request.method == 'GET':
+            assignment = self._get_assignment(session)
+            if assignment is None:
+                return Response(
+                    {'detail': 'Assignment config not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            return Response(AssignmentSerializer(assignment).data)
+
+        if request.method == 'POST':
+            if hasattr(session, 'assignment'):
+                return Response(
+                    {'detail': 'Assignment already exists for this session.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            serializer = AssignmentCreateUpdateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            assignment = Assignment.objects.create(session=session, **serializer.validated_data)
+            return Response(AssignmentSerializer(assignment).data, status=status.HTTP_201_CREATED)
+
+        # PUT / PATCH: create if missing, then update
+        assignment = self._get_or_create_assignment(session)
         partial = request.method == 'PATCH'
         serializer = AssignmentCreateUpdateSerializer(assignment, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)

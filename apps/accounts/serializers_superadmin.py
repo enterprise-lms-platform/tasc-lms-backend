@@ -29,10 +29,12 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "billing_email",
             "billing_address",
             "tax_id",
+            "user_count",
+            "courses_count",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "user_count", "courses_count", "created_at", "updated_at"]
 
 class UserSuperadminSerializer(serializers.ModelSerializer):
     """

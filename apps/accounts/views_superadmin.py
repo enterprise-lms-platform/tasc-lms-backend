@@ -15,7 +15,10 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
     CRUD API for Organizations intended for Superadmins (TASC_ADMIN).
     """
 
-    queryset = Organization.objects.all().order_by("-created_at")
+    queryset = Organization.objects.annotate(
+        user_count=models.Count("memberships", distinct=True),
+        courses_count=models.Count("enrollments__course", distinct=True),
+    ).order_by("-created_at")
     serializer_class = OrganizationSuperadminSerializer
     permission_classes = [IsTascAdminUser]
 
