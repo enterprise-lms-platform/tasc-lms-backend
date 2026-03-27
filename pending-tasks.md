@@ -826,6 +826,65 @@ class SavedCourseViewSet(viewsets.ModelViewSet):
 
 ---
 
+### 60. Mobile Money Payment API (Flutterwave) — HIGH
+
+**Why:** Frontend `CheckoutPaymentPage.tsx` currently mocks mobile money. The backend needs to provide an endpoint that initiates a Flutterwave `charge` for mobile money (M-Pesa, MTN, Airtel).
+
+**Endpoint:**
+```
+POST /api/v1/payments/flutterwave/charge-mobile-money/
+```
+Request:
+```json
+{
+  "enrollment": 12,
+  "phone_number": "+254700000000",
+  "provider": "mpesa",
+  "promo_code": "SAVE20"
+}
+```
+**Fix:** Implement logic to call Flutterwave Mobile Money API, handle webhook for success/failure, and update enrollment status.
+
+---
+
+### 61. Promo Code System — MEDIUM
+
+**Why:** Both `CheckoutPaymentPage.tsx` and `SubscriptionManagementPage.tsx` use a hardcoded "SAVE20" code. We need a real system to validate and apply discounts.
+
+**Endpoints:**
+```
+GET  /api/v1/public/promo-codes/verify/?code=SAVE20&course=5
+POST /api/v1/superadmin/promo-codes/  — create (admin only)
+```
+**Model:** `PromoCode` with `code`, `discount_percent`/`amount`, `valid_from`, `valid_to`, `max_uses`, `organization` (optional).
+
+---
+
+### 62. Course Review Enhancements — MEDIUM
+
+**Why:** `CourseReviews.tsx` currently mocks filtering and "Helpful"/"Report" interactions.
+
+**Fix:**
+- Add `@action(detail=True, methods=['post'])` `helpful` and `report` to `CourseReviewViewSet`.
+- Update `CourseReviewViewSet.list()` to support filtering by `rating` (1-5).
+- Add `helpful_count` and `report_count` fields to the model/serializer.
+
+---
+
+### 63. Transaction & Invoice Exports — MEDIUM
+
+**Why:** `PaymentHistoryPage.tsx` and `InvoiceReceiptPage.tsx` have non-functional Download/Email buttons for receipts and statements.
+
+**Endpoints:**
+```
+GET /api/v1/payments/transactions/export-csv/
+GET /api/v1/payments/invoices/{id}/download-pdf/
+POST /api/v1/payments/invoices/{id}/email-receipt/
+```
+**Implementation:** Use a Celery task to generate PDFs with WeasyPrint or a simple template; use Django's `EmailMessage` for sending.
+
+---
+
 ### 30. CourseViewSet — Add Ordering Support (for Top Courses widget)
 
 **Why:** The Manager dashboard `TopCourses` widget needs to fetch courses sorted by popularity (`enrollment_count`). The `CourseListSerializer` already exposes `enrollment_count`, but the `CourseViewSet` has no `filter_backends` or `ordering_fields` configured — so `?ordering=-enrollment_count` doesn't work. Courses come back in default order.
