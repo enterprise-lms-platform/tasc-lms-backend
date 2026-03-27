@@ -52,6 +52,7 @@ When you pick up a task, update this file.
 | 19 | Certificate Auto-Creation | Added `post_save` signal on Enrollment to auto-create Certificate when completed. Added `latest` action and public `verify` to `CertificateViewSet`. [27 Mar] |
 | 20 | Bulk Enrollment Endpoint | `BulkEnrollmentSerializer` + `bulk` action on `EnrollmentViewSet`. Manager-only, org-scoped, `bulk_create` with `ignore_conflicts`. Frontend wired with user selection checkboxes. [27 Mar] |
 | 21 | Session Attachments | `SessionAttachment` model + `SessionAttachmentViewSet` at `/api/v1/catalogue/session-attachments/`. Frontend `CoursePlayerPage` Resources tab now uses real data. [27 Mar] |
+| 28 | Badges System | Implemented Badge/UserBadge models, criteria engine (11 types), auto-award signals, seed command, and API endpoints. Frontend rewired to real API. [27 Mar] |
 
 ---
 
@@ -716,111 +717,8 @@ Response:
 
 ---
 
-### 28. Badges System (Completion Badges)
 
-**Why:** User story: *"As a Learner, I want to receive completion badges so that I feel motivated to finish courses."* (userStories.md line 55). Frontend team will build the badges page, confetti modal, and display — backend needs to provide the models, auto-award logic, and API endpoints.
-
-**Models:**
-```python
-class Badge(models.Model):
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(unique=True)
-    description = models.TextField()
-    icon_url = models.URLField()  # S3 URL to badge PNG
-    category = models.CharField(max_length=50, choices=[
-        ('course_completion', 'Course Completion'),
-        ('enrollment', 'Enrollment Milestones'),
-        ('subscription', 'Subscription Loyalty'),
-        ('assessment', 'Assessment Excellence'),
-        ('engagement', 'Engagement'),
-        ('milestone', 'Milestones'),
-    ])
-    criteria_type = models.CharField(max_length=50)  # e.g., 'certificates_count', 'quiz_perfect_score'
-    criteria_value = models.IntegerField(default=1)   # e.g., 5 (for "complete 5 courses")
-    order = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['category', 'order']
-
-class UserBadge(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earned_badges')
-    badge = models.ForeignKey(Badge, on_delete=models.CASCADE, related_name='earners')
-    earned_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ['user', 'badge']
-        indexes = [models.Index(fields=['user', '-earned_at'])]
-```
-
-**Endpoints:**
-```
-GET  /api/v1/learning/badges/          — all badge definitions (public, cacheable)
-GET  /api/v1/learning/my-badges/       — current user's earned badges with earned_at
-POST /api/v1/learning/badges/check/    — trigger badge evaluation for current user (returns newly earned)
-```
-
-**Response — `GET /api/v1/learning/badges/`:**
-```json
-[
-  {
-    "id": 1,
-    "slug": "first-course",
-    "name": "First Steps",
-    "description": "Completed your first course",
-    "icon_url": "https://cdn.../badges/first-course.png",
-    "category": "course_completion",
-    "criteria_type": "certificates_count",
-    "criteria_value": 1
-  }
-]
-```
-
-**Response — `GET /api/v1/learning/my-badges/`:**
-```json
-[
-  {
-    "badge": { "id": 1, "slug": "first-course", "name": "First Steps", ... },
-    "earned_at": "2026-03-15T10:30:00Z"
-  }
-]
-```
-
-**Response — `POST /api/v1/learning/badges/check/`:**
-```json
-{
-  "newly_earned": [
-    { "badge": { ... }, "earned_at": "2026-03-22T14:00:00Z" }
-  ]
-}
-```
-
-**Auto-award logic** — use Django signals or a shared `check_and_award_badges(user)` function called from:
-- `Certificate` post_save signal → check course completion badges
-- `Enrollment` post_save signal → check enrollment badges
-- `QuizSubmission` post_save signal → check assessment badges
-- `Discussion` post_save signal → check engagement badges
-- `UserSubscription` post_save signal → check subscription badges
-
-**Badge criteria mapping** (22 badges total, see `TASC-LMS-frontend/src/config/badges.md` for full list):
-
-| criteria_type | criteria_value | Badges |
-|---------------|---------------|--------|
-| `certificates_count` | 1, 3, 5, 10, 20 | First Steps, Knowledge Seeker, Dedicated Learner, Knowledge Master, Scholar |
-| `enrollments_count` | 1, 5, 10 | Early Bird, Curious Mind, Course Explorer |
-| `subscriptions_count` | 1, 3, 5 | Supporter, Loyal Learner, Platinum Member |
-| `quiz_submissions_count` | 1 | Quiz Taker |
-| `quiz_perfect_score` | 1 | Perfect Score (any quiz with score=100%) |
-| `quiz_pass_streak` | 5 | Quiz Streak |
-| `assignment_full_marks` | 1 | Assignment Ace |
-| `discussions_count` | 1, 10 | Conversation Starter, Community Voice |
-| `reviews_count` | 1 | Reviewer |
-| `profile_complete` | 1 | Identity (avatar + bio + phone filled) |
-| `first_certificate` | 1 | Certified |
-
-**Seed data:** Create a management command `python manage.py seed_badges` that creates all 22 badge records.
-
-**Frontend blocking:** LearnerBadgesPage (new page, sidebar link already exists), badge earned confetti modal
+---
 
 ---
 

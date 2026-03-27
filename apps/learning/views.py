@@ -903,3 +903,62 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
             "total_completed_courses": completed,
             "avg_quiz_score": round(avg_quiz, 1)
         })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BADGES
+# ═══════════════════════════════════════════════════════════════════════════
+
+@extend_schema(
+    tags=['Learning - Badges'],
+    description='Badge definitions and user badge tracking',
+)
+class BadgeViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
+    """
+    ViewSet for badges.
+    - GET  /badges/         → list all badge definitions
+    - GET  /badges/my-badges/ → current user's earned badges
+    - POST /badges/check/   → trigger badge evaluation, return newly earned
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from apps.learning.badge_serializers import UserBadgeSerializer, BadgeSerializer
+        if self.action == 'my_badges':
+            return UserBadgeSerializer
+        return BadgeSerializer
+
+    def get_queryset(self):
+        from apps.learning.models import Badge
+        return Badge.objects.all()
+
+    @extend_schema(
+        summary='List all badge definitions',
+        description='Returns all available badges with their criteria.',
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Get current user earned badges',
+        description='Returns badges earned by the currently authenticated user.',
+    )
+    @action(detail=False, methods=['get'], url_path='my-badges')
+    def my_badges(self, request):
+        from apps.learning.models import UserBadge
+        from apps.learning.badge_serializers import UserBadgeSerializer
+        qs = UserBadge.objects.filter(user=request.user).select_related('badge')
+        serializer = UserBadgeSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(
+        summary='Check and award badges',
+        description='Triggers badge evaluation for the current user. Returns any newly earned badges.',
+    )
+    @action(detail=False, methods=['post'], url_path='check')
+    def check_badges(self, request):
+        from apps.learning.badge_engine import check_and_award_badges
+        from apps.learning.badge_serializers import UserBadgeSerializer
+        newly_earned = check_and_award_badges(request.user)
+        serializer = UserBadgeSerializer(newly_earned, many=True)
+        return Response({'newly_earned': serializer.data})

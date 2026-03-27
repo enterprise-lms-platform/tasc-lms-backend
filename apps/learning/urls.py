@@ -11,6 +11,7 @@ from .views import (
     SubmissionViewSet,
     QuizSubmissionViewSet,
     LearningAnalyticsViewSet,
+    BadgeViewSet,
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register(r'discussion-replies', DiscussionReplyViewSet, basename='discuss
 router.register(r'reports', ReportViewSet, basename='report')
 router.register(r'submissions', SubmissionViewSet, basename='submission')
 router.register(r'quiz-submissions', QuizSubmissionViewSet, basename='quiz-submission')
+router.register(r'badges', BadgeViewSet, basename='badge')
 
 urlpatterns = [
     path('', include(router.urls)),

@@ -441,3 +441,59 @@ class Report(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.status}"
+
+
+class Badge(models.Model):
+    """
+    Badge represents an achievable badge/award for learners.
+    Seeded via `python manage.py seed_badges`.
+    """
+
+    class Category(models.TextChoices):
+        COURSE_COMPLETION = 'course_completion', 'Course Completion'
+        ENROLLMENT = 'enrollment', 'Enrollment Milestones'
+        SUBSCRIPTION = 'subscription', 'Subscription Loyalty'
+        ASSESSMENT = 'assessment', 'Assessment Excellence'
+        ENGAGEMENT = 'engagement', 'Engagement'
+        MILESTONE = 'milestone', 'Milestones'
+
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(unique=True)
+    description = models.TextField()
+    icon_url = models.URLField(blank=True, default='')
+    category = models.CharField(max_length=50, choices=Category.choices)
+    criteria_type = models.CharField(max_length=50)
+    criteria_value = models.IntegerField(default=1)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['category', 'order']
+
+    def __str__(self):
+        return f"{self.name} ({self.slug})"
+
+
+class UserBadge(models.Model):
+    """
+    UserBadge tracks which user has earned which badge.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='earned_badges',
+    )
+    badge = models.ForeignKey(
+        Badge,
+        on_delete=models.CASCADE,
+        related_name='earners',
+    )
+    earned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'badge']
+        indexes = [models.Index(fields=['user', '-earned_at'])]
+        ordering = ['-earned_at']
+
+    def __str__(self):
+        return f"{self.user} → {self.badge.name}"
