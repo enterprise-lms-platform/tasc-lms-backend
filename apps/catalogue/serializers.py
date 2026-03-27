@@ -920,8 +920,11 @@ class CourseReviewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CourseReview
-        fields = ['id', 'course', 'user', 'user_name', 'rating', 'content', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'course', 'user', 'user_name', 'rating', 'content',
+            'helpful_count', 'report_count', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'helpful_count', 'report_count', 'created_at', 'updated_at']
 
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email

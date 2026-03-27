@@ -1398,8 +1398,39 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
         course_id = self.request.query_params.get('course')
         if course_id:
             queryset = queryset.filter(course_id=course_id)
-        
+            
+        rating = self.request.query_params.get('rating')
+        if rating:
+            queryset = queryset.filter(rating=rating)
+            
         return queryset
+
+    @extend_schema(
+        summary="Mark review as helpful",
+        description="Increments the helpful count for a review.",
+        responses={200: CourseReviewSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def helpful(self, request, pk=None):
+        review = self.get_object()
+        from django.db.models import F
+        CourseReview.objects.filter(pk=review.pk).update(helpful_count=F('helpful_count') + 1)
+        review.refresh_from_db()
+        return Response(CourseReviewSerializer(review).data)
+
+    @extend_schema(
+        summary="Report a review",
+        description="Increments the report count for a review.",
+        responses={200: CourseReviewSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def report(self, request, pk=None):
+        review = self.get_object()
+        from django.db.models import F
+        CourseReview.objects.filter(pk=review.pk).update(report_count=F('report_count') + 1)
+        review.refresh_from_db()
+        return Response(CourseReviewSerializer(review).data)
+
 
     def create(self, request, *args, **kwargs):
         course_id = request.data.get('course')

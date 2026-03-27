@@ -121,6 +121,7 @@ class Organization(models.Model):
     description = models.TextField(blank=True)
     logo = models.URLField(blank=True, null=True)
     website = models.URLField(blank=True, null=True)
+    industry = models.CharField(max_length=100, blank=True)
     
     # Contact
     contact_email = models.EmailField(blank=True, null=True)
@@ -137,6 +138,9 @@ class Organization(models.Model):
     billing_email = models.EmailField(blank=True, null=True)
     billing_address = models.TextField(blank=True)
     tax_id = models.CharField(max_length=100, blank=True, null=True)
+    
+    # Settings JSON blob
+    settings = models.JSONField(default=dict, blank=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

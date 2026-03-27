@@ -91,10 +91,10 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | ✅ | 6 | ~~Session quiz/assignment POST & Learner Submit~~ | `apps/catalogue/views.py:834` | Quiz/Assignment/Submission flow |
 | HIGH | 60 | Mobile money (Flutterwave) | `apps/payments/` | `CheckoutPaymentPage` |
 | MED | 1 | Assignment serializer `update()` | `apps/catalogue/serializers.py:463` | Assignment editing |
-| MED | 43 | Manager org settings | new endpoint | `ManagerSettingsPage` |
+| ✅ | 43 | ~~Manager org settings~~ | `apps/accounts/views.py:270` | `ManagerSettingsPage` |
 | MED | 44 | Manager billing/plan | new endpoint | `ManagerBillingPage` |
 | MED | 61 | Promo codes | `apps/payments/` (new model) | `CheckoutPaymentPage` |
-| MED | 62 | Review helpful/report | `apps/catalogue/views.py:1268` | `CourseReviews` |
+| ✅ | 62 | ~~Review helpful/report~~ | `apps/catalogue/views.py:1268` | `CourseReviews` |
 | MED | 63 | Transaction/invoice exports | `apps/payments/views.py` | Download buttons |
 | MED | 22 | Security metrics | new superadmin view | `SecurityPage` |
 | MED | 25 | Redis integration | `config/settings.py` | Infrastructure |
