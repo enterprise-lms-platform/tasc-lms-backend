@@ -1,6 +1,6 @@
 # TASC LMS Backend — Pending Tasks
 
-**Last updated:** 27 March 2026
+**Last updated:** 27 March 2026 (Post-Audit Update)
 **Repo:** `tasc-lms-backend`
 **Contact for questions:** Coordinate with frontend team on endpoint contracts
 
