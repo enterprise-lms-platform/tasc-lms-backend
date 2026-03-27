@@ -274,6 +274,7 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
     """
 
     permission_classes = [IsAuthenticated]
+    serializer_class = PesapalRecurringInitiateSerializer
 
     @extend_schema(
         summary="Initiate recurring Pesapal payment",

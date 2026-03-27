@@ -28,6 +28,12 @@ class LearnerCourseViewSet(viewsets.GenericViewSet):
     lookup_url_kwarg = 'slug'
     permission_classes = [IsAuthenticated]
     queryset = Course.objects.filter(status=Course.Status.PUBLISHED)
+    serializer_class = LearnerMyCourseSerializer
+
+    def get_serializer_class(self):
+        if self.action == 'enroll':
+            return LearnerEnrollmentResponseSerializer
+        return LearnerMyCourseSerializer
 
     @extend_schema(
         summary='Enroll in course',

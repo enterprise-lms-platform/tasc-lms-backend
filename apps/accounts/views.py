@@ -1,12 +1,13 @@
 import logging
 
-from drf_spectacular.utils import extend_schema, OpenApiExample, extend_schema_view, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiExample, extend_schema_view, OpenApiParameter, inline_serializer
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response as RestResponse
+from rest_framework import serializers
 
 from .serializers import (
     UserMeSerializer,
@@ -273,17 +274,27 @@ def invite_user(request):
     tags=["Admin"],
     summary="Promote user to instructor",
     description="Promote a target user to instructor. Allowed for TASC Admin and LMS Manager.",
+    request=inline_serializer(
+        name='PromoteUserRoleSerializer',
+        fields={}
+    ),
     responses={
-        200: {
-            "type": "object",
-            "properties": {
-                "message": {"type": "string"},
-                "user_id": {"type": "integer"},
-                "new_role": {"type": "string"},
-            },
-        },
-        403: {"type": "object", "properties": {"detail": {"type": "string"}}},
-        404: {"type": "object", "properties": {"detail": {"type": "string"}}},
+        200: inline_serializer(
+            name='PromoteUserRoleResponseSerializer',
+            fields={
+                'message': serializers.CharField(),
+                'user_id': serializers.IntegerField(),
+                'new_role': serializers.CharField(),
+            }
+        ),
+        403: inline_serializer(
+            name='PromoteUserRole403Serializer',
+            fields={'detail': serializers.CharField()}
+        ),
+        404: inline_serializer(
+            name='PromoteUserRole404Serializer',
+            fields={'detail': serializers.CharField()}
+        ),
     },
 )
 @api_view(["POST"])

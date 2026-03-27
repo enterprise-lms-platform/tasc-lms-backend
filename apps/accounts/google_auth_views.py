@@ -321,9 +321,19 @@ def google_oauth_link(request):
     tags=['Accounts'],
     summary='Unlink Google Account',
     description='Unlink Google OAuth account from the current user.',
+    request=inline_serializer(
+        name='GoogleOAuthUnlinkSerializer',
+        fields={'password': serializers.CharField(write_only=True)}
+    ),
     responses={
-        200: OpenApiResponse(description='Account unlinked successfully'),
-        400: OpenApiResponse(description='Cannot unlink account'),
+        200: inline_serializer(
+            name='GoogleOAuthUnlinkResponseSerializer',
+            fields={'message': serializers.CharField()}
+        ),
+        400: inline_serializer(
+            name='GoogleOAuthUnlink400Serializer',
+            fields={'error': serializers.CharField()}
+        ),
     },
 )
 @api_view(['POST'])
