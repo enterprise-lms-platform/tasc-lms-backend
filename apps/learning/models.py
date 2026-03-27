@@ -497,3 +497,30 @@ class UserBadge(models.Model):
 
     def __str__(self):
         return f"{self.user} → {self.badge.name}"
+
+
+class SavedCourse(models.Model):
+    """
+    SavedCourse represents a user's bookmarked/favorited course.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='saved_courses'
+    )
+    course = models.ForeignKey(
+        'catalogue.Course',
+        on_delete=models.CASCADE,
+        related_name='saved_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'course')
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} saved {self.course.title}"

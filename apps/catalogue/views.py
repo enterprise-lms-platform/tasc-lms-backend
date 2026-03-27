@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -217,6 +217,11 @@ class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all()
     permission_classes = [IsAuthenticated, IsCourseWriter, CanEditCourse, CanDeleteCourse]
 
+    from rest_framework.filters import OrderingFilter, SearchFilter
+    filter_backends = [OrderingFilter, SearchFilter]
+    ordering_fields = ['title', 'price', 'published_at', 'created_at', 'enrollment_count']
+    search_fields = ['title', 'short_description']
+
     def get_serializer_class(self):
         if self.action == 'list':
             return CourseListSerializer
@@ -251,7 +256,25 @@ class CourseViewSet(viewsets.ModelViewSet):
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(instructor_id=self.request.user.id)
 
-        return queryset.distinct()
+        return queryset.annotate(
+            enrollment_count=Count('enrollments')
+        ).distinct()
+
+    @extend_schema(
+        summary='Course statistics (superadmin)',
+        description='Returns aggregate course counts for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level course statistics."""
+        qs = Course.objects.all()
+        return Response({
+            'total': qs.count(),
+            'published': qs.filter(status=Course.Status.PUBLISHED).count(),
+            'draft': qs.filter(status=Course.Status.DRAFT).count(),
+            'archived': qs.filter(status=Course.Status.ARCHIVED).count(),
+            'pending_approval': qs.filter(status=Course.Status.PENDING_APPROVAL).count(),
+        })
 
     @extend_schema(
         summary='List courses',

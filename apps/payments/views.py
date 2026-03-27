@@ -260,6 +260,33 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'invoice_number': invoice.invoice_number
         })
 
+    @extend_schema(
+        summary='Invoice statistics (superadmin)',
+        description='Returns aggregate invoice stats for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level invoice statistics."""
+        from django.db.models import Sum
+        all_invoices = Invoice.objects.all()
+        now = timezone.now()
+
+        total = all_invoices.count()
+        paid = all_invoices.filter(status='paid').count()
+        pending = all_invoices.filter(status='pending').count()
+        overdue = all_invoices.filter(status='pending', due_date__lt=now).count()
+        total_revenue = all_invoices.filter(
+            status='paid'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+
+        return Response({
+            'total': total,
+            'paid': paid,
+            'pending': pending,
+            'overdue': overdue,
+            'total_revenue': str(total_revenue),
+        })
+
 
 @extend_schema(
     tags=['Payments - Transactions'],
@@ -778,6 +805,53 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 'error': result.get('message', 'Verification failed'),
                 'details': result.get('data')
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(
+        summary='Revenue statistics (superadmin)',
+        description='Returns monthly revenue breakdown and growth rate for admin dashboards',
+    )
+    @action(detail=False, methods=['get'], url_path='revenue-stats')
+    def revenue_stats(self, request):
+        """Admin-level revenue statistics."""
+        from django.db.models import Sum
+        from django.db.models.functions import TruncMonth
+
+        months = int(request.query_params.get('months', 12))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        monthly = (
+            Transaction.objects.filter(
+                status='completed',
+                created_at__gte=start_date,
+            )
+            .annotate(month=TruncMonth('created_at'))
+            .values('month')
+            .annotate(revenue=Sum('amount'))
+            .order_by('month')
+        )
+
+        monthly_data = []
+        prev_revenue = None
+        for m in monthly:
+            rev = float(m['revenue'] or 0)
+            growth = None
+            if prev_revenue is not None and prev_revenue > 0:
+                growth = round(((rev - prev_revenue) / prev_revenue) * 100, 1)
+            monthly_data.append({
+                'month': m['month'].strftime('%b %Y') if m['month'] else None,
+                'revenue': str(m['revenue'] or 0),
+                'growth_percent': growth,
+            })
+            prev_revenue = rev
+
+        total_revenue = Transaction.objects.filter(
+            status='completed'
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        return Response({
+            'total_revenue': str(total_revenue),
+            'monthly': monthly_data,
+        })
     
     @extend_schema(
         summary='Get banks',

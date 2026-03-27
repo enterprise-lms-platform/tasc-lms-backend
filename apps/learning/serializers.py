@@ -4,7 +4,7 @@ from django.utils import timezone
 from datetime import timedelta
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer
+    QuizSubmission, QuizAnswer, SavedCourse
 )
 from apps.catalogue.models import Quiz, QuizQuestion
 from apps.catalogue.models import Course, Session
@@ -679,3 +679,30 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
         submission.save()
 
         return submission
+
+
+class SavedCourseSerializer(serializers.ModelSerializer):
+    """Serializer for SavedCourse model — used in saved courses list."""
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    course_thumbnail = serializers.CharField(source='course.thumbnail', read_only=True)
+    course_slug = serializers.CharField(source='course.slug', read_only=True)
+    course_price = serializers.DecimalField(source='course.price', max_digits=10, decimal_places=2, read_only=True)
+    course_level = serializers.CharField(source='course.level', read_only=True)
+    instructor_name = serializers.SerializerMethodField()
+    category_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SavedCourse
+        fields = [
+            'id', 'user', 'course', 'course_title', 'course_thumbnail',
+            'course_slug', 'course_price', 'course_level',
+            'instructor_name', 'category_name', 'created_at',
+        ]
+        read_only_fields = ['id', 'user', 'created_at']
+
+    def get_instructor_name(self, obj):
+        inst = obj.course.instructor
+        return inst.get_full_name() or inst.email if inst else None
+
+    def get_category_name(self, obj):
+        return obj.course.category.name if obj.course.category else None

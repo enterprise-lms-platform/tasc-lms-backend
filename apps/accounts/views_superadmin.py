@@ -74,6 +74,32 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
             }
         )
 
+    @action(detail=False, methods=["get"], url_path="instructor-stats")
+    def instructor_stats(self, request):
+        """
+        Returns instructor-specific KPI counts for the superadmin Instructors page.
+        """
+        from django.db.models import Count, Avg
+        instructors = User.objects.filter(role=User.Role.INSTRUCTOR)
+        total = instructors.count()
+        active = instructors.filter(is_active=True).count()
+
+        instructor_course_stats = instructors.annotate(
+            course_count=Count('instructed_courses')
+        )
+        avg_courses = instructor_course_stats.aggregate(
+            avg=Avg('course_count')
+        )['avg'] or 0
+
+        with_courses = instructor_course_stats.filter(course_count__gt=0).count()
+
+        return Response({
+            "total": total,
+            "active": active,
+            "avg_courses_per_instructor": round(avg_courses, 1),
+            "with_courses": with_courses,
+        })
+
     @action(detail=False, methods=["post"])
     def bulk_import(self, request):
         """

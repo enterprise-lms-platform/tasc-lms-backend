@@ -9,7 +9,7 @@ from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer
+    QuizSubmission, QuizAnswer, SavedCourse
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer, BulkEnrollmentSerializer,
@@ -21,6 +21,7 @@ from .serializers import (
     SubmissionSerializer, SubmissionCreateSerializer,
     SubmissionUpdateSerializer, GradeSubmissionSerializer,
     QuizSubmissionSerializer, QuizSubmissionCreateSerializer,
+    SavedCourseSerializer,
 )
 
 
@@ -325,6 +326,30 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'Certificate not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+    @extend_schema(
+        summary='Certificate statistics',
+        description='Returns aggregate certificate stats for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level certificate statistics."""
+        from django.db.models.functions import TruncMonth
+        all_certs = Certificate.objects.all()
+        now = timezone.now()
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        total = all_certs.count()
+        this_month = all_certs.filter(issued_at__gte=start_of_month).count()
+        total_courses = all_certs.values('enrollment__course').distinct().count()
+        valid = all_certs.filter(is_valid=True).count()
+
+        return Response({
+            'total': total,
+            'this_month': this_month,
+            'total_courses_with_certs': total_courses,
+            'valid': valid,
+        })
 
 
 @extend_schema(
@@ -700,6 +725,38 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         })
 
     @extend_schema(
+        summary='Assessment statistics (superadmin)',
+        description='Returns aggregate assessment stats: quizzes, assignments, grading status',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level assessment statistics."""
+        from django.db.models import Avg
+        total_assignments = Submission.objects.count()
+        graded = Submission.objects.filter(status=Submission.Status.GRADED).count()
+        pending = Submission.objects.filter(status=Submission.Status.SUBMITTED).count()
+        avg_grade = Submission.objects.filter(
+            status=Submission.Status.GRADED, grade__isnull=False
+        ).aggregate(avg=Avg('grade'))['avg'] or 0
+
+        total_quizzes = QuizSubmission.objects.count()
+        avg_quiz_score = QuizSubmission.objects.aggregate(avg=Avg('score'))['avg'] or 0
+        quiz_pass_rate = 0
+        if total_quizzes > 0:
+            passed = QuizSubmission.objects.filter(passed=True).count()
+            quiz_pass_rate = round((passed / total_quizzes) * 100, 1)
+
+        return Response({
+            'total_assignments': total_assignments,
+            'graded': graded,
+            'pending': pending,
+            'average_grade': round(avg_grade, 1),
+            'total_quizzes': total_quizzes,
+            'average_quiz_score': round(avg_quiz_score, 1),
+            'quiz_pass_rate': quiz_pass_rate,
+        })
+
+    @extend_schema(
         summary='Bulk grade submissions',
         description='Grade multiple submissions at once',
         request=serializers.Serializer,
@@ -962,3 +1019,87 @@ class BadgeViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
         newly_earned = check_and_award_badges(request.user)
         serializer = UserBadgeSerializer(newly_earned, many=True)
         return Response({'newly_earned': serializer.data})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SAVED COURSES
+# ═══════════════════════════════════════════════════════════════════════════
+
+@extend_schema(
+    tags=['Learning - Saved Courses'],
+    description='Manage user\'s bookmarked/saved courses',
+)
+class SavedCourseViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """ViewSet for managing saved/bookmarked courses."""
+    serializer_class = SavedCourseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedCourse.objects.filter(
+            user=self.request.user
+        ).select_related('course', 'course__instructor', 'course__category')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @extend_schema(
+        summary='List saved courses',
+        description='Returns all courses saved/bookmarked by the authenticated user',
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Save a course',
+        description='Bookmark a course. Send { "course": <id> }.',
+        responses={201: SavedCourseSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Unsave a course',
+        description='Remove a course from bookmarks by saved-course ID',
+    )
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Toggle save/unsave a course',
+        description='If the course is saved, unsave it. If not saved, save it. Returns { "saved": bool }.',
+        request={'application/json': {'type': 'object', 'properties': {'course': {'type': 'integer'}}}},
+        responses={200: {'type': 'object', 'properties': {'saved': {'type': 'boolean'}, 'id': {'type': 'integer', 'nullable': True}}}},
+    )
+    @action(detail=False, methods=['post'])
+    def toggle(self, request):
+        course_id = request.data.get('course')
+        if not course_id:
+            return Response(
+                {'error': 'course field is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            saved = SavedCourse.objects.get(user=request.user, course_id=course_id)
+            saved.delete()
+            return Response({'saved': False, 'id': None})
+        except SavedCourse.DoesNotExist:
+            from apps.catalogue.models import Course as CatCourse
+            try:
+                course = CatCourse.objects.get(id=course_id)
+            except CatCourse.DoesNotExist:
+                return Response(
+                    {'error': 'Course not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            saved = SavedCourse.objects.create(user=request.user, course=course)
+            return Response(
+                {'saved': True, 'id': saved.id},
+                status=status.HTTP_201_CREATED
+            )
