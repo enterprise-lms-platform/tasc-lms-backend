@@ -657,6 +657,20 @@ class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixi
         user = self.request.user
         queryset = QuizSubmission.objects.select_related('enrollment__user', 'quiz__session').prefetch_related('answers')
 
+        quiz_id = self.request.query_params.get('quiz')
+        if quiz_id:
+            try:
+                queryset = queryset.filter(quiz_id=int(quiz_id))
+            except (TypeError, ValueError):
+                pass
+
+        enrollment_id = self.request.query_params.get('enrollment')
+        if enrollment_id:
+            try:
+                queryset = queryset.filter(enrollment_id=int(enrollment_id))
+            except (TypeError, ValueError):
+                pass
+
         if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
             return queryset
 
