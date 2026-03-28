@@ -93,7 +93,7 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | ✅ | 1 | ~~Assignment serializer `update()`~~ | `apps/catalogue/serializers.py:553` | Assignment editing |
 | ✅ | 43 | ~~Manager org settings~~ | `apps/accounts/views.py:270` | `ManagerSettingsPage` |
 | ✅ | 44 | ~~Manager billing/plan~~ | `apps/accounts/views_manager.py` | `ManagerBillingPage` |
-| MED | 61 | Promo codes | `apps/payments/` (new model) | `CheckoutPaymentPage` |
+| ~~REMOVED~~ | 61 | ~~Promo codes~~ — removed from scope | — | — |
 | ✅ | 62 | ~~Review helpful/report~~ | `apps/catalogue/views.py:1268` | `CourseReviews` |
 | ✅ | 63 | ~~Transaction/invoice exports~~ | `apps/payments/views.py` | Download buttons |
 | ✅ | 22 | ~~Security metrics~~ | `apps/accounts/views_superadmin.py` | `SecurityPage` |
@@ -987,7 +987,7 @@ path("manager/billing/usage/", ManagerBillingUsageView.as_view(), name="manager-
 
 ---
 
-### Task 61: Promo Code System
+### Task 61: ~~Promo Code System~~ — REMOVED FROM SCOPE
 
 **Step 1 — Model** (`apps/payments/models.py`, append):
 
