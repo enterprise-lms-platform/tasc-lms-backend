@@ -10,6 +10,12 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
     Superadmin view of Organization. Includes all fields and stats.
     """
 
+    user_count = serializers.SerializerMethodField()
+
+    def get_user_count(self, obj):
+        # Membership.organization -> related_name "memberships" on Organization
+        return obj.memberships.filter(is_active=True).count()
+
     class Meta:
         model = Organization
         fields = [
@@ -33,8 +39,9 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "courses_count",
             "created_at",
             "updated_at",
+            "user_count",
         ]
-        read_only_fields = ["id", "user_count", "courses_count", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "user_count"]
 
 class UserSuperadminSerializer(serializers.ModelSerializer):
     """
