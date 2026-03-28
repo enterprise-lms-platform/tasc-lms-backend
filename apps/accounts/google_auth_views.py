@@ -3,8 +3,8 @@ import logging
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
-from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse, inline_serializer
+from rest_framework import status, serializers
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response

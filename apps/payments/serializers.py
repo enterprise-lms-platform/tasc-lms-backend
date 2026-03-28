@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from .models import (
     Payment, Invoice, InvoiceItem, Transaction, 
     PaymentMethod, Subscription, UserSubscription, PaymentWebhook
@@ -28,6 +29,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'metadata', 'user', 'course_title'
         ]
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
 
@@ -118,8 +120,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
-    remaining_amount = serializers.ReadOnlyField()
-    is_paid = serializers.ReadOnlyField()
+    remaining_amount = serializers.SerializerMethodField()
+    is_paid = serializers.SerializerMethodField()
     
     class Meta:
         model = Invoice
@@ -137,14 +139,25 @@ class InvoiceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'invoice_number', 'created_at', 'updated_at', 'paid_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() if obj.user else obj.customer_name
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
+    
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_remaining_amount(self, obj):
+        return obj.remaining_amount
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_paid(self, obj):
+        return obj.is_paid
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
@@ -186,15 +199,19 @@ class TransactionSerializer(serializers.ModelSerializer):
             'updated_at', 'completed_at'
         ]
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_user_name(self, obj):
         return obj.user.email if obj.user else obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_invoice_number(self, obj):
         return obj.invoice.invoice_number if obj.invoice else None
 
@@ -216,7 +233,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     display_name = serializers.SerializerMethodField()
-    is_expired = serializers.ReadOnlyField()
+    is_expired = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentMethod
@@ -231,14 +248,21 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.EmailField(allow_null=True))
     def get_user_email(self, obj):
         return obj.user.email if obj.user else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField)
     def get_display_name(self, obj):
         return str(obj)
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_expired(self, obj):
+        return obj.is_expired
 
 
 class PaymentMethodCreateSerializer(serializers.ModelSerializer):
@@ -294,8 +318,8 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     subscription_name = serializers.SerializerMethodField()
-    is_trial = serializers.ReadOnlyField()
-    is_active = serializers.ReadOnlyField()
+    is_trial = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
     
     class Meta:
         model = UserSubscription
@@ -308,14 +332,25 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.EmailField(allow_null=True))
     def get_user_email(self, obj):
         return obj.user.email if obj.user else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField)
     def get_subscription_name(self, obj):
         return obj.subscription.name
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_trial(self, obj):
+        return obj.is_trial
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_active(self, obj):
+        return obj.is_active
 
 
 class SubscriptionStatusSerializer(serializers.Serializer):
