@@ -76,7 +76,7 @@ class AuditLogListView(APIView):
                 start = timezone.make_aware(datetime.combine(dt.date(), datetime.min.time()))
                 queryset = queryset.filter(created_at__gte=start)
             except ValueError:
-                pass
+                return Response({'error': 'Invalid date format. Expected YYYY-MM-DD.'}, status=400)
 
         # to: created_at <= end of day
         to_date = request.query_params.get("to", "").strip()
@@ -86,7 +86,7 @@ class AuditLogListView(APIView):
                 end = timezone.make_aware(datetime.combine(dt.date(), datetime.max.time()))
                 queryset = queryset.filter(created_at__lte=end)
             except ValueError:
-                pass
+                return Response({'error': 'Invalid date format. Expected YYYY-MM-DD.'}, status=400)
 
         # action filter
         action_param = request.query_params.get("action", "all").strip().lower()
@@ -113,3 +113,29 @@ class AuditLogListView(APIView):
 
         serializer = AuditLogListSerializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class AuditLogSummaryView(APIView):
+    """GET /api/v1/superadmin/audit-logs/summary/"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        role = getattr(user, "role", None)
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        if role in ("tasc_admin", "lms_manager"):
+            qs = AuditLog.objects.filter(created_at__gte=today_start)
+        elif role == "org_admin":
+            org_ids = user.memberships.values_list("organization_id", flat=True)
+            qs = AuditLog.objects.filter(created_at__gte=today_start, organization_id__in=org_ids)
+        else:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({
+            "logins": qs.filter(action=AuditLog.Action.LOGIN).count(),
+            "created": qs.filter(action=AuditLog.Action.CREATED).count(),
+            "updated": qs.filter(action=AuditLog.Action.UPDATED).count(),
+            "deleted": qs.filter(action=AuditLog.Action.DELETED).count(),
+        })

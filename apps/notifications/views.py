@@ -46,7 +46,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return NotificationSerializer
     
     def get_queryset(self):
-        queryset = Notification.objects.filter(user=self.request.user)
+        queryset = Notification.objects.filter(user=self.request.user).select_related('user')
         
         # Filter by read status
         is_read = self.request.query_params.get('is_read', None)

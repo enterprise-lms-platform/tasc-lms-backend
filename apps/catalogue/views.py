@@ -140,7 +140,7 @@ class BankQuestionViewSet(viewsets.ModelViewSet):
                 cid = int(category)
                 queryset = queryset.filter(category_id=cid)
             except (ValueError, TypeError):
-                pass
+                return Response({'error': 'Invalid category ID'}, status=400)
         search = request.query_params.get('search', '').strip()
         if search:
             queryset = queryset.filter(question_text__icontains=search)

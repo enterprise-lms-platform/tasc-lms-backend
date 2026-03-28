@@ -55,7 +55,9 @@ class EnrollmentViewSet(
             ).select_related('course', 'course__category')
         else:
             # Default: show my own enrollments as a learner
-            qs = Enrollment.objects.filter(user=user)
+            qs = Enrollment.objects.filter(user=user).select_related(
+                'course', 'course__category', 'course__instructor', 'user'
+            )
 
         # Optional course filter
         course_id = self.request.query_params.get('course')
@@ -367,8 +369,8 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         return DiscussionSerializer
     
     def get_queryset(self):
-        qs = Discussion.objects.all()
-        
+        qs = Discussion.objects.select_related('user', 'course', 'session')
+
         course_id = self.request.query_params.get('course')
         if course_id:
             qs = qs.filter(course_id=course_id)
@@ -463,7 +465,7 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
         return DiscussionReplySerializer
     
     def get_queryset(self):
-        return DiscussionReply.objects.all()
+        return DiscussionReply.objects.select_related('user', 'discussion')
     
     @extend_schema(
         summary='List replies',
@@ -637,11 +639,12 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Filter by user for learners, all for instructors/managers
         user = self.request.user
+        base_qs = Submission.objects.select_related(
+            'enrollment', 'enrollment__user', 'assignment', 'assignment__session', 'graded_by'
+        )
         if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
-            # Instructors and managers can see all submissions for their courses
-            return Submission.objects.all()
-        # Learners can only see their own submissions
-        return Submission.objects.filter(enrollment__user=user)
+            return base_qs
+        return base_qs.filter(enrollment__user=user)
     
     @extend_schema(
         summary='Grade submission',

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Assignment, BankQuestion, Module, QuestionCategory, Quiz, QuizQuestion
+from .models import Assignment, BankQuestion, Category, Course, Module, QuestionCategory, Quiz, QuizQuestion, Session, Tag
 
 
 @admin.register(QuestionCategory)
@@ -50,3 +50,36 @@ class ModuleAdmin(admin.ModelAdmin):
     list_filter = ('status', 'course')
     search_fields = ('title',)
     ordering = ('course', 'order')
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'slug', 'parent', 'is_active')
+    list_filter = ('is_active',)
+    search_fields = ('name', 'slug')
+    ordering = ('name',)
+
+
+@admin.register(Course)
+class CourseAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'category', 'level', 'status', 'created_at')
+    list_filter = ('status', 'level', 'category')
+    search_fields = ('title', 'slug')
+    raw_id_fields = ('category', 'instructor')
+    ordering = ('-created_at',)
+
+
+@admin.register(Session)
+class SessionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'course', 'session_type', 'status', 'order')
+    list_filter = ('session_type', 'status')
+    search_fields = ('title',)
+    raw_id_fields = ('course', 'module')
+    ordering = ('course', 'order')
+
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'slug', 'created_at')
+    search_fields = ('name', 'slug')
+    ordering = ('name',)
