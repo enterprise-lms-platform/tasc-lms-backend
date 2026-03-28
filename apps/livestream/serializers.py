@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from datetime import timedelta, datetime
 import pytz
 import re
+from drf_spectacular.utils import extend_schema_field
 
 from apps.livestream.models import (
     LivestreamSession, LivestreamAttendance,
@@ -58,15 +59,19 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
             'zoom_webhook_received'
         ]
 
+    @extend_schema_field(serializers.CharField)
     def get_instructor_name(self, obj):
         return obj.instructor.get_full_name() or obj.instructor.email
 
+    @extend_schema_field(serializers.IntegerField)
     def get_attendee_count(self, obj):
         return obj.attendances.filter(joined_at__isnull=False).count()
 
+    @extend_schema_field(serializers.IntegerField)
     def get_question_count(self, obj):
         return obj.questions.count()
 
+    @extend_schema_field(serializers.DateTimeField)
     def get_start_time_local(self, obj):
         """Return start time in user's timezone if available"""
         request = self.context.get('request')
@@ -75,6 +80,7 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
             return TimezoneService.format_for_user(obj.start_time, user_tz)
         return obj.start_time.isoformat()
 
+    @extend_schema_field(serializers.DateTimeField)
     def get_end_time_local(self, obj):
         """Return end time in user's timezone if available"""
         request = self.context.get('request')
@@ -83,6 +89,7 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
             return TimezoneService.format_for_user(obj.end_time, user_tz)
         return obj.end_time.isoformat()
 
+    @extend_schema_field(serializers.JSONField)
     def get_calendar_links(self, obj):
         """Add calendar links - populated in view"""
         return {}
@@ -223,6 +230,7 @@ class LivestreamAttendanceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    @extend_schema_field(serializers.CharField)
     def get_learner_name(self, obj):
         return obj.learner.get_full_name() or obj.learner.email
 
@@ -305,9 +313,11 @@ class LivestreamQuestionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'asked_at', 'upvotes']
 
+    @extend_schema_field(serializers.CharField)
     def get_asked_by_name(self, obj):
         return obj.asked_by.get_full_name() or obj.asked_by.email
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_answered_by_name(self, obj):
         if obj.answered_by:
             return obj.answered_by.get_full_name() or obj.answered_by.email

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.utils.text import slugify
+from drf_spectacular.utils import extend_schema_field
 
 from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview, SessionAttachment
 
@@ -151,7 +152,7 @@ class ModuleBulkReorderSerializer(serializers.Serializer):
 
 class SessionSerializer(serializers.ModelSerializer):
     """Serializer for Session model."""
-    duration_minutes = serializers.ReadOnlyField()
+    duration_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = Session
@@ -167,6 +168,10 @@ class SessionSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    @extend_schema_field(serializers.IntegerField)
+    def get_duration_minutes(self, obj):
+        return obj.duration_minutes
 
 
 class SessionCreateSerializer(serializers.ModelSerializer):
@@ -610,6 +615,7 @@ class BankQuestionListSerializer(serializers.ModelSerializer):
             'tags', 'category', 'created_at',
         ]
 
+    @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_category(self, obj):
         if obj.category_id is None:
             return None
@@ -621,12 +627,13 @@ class CourseListSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     tags = TagSerializer(many=True, read_only=True)
     instructor_name = serializers.SerializerMethodField()
-    discounted_price = serializers.ReadOnlyField()
+    discounted_price = serializers.SerializerMethodField()
     is_free = serializers.SerializerMethodField()
     enrollment_status = serializers.SerializerMethodField()
     enrollment_id = serializers.SerializerMethodField()
     progress_percentage = serializers.SerializerMethodField()
     enrolled_at = serializers.SerializerMethodField()
+    enrollment_count = serializers.IntegerField(read_only=True, default=0)
     
     class Meta:
         model = Course
@@ -643,9 +650,15 @@ class CourseListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'enrollment_count']
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_instructor_name(self, obj):
         return obj.instructor.get_full_name() or obj.instructor.email if obj.instructor else None
     
+    @extend_schema_field(serializers.DecimalField(max_digits=10, decimal_places=2, allow_null=True))
+    def get_discounted_price(self, obj):
+        return obj.discounted_price
+    
+    @extend_schema_field(serializers.BooleanField)
     def get_is_free(self, obj):
         return obj.price == 0 if obj.price is not None else True
     
@@ -655,18 +668,22 @@ class CourseListSerializer(serializers.ModelSerializer):
             return None
         return _get_user_enrollment(request.user, obj)
     
+    @extend_schema_field(serializers.CharField)
     def get_enrollment_status(self, obj):
         enrollment = self._get_enrollment(obj)
         return enrollment.status if enrollment else 'none'
     
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_enrollment_id(self, obj):
         enrollment = self._get_enrollment(obj)
         return enrollment.id if enrollment else None
     
+    @extend_schema_field(serializers.FloatField(allow_null=True))
     def get_progress_percentage(self, obj):
         enrollment = self._get_enrollment(obj)
         return float(enrollment.progress_percentage) if enrollment else None
     
+    @extend_schema_field(serializers.DateTimeField(allow_null=True))
     def get_enrolled_at(self, obj):
         enrollment = self._get_enrollment(obj)
         return enrollment.enrolled_at if enrollment else None
@@ -694,6 +711,7 @@ class CourseDetailSerializer(CourseListSerializer):
         ]
         read_only_fields = CourseListSerializer.Meta.read_only_fields + ['created_at', 'updated_at']
     
+    @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_instructor(self, obj):
         if obj.instructor:
             return {
@@ -704,6 +722,7 @@ class CourseDetailSerializer(CourseListSerializer):
             }
         return None
     
+    @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_created_by(self, obj):
         if obj.created_by:
             return {
@@ -873,7 +892,7 @@ class PublicSessionSerializer(serializers.ModelSerializer):
     Public serializer for Session - excludes video_url and content_text.
     Unauthenticated users can see session structure but not access content.
     """
-    duration_minutes = serializers.ReadOnlyField()
+    duration_minutes = serializers.SerializerMethodField()
     
     class Meta:
         model = Session
@@ -883,6 +902,10 @@ class PublicSessionSerializer(serializers.ModelSerializer):
             'is_free_preview', 'is_mandatory',
         ]
         read_only_fields = fields
+    
+    @extend_schema_field(serializers.IntegerField)
+    def get_duration_minutes(self, obj):
+        return obj.duration_minutes
 
 
 class PublicCourseDetailSerializer(CourseListSerializer):
@@ -903,6 +926,7 @@ class PublicCourseDetailSerializer(CourseListSerializer):
         ]
         read_only_fields = CourseListSerializer.Meta.read_only_fields + ['created_at', 'updated_at']
     
+    @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_instructor(self, obj):
         """Return basic instructor info without sensitive data."""
         if obj.instructor:
@@ -926,6 +950,7 @@ class CourseReviewSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'helpful_count', 'report_count', 'created_at', 'updated_at']
 
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
 
@@ -964,9 +989,11 @@ class CourseApprovalRequestSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField)
     def get_requested_by_name(self, obj):
         return obj.requested_by.get_full_name() or obj.requested_by.email if obj.requested_by else ''
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_reviewed_by_name(self, obj):
         return obj.reviewed_by.get_full_name() or obj.reviewed_by.email if obj.reviewed_by else None
 

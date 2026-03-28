@@ -2,6 +2,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from django.utils import timezone
 from datetime import timedelta
+from drf_spectacular.utils import extend_schema_field
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
     QuizSubmission, QuizAnswer, SavedCourse
@@ -35,21 +36,27 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'enrolled_at', 'progress_percentage', 'last_accessed_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
     
+    @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
     
+    @extend_schema_field(serializers.CharField)
     def get_course_title(self, obj):
         return obj.course.title
     
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_course_thumbnail(self, obj):
         return obj.course.thumbnail
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_time_remaining_days(self, obj):
         if obj.expires_at:
             remaining = obj.expires_at - timezone.now()
@@ -119,15 +126,19 @@ class SessionProgressSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'started_at', 'completed_at', 'last_accessed_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_session_title(self, obj):
         return obj.session.title
     
+    @extend_schema_field(serializers.CharField)
     def get_session_type(self, obj):
         return obj.session.session_type
     
+    @extend_schema_field(serializers.IntegerField)
     def get_duration_minutes(self, obj):
         return obj.session.video_duration_seconds // 60 if obj.session.video_duration_seconds else 0
     
+    @extend_schema_field(serializers.IntegerField)
     def get_time_spent_minutes(self, obj):
         return obj.time_spent_seconds // 60
 
@@ -148,7 +159,7 @@ class CertificateSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
-    is_expired = serializers.ReadOnlyField()
+    is_expired = serializers.SerializerMethodField()
     
     class Meta:
         model = Certificate
@@ -161,14 +172,21 @@ class CertificateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'certificate_number', 'issued_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.enrollment.user.get_full_name() or obj.enrollment.user.email
     
+    @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.enrollment.user.email
     
+    @extend_schema_field(serializers.CharField)
     def get_course_title(self, obj):
         return obj.enrollment.course.title
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_expired(self, obj):
+        return obj.is_expired
 
 
 class CertificateCreateSerializer(serializers.ModelSerializer):
@@ -186,7 +204,7 @@ class DiscussionSerializer(serializers.ModelSerializer):
     user_avatar = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
     session_title = serializers.SerializerMethodField()
-    reply_count = serializers.ReadOnlyField()
+    reply_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Discussion
@@ -200,20 +218,29 @@ class DiscussionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
     
+    @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
     
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_user_avatar(self, obj):
         return obj.user.avatar
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_session_title(self, obj):
         return obj.session.title if obj.session else None
+    
+    @extend_schema_field(serializers.IntegerField)
+    def get_reply_count(self, obj):
+        return obj.reply_count
 
 
 class DiscussionCreateSerializer(serializers.ModelSerializer):
@@ -241,12 +268,15 @@ class DiscussionReplySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
     
+    @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
     
+    @extend_schema_field(serializers.URLField(allow_null=True))
     def get_user_avatar(self, obj):
         return obj.user.avatar
 
@@ -322,21 +352,27 @@ class SubmissionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_assignment_title(self, obj):
         return obj.assignment.session.title if obj.assignment and obj.assignment.session else None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_session_title(self, obj):
         return obj.assignment.session.title if obj.assignment and obj.assignment.session else None
 
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.enrollment.user.get_full_name() or obj.enrollment.user.email
 
+    @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.enrollment.user.email
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_graded_by_name(self, obj):
         return (obj.graded_by.get_full_name() or obj.graded_by.email) if obj.graded_by else None
 
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_max_points(self, obj):
         return obj.assignment.max_points if obj.assignment else None
 
@@ -517,9 +553,11 @@ class QuizSubmissionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'attempt_number', 'score', 'max_score', 'passed', 'submitted_at']
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_quiz_title(self, obj):
         return obj.quiz.session.title if obj.quiz.session else None
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.quiz.session.course.title if obj.quiz.session and obj.quiz.session.course else None
 
