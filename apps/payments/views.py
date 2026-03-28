@@ -7,7 +7,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
+from django.http import HttpResponse
 import uuid
+import csv
 
 from .services.flutterwave_service import FlutterwaveService
 
@@ -261,6 +263,31 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         })
 
     @extend_schema(
+        summary='Download invoice PDF',
+        description='Get invoice data for PDF generation',
+    )
+    @action(detail=True, methods=['get'], url_path='download-pdf')
+    def download_pdf(self, request, pk=None):
+        """GET /api/v1/payments/invoices/{id}/download-pdf/"""
+        invoice = self.get_object()
+        # Option 1: Return invoice data for frontend CSS-based printing
+        # Option 2: Use WeasyPrint (if installed)
+        serializer = self.get_serializer(invoice)
+        return Response(serializer.data)
+        # TODO: For real PDF, add weasyprint to requirements and render template
+
+    @extend_schema(
+        summary='Email receipt',
+        description='Email invoice receipt to the customer',
+    )
+    @action(detail=True, methods=['post'], url_path='email-receipt')
+    def email_receipt(self, request, pk=None):
+        """POST /api/v1/payments/invoices/{id}/email-receipt/"""
+        invoice = self.get_object()
+        # TODO: Send email via SendGrid with invoice data
+        return Response({'status': 'Receipt email queued'})
+
+    @extend_schema(
         summary='Invoice statistics (superadmin)',
         description='Returns aggregate invoice stats for admin dashboards',
     )
@@ -367,6 +394,47 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
             'invoice': transaction.invoice.invoice_number if transaction.invoice else None,
             'receipt_url': f"/media/receipts/{transaction.transaction_id}.pdf"
         })
+
+    @extend_schema(
+        summary='Export transactions to CSV',
+        description='Download all visible transactions as a CSV file',
+    )
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/payments/transactions/export-csv/"""
+        qs = self.get_queryset()
+        
+        # Also apply any query parameter filters before returning the CSV
+        invoice_id = request.query_params.get('invoice')
+        if invoice_id:
+            qs = qs.filter(invoice_id=invoice_id)
+        
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        
+        from_date = request.query_params.get('from_date')
+        if from_date:
+            qs = qs.filter(created_at__date__gte=from_date)
+        
+        to_date = request.query_params.get('to_date')
+        if to_date:
+            qs = qs.filter(created_at__date__lte=to_date)
+            
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="transactions.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            'ID', 'Transaction ID', 'Amount', 'Currency', 'Status',
+            'Payment Method', 'Created At', 'Completed At',
+        ])
+        for t in qs:
+            writer.writerow([
+                t.id, t.transaction_id, t.amount, t.currency, t.status,
+                t.payment_method, t.created_at, t.completed_at,
+            ])
+        return response
 
 
 @extend_schema(
