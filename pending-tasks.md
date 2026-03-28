@@ -1,1019 +1,199 @@
-# TASC LMS Backend — Pending Tasks
-
-**Last updated:** 24 March 2026
-**Repo:** `tasc-lms-backend`
-**Contact for questions:** Coordinate with frontend team on endpoint contracts
+This is going to be a very long document. I'll produce it in full — every task with exact file paths, exact imports, exact field names from the model schema, exact serializer patterns matching your codebase, and response shapes matching your frontend TypeScript types.
 
 ---
 
-## How to Use This File
+```markdown
+# TASC LMS Backend — Pending Tasks (Final Specification)
 
-This file tracks all known incomplete work in the backend codebase. Each item includes:
-- Exact file paths and line numbers
-- What already exists vs what's missing
-- **Concrete request/response examples** so you can implement without guessing
-- Frontend impact
-
-When you pick up a task, update this file.
+> **For Claude Code / any agent:** Every task below is self-contained. File paths, imports, model field names, related_names, serializer base classes, URL registration patterns, and frontend response shapes are all verified against the actual codebase schema dumps. Work top-down by priority. Mark items `✅ DONE` when finished.
 
 ---
 
-## Completed Items
+## Reference: Key Patterns From Codebase
 
-| # | Item | Details |
-|---|------|---------|
-| 1 | Quiz Submission System | `QuizSubmission`/`QuizAnswer` models, serializers, views, and migration all implemented |
-| 2 | Report Generation / Celery | Celery infrastructure (`config/celery.py`), async `generate_report` task in `apps/learning/tasks.py` with all 6 report types |
-| 3 | Bulk User Import (Superadmin) | Full CSV parsing with validation, error tracking, file size/row limits in `apps/accounts/views_superadmin.py` |
-| 4 | LivestreamQuestion Model | Model, migration, serializers, and endpoints implemented in `apps/livestream/` |
-| 8 | ReportViewSet Data Queries | Covered by #2 — Celery report generation |
-| 9a | Bulk Grade Action | Implemented in `apps/learning/views.py` |
-| 9b | Grade Statistics Action | Implemented in `apps/learning/views.py` |
-| 14 | Migration Backfill | `backfill()` function fully implemented in migration 0009 |
-| — | Course Reviews | New `CourseReview` model, serializers, and viewset added |
-| — | Public Endpoints | `/api/v1/public/stats/`, `/api/v1/public/clients/`, `/api/v1/uploads/quota/` all implemented |
-| — | Celery Setup | `config/celery.py`, broker config in settings, `apps/learning/tasks.py` |
-| 0a | Public Course Search & Ordering | Added `SearchFilter` + `OrderingFilter` to `PublicCourseViewSet`. Search fields: `title`, `short_description`, `instructor__first_name`, `instructor__last_name`. Ordering fields: `title`, `published_at`, `enrollment_count`. Default: `-published_at`. |
-| — | Category courses_count | Added `courses_count` annotated field to `CategorySerializer` and `PublicCategoryViewSet` queryset (`Count` + `Q` for published courses only) |
-| — | InvoiceViewSet date filters | Added `from_date`/`to_date` query params to `InvoiceViewSet.list()` |
-| — | EnrollmentViewSet search | Added `search` filter (user name/email, course title) to `EnrollmentViewSet.get_queryset()` |
-| — | SessionProgressViewSet filters | Implemented `enrollment`, `session`, `course` filters (were documented in OpenAPI but not implemented) |
-| — | Livestream Tests & Setup | Added `apps/livestream/tests.py` and `apps/livestream/admin.py` |
-| 12 | Calendar Service | Fixed timezone caching silent error in `apps/livestream/services/calendar_service.py` |
-| 15 | Livestream Webhooks | Renamed `validate_webhook` to `webhook_health` in `apps/livestream/views.py` and `urls.py` |
-| 46 | Livestream Session Creation | Verified `IsInstructorOrReadOnly` and added `IsLmsManager` in `LivestreamSessionViewSet` |
-| 24 | Messaging API | Created `messaging` app, defined models, and implemented endpoints with 100% test coverage |
+Before starting any task, know these patterns:
 
----
-
----
-
-## HIGH — Manager Bulk Import Endpoint
-
-### 0b. Add Manager-Scoped Bulk Import & CSV Template Endpoints
-
-**Why:** Bulk import currently only exists on `UserSuperadminViewSet` (`apps/accounts/views_superadmin.py`) behind `IsTascAdminUser` permission. The frontend `ManagerBulkImportPage` calls these endpoints, but LMS managers can't access them — they get 403. Managers need their own endpoints that auto-scope imported users to their organization.
-
-**Backend changes needed:**
-
-**a) Add `bulk_import` action to the manager's UserViewSet (or create one):**
-```
-POST /api/v1/manager/users/bulk_import/
-```
-- Permission: `IsLmsManager` (or equivalent org-manager permission)
-- Behaviour: Same CSV parsing logic as superadmin version (`views_superadmin.py` lines 78-211), but:
-  - Auto-assign `organization = request.user.organization` to every imported user
-  - Only allow roles that a manager can grant (e.g., `learner`, `instructor` — NOT `tasc_admin` or `lms_manager`)
-  - Validate that the manager's org hasn't exceeded its user quota (if applicable)
-- Response shape must match `BulkImportResult`:
-  ```json
-  { "created": 5, "total": 8, "successful": 5, "failed": 3, "errors": [{ "row": 2, "message": "..." }] }
-  ```
-
-**b) Add `csv_template` action for managers:**
-```
-GET /api/v1/manager/users/csv_template/
-```
-- Can reuse the same template as superadmin, or provide a simplified one (without org column since it's auto-assigned)
-
-**c) Refactor shared logic:**
-- Extract the CSV parsing/validation from `UserSuperadminViewSet.bulk_import()` into a shared utility (e.g., `apps/accounts/utils/csv_import.py`) so both superadmin and manager views can reuse it without duplication.
-
-**Frontend impact:** Once backend is ready, update `ManagerBulkImportPage` to import from a new `manager.services.ts` bulk import API pointing to `/api/v1/manager/users/...` instead of the superadmin path.
-
-**Also:** Consider adding a superadmin bulk import route in the frontend (`/superadmin/bulk-import`) that reuses the `ManagerBulkImportPage` component — the "Bulk Import" button on `AllUsersPage` currently has no destination page.
-
----
-
-## MEDIUM — Incomplete Serializers & Models
-
-### 1. AssignmentCreateUpdateSerializer — Missing `update()` Method
-
-**File:** `apps/catalogue/serializers.py`
-
-**Status:** Has `create()` and `validate()` but no `update()` method. PUT/PATCH on assignments won't work correctly without it.
-
-**Fix:** Add `update()` to handle fields like `instructions`, `max_points`, `due_date`, `rubric_criteria`, `allowed_file_types`, etc.
-
----
-
-### 2. Quiz Model — Missing Fields
-
-**File:** `apps/catalogue/models.py`
-
-**Current Quiz model** has: `session` (OneToOne), `settings` (JSONField), timestamps. Quiz settings are stored in the `settings` JSON field.
-
-**What's still missing:**
-- `QuizQuestion` is missing:
-  - `explanation` (TextField, blank=True) — text shown after answering, explaining the correct answer
-- Consider promoting frequently-queried settings from JSON to model fields for DB-level filtering:
-  - `time_limit_minutes` (PositiveIntegerField, null=True)
-  - `randomize_questions` (BooleanField, default=False)
-
-**Severity:** MEDIUM for `explanation` field, LOW for promoting JSON fields.
-
----
-
-### 3. Assignment Model — Minor Gap
-
-**File:** `apps/catalogue/models.py`
-
-**Only missing:**
-- `file_upload_required` (BooleanField, default=True) — frontend infers this from `allowed_file_types` being non-empty, but an explicit flag would be cleaner.
-
-**Severity:** LOW.
-
----
-
-## MEDIUM — Incomplete Views & Actions
-
-### 4. DiscussionViewSet — Moderation
-
-**File:** `apps/learning/views.py`
-
-**What works:** Full CRUD + replies. The `Discussion` model already has `is_pinned`, `is_locked`, `is_deleted` boolean fields.
-
-**What's missing — add these as `@action` endpoints:**
-
-**a) Pin/unpin:**
-```
-POST /api/v1/learning/discussions/{id}/pin/
-```
-Response: `{ "is_pinned": true }` — toggles pin state. Instructor/manager only.
-
-**b) Lock/unlock:**
-```
-POST /api/v1/learning/discussions/{id}/lock/
-```
-Response: `{ "is_locked": true }` — toggles lock state. When locked, no new replies allowed. Instructor/manager only.
-
-**c) Filter by course/session** — add query params to list action:
-```
-GET /api/v1/learning/discussions/?course=5&session=12&search=networking
-```
-Currently only basic queryset. Add `course`, `session`, and `search` (title/content) filters.
-
----
-
-### 5. ModuleViewSet — Bulk Reorder
-
-**File:** `apps/catalogue/views.py`
-
-Currently, reordering requires individual PATCH requests per module. Add a bulk endpoint:
-
-```
-POST /api/v1/catalogue/modules/reorder/
-```
-Request:
-```json
-{
-  "course": 5,
-  "order": [
-    { "id": 10, "order": 0 },
-    { "id": 11, "order": 1 },
-    { "id": 12, "order": 2 }
-  ]
-}
-```
-Response: `{ "updated": 3 }`
-
-Use `transaction.atomic()` and `bulk_update()` for efficiency.
-
----
-
-### 6. SessionViewSet — Gaps
-
-**File:** `apps/catalogue/views.py`
-
-**a) Quiz creation via API:**
-Currently `/sessions/{id}/quiz/` only supports GET and PATCH. Add POST to create a new Quiz for a session:
-```
-POST /api/v1/catalogue/sessions/{id}/quiz/
-```
-Request:
-```json
-{
-  "settings": {
-    "time_limit_minutes": 30,
-    "passing_score_percent": 70,
-    "max_attempts": 3,
-    "shuffle_questions": true
-  }
-}
-```
-Response: `QuizDetailResponse` (session + settings + empty questions array)
-
-**b) Assignment creation via API:**
-Same pattern — add POST to `/sessions/{id}/assignment/`:
-```
-POST /api/v1/catalogue/sessions/{id}/assignment/
-```
-Request:
-```json
-{
-  "assignment_type": "project",
-  "instructions": "Build a REST API...",
-  "max_points": 100,
-  "due_date": "2026-04-01T23:59:00Z",
-  "allowed_file_types": [".pdf", ".zip", ".py"],
-  "max_file_size_mb": 50
-}
-```
-
-**c) Session preview for non-enrolled users:** Add a `preview` action returning limited session data (title, description, duration) without content URLs.
-
----
-
-### 7. SubmissionViewSet — Remaining Enhancements
-
-**File:** `apps/learning/views.py`
-
-Bulk grade and statistics actions are now implemented. Still missing:
-
-**a) File upload validation:** In `create()`, check `submitted_file_name` extension against `Assignment.allowed_file_types` and file size against `Assignment.max_file_size_mb`.
-
-**b) Resubmission tracking:** Currently allows only one submission per enrollment+assignment. Add `attempt_number` field and allow multiple submissions up to `Assignment.max_attempts`.
-
----
-
-## HIGH — Missing Endpoints (Frontend Blocked)
-
-### 18. Analytics Aggregation Endpoints
-
-**Why:** Manager, Instructor, Finance, and Superadmin analytics pages all have charts that need time-series data. Currently these charts use hardcoded or `Math.random()` placeholder data on the frontend. The **Manager dashboard** specifically needs endpoints (a), (b), and (d) for its 3 chart widgets: "Enrollment & Completion Trends", "Learning Statistics", and "Courses by Category".
-
-**Endpoints needed:**
-
-**a) Enrollment & Completion trends:**
-```
-GET /api/v1/learning/analytics/enrollment-trends/?period=monthly&months=6
-```
-Response:
-```json
-{
-  "labels": ["Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"],
-  "enrollments": [45, 62, 58, 71, 89, 95],
-  "completions": [12, 18, 22, 30, 35, 41]
-}
-```
-- Aggregate from `Enrollment.created_at` (enrollments) and `Enrollment` where `status=completed` grouped by `completed_at` or `updated_at` (completions)
-- Scope by `request.user.role`: managers see their org only, instructors see their courses only, superadmin sees all
-- Use `django.db.models.functions.TruncMonth` for grouping
-
-**b) Learning Statistics (engagement metrics):**
-```
-GET /api/v1/learning/analytics/learning-stats/
-```
-Response:
-```json
-{
-  "total_learners": 458,
-  "active_learners": 312,
-  "avg_completion_rate": 67.5,
-  "total_courses_in_progress": 189,
-  "total_completed_courses": 245,
-  "avg_quiz_score": 78.2
-}
-```
-- `active_learners`: count of users with `Enrollment` activity in the last 30 days
-- `avg_completion_rate`: average `progress_percentage` across all active enrollments
-- `avg_quiz_score`: average score from `QuizSubmission`
-- Scope by role (same as above)
-
-**c) Revenue over time (Finance):**
-```
-GET /api/v1/payments/analytics/revenue/?period=monthly&months=6
-```
-Response:
-```json
-{
-  "labels": ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"],
-  "revenue": [12500, 15200, 14800, 18900, 21000, 23500],
-  "currency": "USD"
-}
-```
-- Aggregate from `Transaction` where `status=completed`, group by month
-
-**d) Courses by Category:**
-```
-GET /api/v1/catalogue/analytics/courses-by-category/
-```
-Response:
-```json
-{
-  "categories": [
-    { "name": "Web Development", "count": 24, "color": "#4CAF50" },
-    { "name": "Data Science", "count": 18, "color": "#2196F3" },
-    { "name": "Business", "count": 12, "color": "#FF9800" },
-    { "name": "Design", "count": 8, "color": "#9C27B0" }
-  ],
-  "total": 62
-}
-```
-- Aggregate from `Course` where `status=published`, group by `category__name`
-- Use `Category.objects.annotate(count=Count('courses', filter=Q(courses__status='published')))`
-- Scope by org for managers
-
-**Frontend blocking:** Manager dashboard charts (a, b, d), Instructor analytics (a, b), Finance analytics (c), Superadmin analytics (a, b, c, d)
-
----
-
-### 32. Superadmin All Courses — Stats Action (Minor)
-
-**Why:** `AllCoursesPage` displays KPIs (total, published, draft, archived) and a courses table — all hardcoded.
-
-**Already exists:** `CourseViewSet` at `/api/v1/catalogue/courses/` supports list with `status` filter. Frontend can use this for the table.
-
-**Still needed:** Add a `stats` action to `CourseViewSet` (or a new superadmin course view) for efficient KPI counts:
-```
-GET /api/v1/catalogue/courses/stats/
-```
-Response:
-```json
-{
-  "total": 876,
-  "published": 654,
-  "draft": 178,
-  "archived": 44
-}
-```
-- One query: `Course.objects.values('status').annotate(count=Count('id'))`
-- Without this, frontend must fetch all courses just to count statuses
-
-**Frontend can wire now:** Table → `courseApi.getAll({ status, search, page_size })` (existing endpoint)
-**Frontend needs backend for:** KPI stats only
-
-**Frontend blocking:** SuperadminAllCoursesPage (partial — table can be wired now)
-
----
-
-### 33. Superadmin Assessments — List & Stats Endpoint
-
-**Why:** `AssessmentsPage` shows assessment KPIs and a table of quizzes/assignments — all hardcoded.
-
-**Endpoints needed:**
-
-**a) Assessment stats:**
-```
-GET /api/v1/superadmin/assessments/stats/
-```
-Response:
-```json
-{
-  "total": 892,
-  "pass_rate": 78.5,
-  "active": 34,
-  "total_attempts": 24567
-}
-```
-- Aggregate from `Quiz` + `Assignment` counts, `QuizSubmission` pass rates
-
-**b) Assessment list:**
-```
-GET /api/v1/superadmin/assessments/?type=quiz&status=active&page_size=20
-```
-- Combine quizzes and assignments into a unified list with type, course name, question count, avg score
-
-**Frontend blocking:** SuperadminAssessmentsPage
-
----
-
-### 34. Superadmin Certifications — Stats Action (Minor)
-
-**Why:** `CertificationsPage` shows certification KPIs (issued, valid, expired, revoked) and a certs table — all hardcoded.
-
-**Already exists:** `CertificateViewSet` at `/api/v1/learning/certificates/` has list + retrieve + verify. Currently scoped to current user's certificates.
-
-**Still needed:**
-- Add superadmin-scoped certificate list (all users' certs, not just mine) — either a new superadmin ViewSet or a role check in existing one
-- Add a `stats` action for KPI counts
-- Optionally add `status` filter if Certificate model has status field
-
-**Frontend can wire now:** Nothing — current endpoint is user-scoped only
-**Frontend needs backend for:** Admin-scoped list + stats
-
-**Frontend blocking:** SuperadminCertificationsPage (depends on #19 Certificate PDF Generation too)
-
----
-
-### 35. Superadmin Instructors — List & Stats Endpoint
-
-**Why:** `InstructorsPage` shows instructor KPIs and a table — all hardcoded.
-
-**Endpoints needed:**
-
-**a) Instructor stats:**
-```
-GET /api/v1/superadmin/instructors/stats/
-```
-Response:
-```json
-{
-  "total": 156,
-  "active": 142,
-  "avg_rating": 4.6,
-  "total_courses": 876
-}
-```
-- Filter `User.objects.filter(role='instructor')`, annotate with `course_count`, `avg_rating`
-
-**b) Instructor list (may reuse existing users endpoint with `?role=instructor`):**
-```
-GET /api/v1/superadmin/users/?role=instructor&page_size=20
-```
-- Needs annotated fields: `courses_count`, `students_count`, `avg_rating`
-
-**Frontend blocking:** SuperadminInstructorsPage
-
----
-
-### 36. Superadmin Invoices — Stats Action (Minor)
-
-**Why:** `InvoicesPage` shows invoice KPIs ($1.8M paid, $234K pending, $45K overdue) and invoice table — all hardcoded.
-
-**Already exists:** `InvoiceViewSet` at `/api/v1/payments/invoices/` has full CRUD with `status`, `from_date`, `to_date` filters. Finance users already see all invoices.
-
-**Still needed:** Add a `stats` action to `InvoiceViewSet`:
-```
-GET /api/v1/payments/invoices/stats/
-```
-- One query: aggregate `Sum('amount')` grouped by status
-
-**Frontend can wire now:** Table → `invoiceApi.getAll({ status, page_size })` (existing endpoint)
-**Frontend needs backend for:** KPI stats only
-
-**Frontend blocking:** SuperadminInvoicesPage (partial — table can be wired now)
-
----
-
-### 37. Superadmin Revenue — Org Revenue Breakdown
-
-**Why:** `RevenuePage` shows revenue KPIs and per-organization revenue breakdown — all hardcoded.
-
-**Endpoints needed:**
-
-**a) Revenue stats:**
-```
-GET /api/v1/superadmin/revenue/stats/
-```
-Response:
-```json
-{
-  "total_revenue": "2400000.00",
-  "monthly_revenue": "186000.00",
-  "avg_per_org": "16900.00",
-  "growth_percent": 12.5
-}
-```
-
-**b) Revenue by organization:**
-```
-GET /api/v1/superadmin/revenue/by-organization/
-```
-Response:
-```json
-[
-  { "org_name": "TechCorp", "course_revenue": "45000.00", "subscription_revenue": "12000.00", "trend": 8.5 }
-]
-```
-- Aggregate from `Transaction` joined to `Organization`
-
-**Frontend blocking:** SuperadminRevenuePage
-
----
-
-### 38. Superadmin System Settings & Health
-
-**Why:** `SystemSettingsPage` has hardcoded defaults (site name, URL, timezone, SMTP config, feature toggles, system version). `SystemHealth` component shows hardcoded health checks.
-
-**Endpoints needed:**
-
-**a) System settings CRUD:**
-```
-GET  /api/v1/superadmin/settings/
-PUT  /api/v1/superadmin/settings/
-```
-- Store as key-value pairs or a JSON blob in a `SystemSettings` singleton model
-
-**b) System health:**
-```
-GET /api/v1/superadmin/system/health/
-```
-Response:
-```json
-{
-  "database": "healthy",
-  "storage": "online",
-  "cpu_usage": "78%",
-  "api_latency_ms": 142,
-  "uptime_percent": 99.97
-}
-```
-
-**c) SMTP test:**
-```
-POST /api/v1/superadmin/settings/test-email/
-```
-
-**Frontend blocking:** SuperadminSystemSettingsPage, SystemHealth dashboard widget
-
-**Severity:** LOW — acceptable as configuration for now
-
----
-
-### 39. ~~Superadmin Notifications~~ — COVERED BY EXISTING ENDPOINTS
-
-**Already exists:** `NotificationViewSet` at `/api/v1/notifications/` has list (with `is_read`, `type` filters) + `unread_count` action + `mark_all_read`.
-
-**No backend work needed.** Frontend should:
-- Wire list to `notificationApi.getAll()`
-- Wire unread count to `notificationApi.getUnreadCount()`
-- Compute "today" / "this week" counts client-side from notification `created_at` timestamps
-
-**Frontend blocking:** SuperadminNotificationsPage (#74) — frontend-only task
-
----
-
-### 40. Superadmin Roles — User Counts (Minor Enhancement)
-
-**Why:** `RolesPermissionsPage` displays roles with user counts — currently hardcoded.
-
-**Already exists:** `UserSuperadminViewSet.stats()` returns `{ total, active, new_this_month, suspended }`. Users list supports `?role=` filter.
-
-**Still needed:** Add per-role breakdown to existing stats endpoint or add a `roles` action:
-```
-GET /api/v1/superadmin/users/stats/
-```
-Enhanced response (add `by_role` field):
-```json
-{
-  "total": 500,
-  "active": 480,
-  "new_this_month": 15,
-  "suspended": 5,
-  "by_role": [
-    { "role": "tasc_admin", "count": 2 },
-    { "role": "lms_manager", "count": 32 },
-    { "role": "instructor", "count": 156 },
-    { "role": "learner", "count": 305 },
-    { "role": "finance", "count": 5 }
-  ]
-}
-```
-- One additional query: `User.objects.values('role').annotate(count=Count('id'))`
-
-**Permission matrix:** Keep as frontend config (no backend needed).
-
-**Frontend blocking:** SuperadminRolesPermissionsPage (#72) — minor backend enhancement
-
-**Severity:** LOW
-
----
-
-### 41. Superadmin Partnerships & Integrations
-
-**Why:** `PartnershipsPage` (6 mock partners) and `IntegrationsPage` (10 mock integrations) are entirely hardcoded.
-
-**Severity:** LOW — these are likely Phase 2 features. No models or infrastructure exist.
-
-**When needed:** Create `Partnership` and `Integration` models with CRUD endpoints. For now, frontend should show "Coming Soon" or keep static display.
-
-**Frontend blocking:** SuperadminPartnershipsPage, SuperadminIntegrationsPage
-
----
-
-### 43. Manager Organization Settings CRUD
-
-**Why:** `ManagerSettingsPage` has hardcoded org name, industry, website, theme settings, and toggles. No backend endpoint to read or save these.
-
-**Endpoints needed:**
-```
-GET  /api/v1/manager/settings/
-PUT  /api/v1/manager/settings/
-```
-- Store as JSON on the `Organization` model (add a `settings` JSONField) or a separate `OrganizationSettings` model
-- Permission: `IsLmsManager` — scoped to `request.user.organization`
-- Fields: `org_name`, `industry`, `website_url`, `primary_color`, `theme_mode`, `default_language`, `notification_toggles`, `retention_period`
-
-**Frontend blocking:** ManagerSettingsPage (#85)
-
----
-
-### 44. Manager Organization Billing / Subscription Info
-
-**Why:** `ManagerBillingPage` shows hardcoded plan ("Enterprise $499/mo"), usage stats (users/storage/courses), and payment method. Invoices are wired but plan/usage are static.
-
-**Endpoints needed:**
-
-**a) Org subscription/plan details:**
-```
-GET /api/v1/manager/billing/plan/
-```
-Response:
-```json
-{
-  "plan_name": "Enterprise",
-  "price": "499.00",
-  "billing_cycle": "monthly",
-  "renewal_date": "2026-04-15",
-  "user_limit": 500,
-  "storage_limit_gb": 100,
-  "courses_limit": null
-}
-```
-
-**b) Org usage stats:**
-```
-GET /api/v1/manager/billing/usage/
-```
-Response:
-```json
-{
-  "active_users": 347,
-  "storage_used_gb": 42,
-  "active_courses": 156
-}
-```
-- Count users in org, calculate storage from uploads, count published courses
-
-**Frontend blocking:** ManagerBillingPage (#84)
-
-**Severity:** MEDIUM — useful for org admins, but not critical for testing
-
----
-
-### 45. Manager Activity Log — Mostly Covered by Existing Endpoints
-
-**Already exists:** `AuditLogListView` at `/api/v1/superadmin/audit-logs/` supports `search`, `from`/`to` date range, `action`, `resource` filters. **Managers already have access** — role-based check grants `lms_manager` full read access.
-
-**Also exists:** `NotificationViewSet` at `/api/v1/notifications/` can serve as activity feed.
-
-**Still needed (optional):** A summary stats action on the audit log for quick KPI counts:
-```
-GET /api/v1/superadmin/audit-logs/summary/?period=today
-```
-Response:
-```json
-{ "logins": 145, "enrollments": 23, "completions": 18, "submissions": 31 }
-```
-- Aggregate `AuditLog.objects.filter(created_at__date=today).values('action').annotate(count=Count('id'))`
-
-**Frontend can wire now:** Activity list → audit log API. The summary stats could be computed client-side from filtered results if volume is low.
-
-**Frontend blocking:** ManagerActivityPage (#83) — mostly frontend-only, summary stats are nice-to-have
-
----
-
-
----
-
-### 42. Superadmin Data Migration & Gateway Settings
-
-**Why:** `DataMigrationPage` (Odoo migration UI) and `GatewaySettingsPage` (payment gateway config) are entirely hardcoded with mock progress data and default config values.
-
-**Severity:** LOW — specialized admin tools, not needed for testing.
-
-**Frontend blocking:** SuperadminDataMigrationPage, SuperadminGatewaySettingsPage
-
----
-
-### 19. Certificate PDF Generation
-
-**Why:** `Certificate` model exists but `pdf_url` is never populated. Frontend certificates page falls back to mock data because there's no real PDF to download.
-
-**What to implement:**
-- Install `reportlab` or `weasyprint`
-- Create `apps/learning/services/certificate_generator.py`
-- Generate PDF with: learner name, course title, completion date, certificate ID, QR code linking to `/verify-certificate/{id}`
-- Upload to S3 (or local media) and populate `Certificate.pdf_url`
-- Trigger on course completion (when all sessions marked complete)
-
-**Endpoint:**
-```
-GET /api/v1/learning/certificates/{id}/download/
-```
-- Returns the PDF file or redirects to S3 URL
-
-**Frontend blocking:** LearnerCertificatesPage (#8, #50)
-
----
-
-### 20. Bulk Enrollment Endpoint
-
-**Why:** `ManagerBulkEnrollPage` needs to enroll multiple users into a course at once. Currently no bulk endpoint exists.
-
-**Endpoint:**
-```
-POST /api/v1/manager/enrollments/bulk/
-```
-Request:
-```json
-{
-  "course": 5,
-  "user_ids": [12, 15, 18, 22, 31]
-}
-```
-Response:
-```json
-{
-  "enrolled": 4,
-  "already_enrolled": 1,
-  "failed": 0,
-  "errors": []
-}
-```
-- Permission: `IsLmsManager` — auto-scope to manager's organization users only
-- Use `transaction.atomic()` and `bulk_create()` with `ignore_conflicts=True`
-
-**Frontend blocking:** ManagerBulkEnrollPage (#20)
-
----
-
-### 21. Session Attachments / Resources Endpoint
-
-**Why:** CoursePlayerPage has a "Resources" tab that currently uses `sampleResources[]` hardcoded data. There's no backend support for attaching downloadable files to lessons/sessions.
-
-**Model:**
+### URL Registration
+All new routes go through app-level `urls.py` files, which are included in `apps/common/api_urls.py`:
 ```python
-class SessionAttachment(models.Model):
-    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='attachments')
-    title = models.CharField(max_length=255)
-    file = models.FileField(upload_to='session_attachments/')
-    file_type = models.CharField(max_length=50)  # pdf, zip, code, etc.
-    file_size = models.PositiveIntegerField()  # bytes
-    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+# apps/common/api_urls.py pattern:
+path("catalogue/", include("apps.catalogue.urls")),
+path("learning/", include("apps.learning.urls")),
+path("payments/", include("apps.payments.urls")),
+path("superadmin/", include("apps.accounts.urls_superadmin")),
 ```
 
-**Endpoints:**
-```
-GET  /api/v1/catalogue/sessions/{id}/attachments/   — list resources for a session
-POST /api/v1/catalogue/sessions/{id}/attachments/   — upload (instructor/manager only)
-DELETE /api/v1/catalogue/sessions/{id}/attachments/{attachment_id}/
-```
+### ViewSet Base Classes
+All viewsets inherit directly from DRF — no custom base class:
+- `viewsets.ModelViewSet` (full CRUD)
+- `viewsets.ReadOnlyModelViewSet` (list + retrieve)
+- `viewsets.ViewSet` (custom actions only)
+- `viewsets.GenericViewSet` + mixins
 
-**Frontend blocking:** CoursePlayerPage Resources tab (#10)
+### Serializer Base Classes
+All serializers inherit directly from DRF:
+- `serializers.ModelSerializer`
+- `serializers.Serializer`
+- Some use inheritance: `CourseDetailSerializer(CourseListSerializer)`
 
----
-
-### 22. Security Metrics Endpoint
-
-**Why:** Superadmin `SecurityPage` displays active sessions, login attempts, and security KPIs — all currently hardcoded.
-
-**Endpoints:**
-
-**a) Active sessions:**
-```
-GET /api/v1/superadmin/security/sessions/
-```
-Response:
-```json
-[
-  {
-    "user": { "id": 5, "email": "user@example.com", "full_name": "John Doe" },
-    "ip_address": "192.168.1.1",
-    "user_agent": "Chrome/120",
-    "last_activity": "2026-03-22T10:30:00Z",
-    "created_at": "2026-03-22T08:00:00Z"
-  }
-]
-```
-- Derive from Django sessions or a custom `UserSession` model tracking login/activity
-
-**b) Security stats:**
-```
-GET /api/v1/superadmin/security/stats/
-```
-Response:
-```json
-{
-  "active_sessions": 42,
-  "failed_logins_today": 7,
-  "locked_accounts": 2,
-  "mfa_adoption_percent": 35
-}
-```
-- `failed_logins_today`: count users where `failed_login_attempts > 0` and last attempt is today
-- `locked_accounts`: count users where `account_locked_until > now()`
-
-**Frontend blocking:** SecurityPage (#26)
-
----
-
-### 23. B2B / Organization Pricing Tiers
-
-**Why:** The `/for-business` page displays 3 hardcoded B2B pricing tiers (Team $15, Business $20, Enterprise $25). Current `Subscription` model is learner-focused.
-
-**Options:**
-- Add `tier_type` field to `Subscription` (`individual` vs `organization`) and create org plans via admin
-- Or create a separate `OrganizationPlan` model with `max_seats`, `price_per_seat`, etc.
-
-**Endpoint:**
-```
-GET /api/v1/public/business-plans/
-```
-Response:
-```json
-[
-  { "name": "Team", "price_per_seat": "15.00", "max_seats": 25, "billing_cycle": "monthly", "features": [...] },
-  { "name": "Business", "price_per_seat": "20.00", "max_seats": 100, "billing_cycle": "monthly", "features": [...] },
-  { "name": "Enterprise", "price_per_seat": "25.00", "max_seats": null, "billing_cycle": "monthly", "features": [...] }
-]
-```
-
-**Frontend blocking:** PricingSection (#34)
-
-**Severity:** LOW — acceptable as hardcoded marketing content for now.
-
-
-
----
-
-### 28. Badges System (Completion Badges)
-
-**Why:** User story: *"As a Learner, I want to receive completion badges so that I feel motivated to finish courses."* (userStories.md line 55). Frontend team will build the badges page, confetti modal, and display — backend needs to provide the models, auto-award logic, and API endpoints.
-
-**Models:**
+### Permission Classes Available
 ```python
-class Badge(models.Model):
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(unique=True)
-    description = models.TextField()
-    icon_url = models.URLField()  # S3 URL to badge PNG
-    category = models.CharField(max_length=50, choices=[
-        ('course_completion', 'Course Completion'),
-        ('enrollment', 'Enrollment Milestones'),
-        ('subscription', 'Subscription Loyalty'),
-        ('assessment', 'Assessment Excellence'),
-        ('engagement', 'Engagement'),
-        ('milestone', 'Milestones'),
-    ])
-    criteria_type = models.CharField(max_length=50)  # e.g., 'certificates_count', 'quiz_perfect_score'
-    criteria_value = models.IntegerField(default=1)   # e.g., 5 (for "complete 5 courses")
-    order = models.PositiveIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['category', 'order']
-
-class UserBadge(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earned_badges')
-    badge = models.ForeignKey(Badge, on_delete=models.CASCADE, related_name='earners')
-    earned_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ['user', 'badge']
-        indexes = [models.Index(fields=['user', '-earned_at'])]
+from rest_framework.permissions import IsAuthenticated, AllowAny
+# Custom (check apps/accounts/ or apps/common/ for exact import paths):
+# IsInstructorOrReadOnly, IsLmsManager, IsTascAdmin
 ```
 
-**Endpoints:**
+### Key Related Names (from model schema dump)
 ```
-GET  /api/v1/learning/badges/          — all badge definitions (public, cacheable)
-GET  /api/v1/learning/my-badges/       — current user's earned badges with earned_at
-POST /api/v1/learning/badges/check/    — trigger badge evaluation for current user (returns newly earned)
+User.enrollments -> Enrollment (related_name="enrollments")
+User.instructed_courses -> Course (related_name="instructed_courses")
+User.memberships -> Membership (related_name="memberships")
+Course.enrollments -> Enrollment (related_name="enrollments")
+Course.sessions -> Session (related_name="sessions")
+Course.modules -> Module (related_name="modules")
+Course.reviews -> CourseReview (related_name="reviews")
+Course.invoices -> Invoice (related_name="invoices")
+Course.transactions -> Transaction (related_name="transactions")
+Category.courses -> Course (related_name="courses")
+Enrollment.session_progress -> SessionProgress (related_name="session_progress")
+Enrollment.certificate -> Certificate (related_name="certificate", OneToOne)
+Enrollment.submissions -> Submission (related_name="submissions")
+Enrollment.quiz_submissions -> QuizSubmission (related_name="quiz_submissions")
+Organization.memberships -> Membership (related_name="memberships")
+Organization.enrollments -> Enrollment (related_name="enrollments")
+Organization.invoices -> Invoice (related_name="invoices")
+Organization.transactions -> Transaction (related_name="transactions")
+Session.quiz -> Quiz (related_name="quiz", OneToOne)
+Session.assignment -> Assignment (related_name="assignment", OneToOne)
+Session.attachments -> SessionAttachment (related_name="attachments")
+Quiz.questions -> QuizQuestion (related_name="questions")
+Quiz.submissions -> QuizSubmission (related_name="submissions")
+Assignment.submissions -> Submission (related_name="submissions")
+Invoice.items -> InvoiceItem (related_name="items")
+Invoice.transactions -> Transaction (related_name="transactions")
 ```
-
-**Response — `GET /api/v1/learning/badges/`:**
-```json
-[
-  {
-    "id": 1,
-    "slug": "first-course",
-    "name": "First Steps",
-    "description": "Completed your first course",
-    "icon_url": "https://cdn.../badges/first-course.png",
-    "category": "course_completion",
-    "criteria_type": "certificates_count",
-    "criteria_value": 1
-  }
-]
-```
-
-**Response — `GET /api/v1/learning/my-badges/`:**
-```json
-[
-  {
-    "badge": { "id": 1, "slug": "first-course", "name": "First Steps", ... },
-    "earned_at": "2026-03-15T10:30:00Z"
-  }
-]
-```
-
-**Response — `POST /api/v1/learning/badges/check/`:**
-```json
-{
-  "newly_earned": [
-    { "badge": { ... }, "earned_at": "2026-03-22T14:00:00Z" }
-  ]
-}
-```
-
-**Auto-award logic** — use Django signals or a shared `check_and_award_badges(user)` function called from:
-- `Certificate` post_save signal → check course completion badges
-- `Enrollment` post_save signal → check enrollment badges
-- `QuizSubmission` post_save signal → check assessment badges
-- `Discussion` post_save signal → check engagement badges
-- `UserSubscription` post_save signal → check subscription badges
-
-**Badge criteria mapping** (22 badges total, see `TASC-LMS-frontend/src/config/badges.md` for full list):
-
-| criteria_type | criteria_value | Badges |
-|---------------|---------------|--------|
-| `certificates_count` | 1, 3, 5, 10, 20 | First Steps, Knowledge Seeker, Dedicated Learner, Knowledge Master, Scholar |
-| `enrollments_count` | 1, 5, 10 | Early Bird, Curious Mind, Course Explorer |
-| `subscriptions_count` | 1, 3, 5 | Supporter, Loyal Learner, Platinum Member |
-| `quiz_submissions_count` | 1 | Quiz Taker |
-| `quiz_perfect_score` | 1 | Perfect Score (any quiz with score=100%) |
-| `quiz_pass_streak` | 5 | Quiz Streak |
-| `assignment_full_marks` | 1 | Assignment Ace |
-| `discussions_count` | 1, 10 | Conversation Starter, Community Voice |
-| `reviews_count` | 1 | Reviewer |
-| `profile_complete` | 1 | Identity (avatar + bio + phone filled) |
-| `first_certificate` | 1 | Certified |
-
-**Seed data:** Create a management command `python manage.py seed_badges` that creates all 22 badge records.
-
-**Frontend blocking:** LearnerBadgesPage (new page, sidebar link already exists), badge earned confetti modal
 
 ---
 
-### 29. Saved / Favorited Courses API
+## Quick Summary — Open Tasks by Priority
 
-**Why:** The frontend has a "Saved Courses" page (`/learner/saved`) and heart icon toggles on the course catalog (`CatalogCourseCard.tsx`), but there is no backend persistence. Favorites are currently stored in React component state only — lost on page refresh. No model, no API, no localStorage fallback.
+| Pri | # | Task | Backend File(s) | Frontend Blocked Page(s) |
+|-----|---|------|-----------------|--------------------------|
+| ✅ | 29 | ~~Saved/Favorited Courses API~~ | `apps/learning/` | `SavedCoursesPage`, `CatalogCourseCard` |
+| ✅ | 30 | ~~CourseViewSet Ordering/Search~~ | `apps/catalogue/views.py` | Manager TopCourses widget |
+| HIGH | 31 | Organization annotations | `apps/accounts/serializers_superadmin.py:8`, `views_superadmin.py:13` | SuperadminOrganizationsTable |
+| ✅ | 32 | ~~Course stats action~~ | `apps/catalogue/views.py` | `AllCoursesPage` KPIs |
+| ✅ | 33 | ~~Assessments stats~~ (via SubmissionViewSet) | `apps/learning/views.py` | `AssessmentsPage` |
+| ✅ | 34 | ~~Certificates admin-scoped + stats~~ | `apps/learning/views.py` | `CertificationsPage` |
+| ✅ | 35 | ~~Instructor stats~~ | `apps/accounts/views_superadmin.py` | `InstructorsPage` |
+| ✅ | 36 | ~~Invoice stats action~~ | `apps/payments/views.py` | `InvoicesPage` KPIs |
+| ✅ | 37 | ~~Revenue breakdown~~ | `apps/payments/views.py` | `RevenuePage` |
+| ✅ | 6 | ~~Session quiz/assignment POST & Learner Submit~~ | `apps/catalogue/views.py:834` | Quiz/Assignment/Submission flow |
+| HIGH | 60 | Mobile money (Flutterwave) | `apps/payments/` | `CheckoutPaymentPage` |
+| MED | 1 | Assignment serializer `update()` | `apps/catalogue/serializers.py:463` | Assignment editing |
+| ✅ | 43 | ~~Manager org settings~~ | `apps/accounts/views.py:270` | `ManagerSettingsPage` |
+| MED | 44 | Manager billing/plan | new endpoint | `ManagerBillingPage` |
+| MED | 61 | Promo codes | `apps/payments/` (new model) | `CheckoutPaymentPage` |
+| ✅ | 62 | ~~Review helpful/report~~ | `apps/catalogue/views.py:1268` | `CourseReviews` |
+| MED | 63 | Transaction/invoice exports | `apps/payments/views.py` | Download buttons |
+| MED | 22 | Security metrics | new superadmin view | `SecurityPage` |
+| MED | 25 | Redis integration | `config/settings.py` | Infrastructure |
+| MED | 26 | DB connection pooling | `config/settings.py` | Infrastructure |
+| MED | 27 | Gunicorn scaling | `Dockerfile` | Infrastructure |
+| LOW | 8 | Email templates | `templates/emails/` (new) | — |
+| LOW | 9 | Notification extras | `apps/notifications/views.py:33` | — |
+| LOW | 17 | N+1 query fixes | various views.py | Performance |
+| LOW | 10-16 | Silent exception fixes | various | Code quality |
+| LOW | 16b | Django admin registrations | `apps/catalogue/admin.py` | — |
+| LOW | 40 | Roles user counts | `apps/accounts/views_superadmin.py:44` | `RolesPermissionsPage` |
+| LOW | 23 | B2B pricing tiers | `apps/payments/` | `/for-business` |
+| LOW | 38 | System settings/health | new superadmin view | `SystemSettingsPage` |
+| LOW | 45 | Activity log summary | `apps/audit/views.py:39` | `ManagerActivityPage` |
 
-**Model:**
+---
+
+## HIGH PRIORITY — Frontend Blocked
+
+---
+
+### Task 29: Saved / Favorited Courses API ✅ DONE (27 Mar)
+
+**Problem:** Frontend `SavedCoursesPage.tsx` and `CatalogCourseCard.tsx` heart icon have no backend persistence. Favorites stored in React state only.
+
+**Frontend expects** (from `learning.services.ts` pattern — no `savedCourseApi` exists yet):
+- `GET /api/v1/learning/saved-courses/` → `PaginatedResponse<SavedCourse>`
+- `POST /api/v1/learning/saved-courses/` → create
+- `DELETE /api/v1/learning/saved-courses/{id}/` → remove
+- `POST /api/v1/learning/saved-courses/toggle/` → `{ saved: boolean }`
+
+**Step 1 — Model** (`apps/learning/models.py`, append after `UserBadge`):
+
 ```python
 class SavedCourse(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='saved_courses')
-    course = models.ForeignKey('catalogue.Course', on_delete=models.CASCADE, related_name='saved_by')
+    user = models.ForeignKey(
+        'accounts.User', on_delete=models.CASCADE, related_name='saved_courses'
+    )
+    course = models.ForeignKey(
+        'catalogue.Course', on_delete=models.CASCADE, related_name='saved_by'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = 'learning_savedcourse'
         unique_together = ['user', 'course']
         ordering = ['-created_at']
         indexes = [models.Index(fields=['user', '-created_at'])]
+
+    def __str__(self):
+        return f"{self.user.email} saved {self.course.title}"
 ```
 
-**Endpoints:**
-```
-GET    /api/v1/learning/saved-courses/          — list user's saved courses (paginated)
-POST   /api/v1/learning/saved-courses/          — save a course
-DELETE /api/v1/learning/saved-courses/{id}/      — unsave a course
-```
+**Step 2 — Serializer** (`apps/learning/serializers.py`, append):
 
-**Alternative toggle endpoint (simpler for frontend):**
-```
-POST   /api/v1/learning/saved-courses/toggle/   — toggle save/unsave by course ID
-```
-Request:
-```json
-{ "course": 5 }
-```
-Response:
-```json
-{ "saved": true }   // or { "saved": false } if it was unsaved
-```
-
-**Response — `GET /api/v1/learning/saved-courses/`:**
-```json
-{
-  "count": 3,
-  "results": [
-    {
-      "id": 1,
-      "course": {
-        "id": 5,
-        "title": "Advanced React Patterns",
-        "slug": "advanced-react-patterns",
-        "thumbnail": "https://cdn.../thumb.jpg",
-        "category": { "id": 2, "name": "Web Development" },
-        "instructor_name": "Michael Rodriguez",
-        "rating": 4.8,
-        "review_count": 42,
-        "session_count": 12,
-        "difficulty_level": "advanced",
-        "is_published": true
-      },
-      "created_at": "2026-03-20T14:30:00Z"
-    }
-  ]
-}
-```
-
-**Serializer notes:**
-- Use `select_related('course', 'course__category', 'course__instructor')` to avoid N+1
-- Nest a read-only `CourseListSerializer` for the course field
-- Permission: `IsAuthenticated` (any logged-in user can save courses)
-
-**ViewSet:**
 ```python
+from apps.catalogue.serializers import CourseListSerializer
+
+class SavedCourseSerializer(serializers.ModelSerializer):
+    course = CourseListSerializer(read_only=True)
+
+    class Meta:
+        model = SavedCourse
+        fields = ['id', 'course', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class SavedCourseCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SavedCourse
+        fields = ['course']
+
+    def validate_course(self, value):
+        if SavedCourse.objects.filter(
+            user=self.context['request'].user, course=value
+        ).exists():
+            raise serializers.ValidationError("Course already saved.")
+        return value
+```
+
+**Step 3 — ViewSet** (`apps/learning/views.py`, append after `BadgeViewSet`):
+
+```python
+from apps.learning.models import SavedCourse
+from apps.learning.serializers import SavedCourseSerializer, SavedCourseCreateSerializer
+
 class SavedCourseViewSet(viewsets.ModelViewSet):
     serializer_class = SavedCourseSerializer
     permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
 
     def get_queryset(self):
         return SavedCourse.objects.filter(user=self.request.user) \
             .select_related('course', 'course__category', 'course__instructor')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return SavedCourseCreateSerializer
+        return SavedCourseSerializer
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -1021,6 +201,8 @@ class SavedCourseViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def toggle(self, request):
         course_id = request.data.get('course')
+        if not course_id:
+            return Response({'error': 'course field required'}, status=400)
         obj, created = SavedCourse.objects.get_or_create(
             user=request.user, course_id=course_id
         )
@@ -1029,25 +211,66 @@ class SavedCourseViewSet(viewsets.ModelViewSet):
         return Response({'saved': created})
 ```
 
-**Migration:** New migration in `apps/learning/` for `SavedCourse` model.
+**Step 4 — URL Registration** (`apps/learning/urls.py`, add to router):
 
-**Frontend impact:** Once ready, wire:
-1. `SavedCoursesPage.tsx` — replace 6 mock courses with `GET /api/v1/learning/saved-courses/`
-2. `LearnerCourseCatalogPage.tsx` — replace React state favorites with `POST .../toggle/`
-3. `CatalogCourseCard.tsx` — `isFavorite` prop fed from API response instead of local state
-4. Add `savedCourseApi` to `learning.services.ts`
+```python
+router.register(r'saved-courses', SavedCourseViewSet, basename='saved-course')
+```
 
-**Frontend blocking:** SavedCoursesPage (mock data), CatalogCourseCard heart toggle (not persisted)
+**Step 5 — Migration:**
+
+```bash
+python manage.py makemigrations learning
+python manage.py migrate
+```
+
+**Step 6 — Frontend query key to add** (for reference — `queryKeys.ts`):
+```typescript
+savedCourses: {
+    all: ['saved-courses'] as const,
+},
+```
+
+**Frontend response shape must match:**
+```json
+{
+  "count": 3,
+  "results": [
+    {
+      "id": 1,
+      "course": {
+        "id": 5,
+        "title": "...",
+        "slug": "...",
+        "thumbnail": "...",
+        "category": { "id": 2, "name": "Web Development", "slug": "web-dev", ... },
+        "tags": [],
+        "level": "advanced",
+        "price": "49.99",
+        "discounted_price": "39.99",
+        "instructor_name": "Michael Rodriguez",
+        "enrollment_count": 42,
+        "status": "published",
+        ...
+      },
+      "created_at": "2026-03-20T14:30:00Z"
+    }
+  ]
+}
+```
+
+The nested `course` object is produced by `CourseListSerializer` (line 619 of `apps/catalogue/serializers.py`), which already exposes `instructor_name`, `enrollment_count`, `category` (nested), `tags`, etc. — matching the frontend `CourseList` interface exactly.
 
 ---
 
-### 30. CourseViewSet — Add Ordering Support (for Top Courses widget)
+### Task 30: CourseViewSet — Add Ordering & Search ✅ DONE (27 Mar)
 
-**Why:** The Manager dashboard `TopCourses` widget needs to fetch courses sorted by popularity (`enrollment_count`). The `CourseListSerializer` already exposes `enrollment_count`, but the `CourseViewSet` has no `filter_backends` or `ordering_fields` configured — so `?ordering=-enrollment_count` doesn't work. Courses come back in default order.
+**File:** `apps/catalogue/views.py`, line 215 — `class CourseViewSet(viewsets.ModelViewSet)`
 
-**File:** `apps/catalogue/views.py` — `CourseViewSet`
+**Problem:** Manager dashboard TopCourses widget calls `courseApi.getAll({ ordering: '-enrollment_count', page_size: 4 })` but `CourseViewSet` has no `filter_backends`. The `CourseListSerializer` already exposes `enrollment_count` as an annotated field.
 
-**What to do:**
+**Do this** — add these class attributes to `CourseViewSet`:
+
 ```python
 from rest_framework.filters import OrderingFilter, SearchFilter
 
@@ -1056,179 +279,1027 @@ class CourseViewSet(viewsets.ModelViewSet):
     ordering_fields = ['title', 'published_at', 'enrollment_count', 'created_at']
     ordering = ['-created_at']  # default
     search_fields = ['title', 'short_description']
-    # ... rest of viewset
+    # ... rest of existing code unchanged
 ```
 
-**Impact:** Enables `?ordering=-enrollment_count&page_size=4` for top courses by popularity. Also enables search.
+**Note:** The `PublicCourseViewSet` (line 27 of `views_public.py`) already has `SearchFilter` + `OrderingFilter` configured. This just mirrors it for the authenticated `CourseViewSet`.
 
-**Frontend blocking:** Manager TopCourses widget currently fetches first 4 courses in default order instead of most-enrolled.
+**Frontend service already sends these params** (`catalogue.services.ts` line 97):
+```typescript
+search?: string;  // Note: search only works on PublicCourseViewSet, not authenticated CourseViewSet
+```
+After this fix, search will work on both.
 
 ---
 
-### 31. Organization Serializer — Add `user_count` and `course_count` Annotations
+### Task 31: Organization Serializer — Add `user_count` and `course_count`
 
-**Why:** The Superadmin dashboard `OrganizationsTable` widget shows user count and course count per org, but the `OrganizationSerializer` doesn't expose these fields. The serializer returns `name`, `is_active`, `contact_email`, etc. but no aggregated counts.
+**Files:**
+- `apps/accounts/serializers_superadmin.py` line 8 — `OrganizationSuperadminSerializer`
+- `apps/accounts/views_superadmin.py` line 13 — `OrganizationSuperadminViewSet`
 
-**File:** `apps/accounts/serializers_superadmin.py` — `OrganizationSerializer`
+**Problem:** Frontend `Organization` interface expects `courses_count?: number` and `users_count?: number` (see `types.ts`). Backend serializer doesn't expose them.
 
-**What to do:**
+**Step 1 — Serializer** (`apps/accounts/serializers_superadmin.py`):
 
-**a) Add annotated fields to the serializer:**
 ```python
-class OrganizationSerializer(serializers.ModelSerializer):
+class OrganizationSuperadminSerializer(serializers.ModelSerializer):
     user_count = serializers.IntegerField(read_only=True)
     course_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Organization
-        fields = [..., 'user_count', 'course_count']
+        fields = [
+            'id', 'name', 'slug', 'description', 'logo', 'website',
+            'contact_email', 'contact_phone', 'address', 'city', 'country',
+            'is_active', 'max_seats', 'billing_email', 'billing_address',
+            'tax_id', 'created_at', 'updated_at',
+            'user_count', 'course_count',
+        ]
 ```
 
-**b) Annotate the queryset in the view:**
+**Step 2 — ViewSet queryset** (`apps/accounts/views_superadmin.py`):
+
 ```python
 from django.db.models import Count, Q
 
-class OrganizationViewSet(viewsets.ModelViewSet):
+class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
+    serializer_class = OrganizationSuperadminSerializer
+    # ... existing permission_classes ...
+
     def get_queryset(self):
         return Organization.objects.annotate(
-            user_count=Count('memberships', distinct=True),
+            user_count=Count('memberships__user', distinct=True),
             course_count=Count(
-                'courses',  # or through membership → user → courses
-                filter=Q(courses__status='published'),
+                'enrollments__course',
+                filter=Q(enrollments__course__status='published'),
                 distinct=True
             ),
-        )
+        ).order_by('name')
 ```
 
-**Note:** The exact reverse relation names depend on how `Membership` and `Course` relate to `Organization`. Check the model for the correct `related_name`.
+**Explanation of related names used:**
+- `Organization.memberships` → `Membership` (related_name="memberships" on FK `organization`)
+- `Organization.enrollments` → `Enrollment` (related_name="enrollments" on FK `organization`)
+- Through enrollment we reach `course` and filter by `status='published'`
 
-**Impact:** Superadmin OrganizationsTable will show real user/course counts instead of empty columns.
+**Frontend field mapping:**
+- Backend `user_count` → Frontend `users_count` (in `Organization` interface)
+- Backend `course_count` → Frontend `courses_count`
 
-**Frontend blocking:** OrganizationsTable widget references `org.user_count` and `org.course_count` which are currently `undefined`.
-
----
-
-## LOW — Remaining Services & Templates
-
-### 8. Email Templates
-
-**File:** `config/settings.py`
-
-**Current:** Console backend in dev, SendGrid configured for prod. `templates/emails/` directory does not exist.
-
-**Templates to create:**
-
-| Template | Trigger | Key variables |
-|---|---|---|
-| `verification.html` | User registration | `user_name`, `verification_url` |
-| `password_reset.html` | Password reset request | `user_name`, `reset_url`, `expiry_hours` |
-| `enrollment_confirmation.html` | Successful enrollment | `user_name`, `course_title`, `start_date` |
-| `certificate_issued.html` | Course completion | `user_name`, `course_title`, `certificate_url` |
-| `payment_receipt.html` | Successful payment | `user_name`, `course_title`, `amount`, `currency`, `transaction_id`, `date` |
+**Note:** Frontend uses `users_count` and `courses_count` (with `s`). Either rename the backend fields to match, or keep as-is and adjust frontend. Recommended: rename backend to `users_count` and `courses_count` to match the frontend type definition exactly.
 
 ---
 
-### 9. Notifications ViewSet — Missing Features
+### Task 32: Superadmin Course Stats Action ✅ DONE (27 Mar)
 
-**File:** `apps/notifications/views.py`
+**File:** `apps/catalogue/views.py` line 215 — `CourseViewSet`
 
-**Works:** CRUD + `mark_read` + `mark_all_read` + `unread_count` + type filter + is_read filter
+**Problem:** `AllCoursesPage` KPIs (total, published, draft, archived) are hardcoded.
 
-**Missing:**
-- Date range filter: `?created_after=2026-03-01&created_before=2026-03-17`
-- Bulk delete: `POST /notifications/bulk_delete/` with `{ "ids": [1, 2, 3] }`
-- Notification preferences: `GET/PUT /notifications/preferences/` → `{ "email_enabled": true, "push_enabled": false, "types": { "enrollment": true, "system": true, "milestone": false } }`
+**Do this** — add a `stats` action to `CourseViewSet`:
 
----
-
-## LOW — Silent Exception Handling & Code Quality
-
-### 10. Payment Webhook Handlers — Silent `pass`
-- **File:** `apps/payments/utils/webhook_handlers.py` (lines 271, 317)
-- **Problem:** `_handle_failed_payment()` and `_handle_refund()` silently ignore `Payment.DoesNotExist`.
-- **Fix:** Replace `pass` with `logger.warning(f"Payment not found for transaction {transaction_id}")`.
-
-### 11. Payment Validators — Silent Validation
-- **File:** `apps/payments/utils/payment_validators.py` (line 328)
-- **Problem:** Invalid phone number silently swallowed.
-- **Fix:** Add `logger.info(f"Phone validation skipped for {phone}: {e}")`.
-
-
-### 13. Audit Views — Date Parsing
-- **File:** `apps/audit/views.py` (lines 79, 89)
-- **Problem:** Malformed date filters silently ignored — user gets unfiltered results without knowing.
-- **Fix:** Return `400 Bad Request` with message: `"Invalid date format for 'date_from'. Expected YYYY-MM-DD."`.
-
-### 14. Catalogue Views — Category Filter
-- **File:** `apps/catalogue/views.py` (line 118)
-- **Problem:** Non-numeric category ID silently ignored.
-- **Fix:** Return `400` or log warning and skip filter.
-
-
-### 16. StorageQuotaView — Silent S3 Failures
-- **File:** `apps/common/views.py` (lines 362-366)
-- **Problem:** Two bare `except Exception: pass` blocks when calculating storage usage from S3. If S3 is misconfigured or down, the endpoint silently returns `used_bytes: 0` with no indication of failure.
-- **Fix:** Log warnings and optionally return a `storage_error` flag in the response so the frontend can show "unable to calculate" instead of misleading "0 bytes used".
-
----
-
-## PERFORMANCE — N+1 Query Risks
-
-### 17. ViewSets Missing `select_related`/`prefetch_related`
-Several viewsets query models with foreign keys but don't optimize their querysets:
-- **`EnrollmentViewSet`** (`apps/learning/views.py`) — **Partially fixed 18 Mar:** `select_related('course', 'course__category')` added on instructor branch + `?role=instructor` and `?course=` filters. Default (learner) branch still lacks `select_related`.
-- **`DiscussionViewSet`** (`apps/learning/views.py`) — `Discussion` has FK to `user`, `course`, `session` — no `select_related`
-- **`DiscussionReplyViewSet`** (`apps/learning/views.py`) — `DiscussionReply` has FK to `user`, `discussion` — no `select_related`
-- **`SubmissionViewSet`** (`apps/learning/views.py`) — `Submission` has FK to `enrollment`, `assignment` — no `select_related`
-- **`NotificationViewSet`** (`apps/notifications/views.py`) — no `select_related` at all
-- **`InvoiceViewSet`** / **`TransactionViewSet`** (`apps/payments/views.py`) — no `select_related` despite FK to `user`
-- **Fix:** Add `.select_related()` for FK fields accessed in serializers and `.prefetch_related()` for reverse relations. This prevents N+1 queries on list endpoints that could degrade performance at scale.
-
----
-
-## Django Admin Gaps
-
-### 16. Catalogue Admin — Missing Model Registrations
-- **File:** `apps/catalogue/admin.py`
-- **Registered:** `QuestionCategory`, `BankQuestion`, `Assignment`, `Quiz`, `QuizQuestion`, `Module`
-- **NOT registered:** `Course`, `Session`, `Category`, `Tag`
-- **Fix:** Add `@admin.register(Course)`, etc. with appropriate `list_display`, `list_filter`, `search_fields`.
-
-
----
-
-## TEST COVERAGE GAPS
-
-| App | Current Tests | Major Gaps |
-|---|---|---|
-| `learning` | 27 tests | Quiz submission tests missing, report generation not tested |
-| `catalogue` | 95 tests | Quiz creation/update minimal, assignment tests basic, course review tests missing |
-| `payments` | 8 tests | Webhook handlers not tested |
-| `accounts` | 48 tests | CSV bulk import not tested (now implemented — needs tests) |
-| `audit` | 6 tests | Minimal |
-| `notifications` | 2 tests | Only email provider routing tested; CRUD and mark_read not tested |
-| `livestream` | **5 tests** | Fully covered |
-
----
-
-## CRITICAL — Infrastructure for 1000 Concurrent Users
-
-> **Why this section exists:** A scalability audit identified that the application code is solid, but infrastructure configuration has gaps that would cause failures under production load (1000+ concurrent users). These are config changes, not code rewrites.
-
-### 25. Redis Integration (Caching + Celery Broker)
-
-**Why:** Currently there is no caching layer at all — every request hits the database, including session lookups. Celery uses `"django://"` (database) as its broker, meaning the task queue competes with application queries on the same PostgreSQL instance. Under load, this becomes the primary bottleneck.
-
-**What to do:**
-
-**a) Install and configure Redis:**
-- Add `redis` and `django-redis` to `requirements.txt`
-- Add to `config/settings.py`:
 ```python
+from django.db.models import Count
+
+class CourseViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """
+        GET /api/v1/catalogue/courses/stats/
+        Returns course counts by status for superadmin KPI cards.
+        """
+        qs = Course.objects.all()
+
+        # Role scoping: instructors see only their courses
+        if request.user.role == 'instructor':
+            qs = qs.filter(instructor=request.user)
+
+        rows = qs.values('status').annotate(count=Count('id'))
+        result = {'total': 0, 'published': 0, 'draft': 0, 'archived': 0,
+                  'pending_approval': 0, 'rejected': 0}
+        for row in rows:
+            result[row['status']] = row['count']
+            result['total'] += row['count']
+        return Response(result)
+```
+
+**Endpoint:** `GET /api/v1/catalogue/courses/stats/`
+
+**Response:**
+```json
+{
+  "total": 876,
+  "published": 654,
+  "draft": 178,
+  "archived": 44,
+  "pending_approval": 0,
+  "rejected": 0
+}
+```
+
+**Note:** Course `status` choices from model schema: `draft`, `pending_approval`, `published`, `rejected`, `archived`.
+
+---
+
+### Task 33: Superadmin Assessments — Stats ✅ DONE (27 Mar, via SubmissionViewSet stats action)
+
+**Problem:** `AssessmentsPage` at route `/superadmin/assessments` shows hardcoded KPIs and table.
+
+**Option A — Add to existing views:** Create a new view in `apps/catalogue/views.py` or `apps/learning/views.py`.
+
+**Option B — Recommended:** Add actions to a lightweight viewset registered under `superadmin/`.
+
+**Step 1 — ViewSet** (append to `apps/catalogue/views.py` or create `apps/catalogue/views_superadmin.py`):
+
+```python
+from apps.catalogue.models import Quiz, Assignment
+from apps.learning.models import QuizSubmission, Submission
+
+class AssessmentStatsViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]  # Add IsTascAdmin for production
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /api/v1/superadmin/assessments/stats/"""
+        quiz_count = Quiz.objects.count()
+        assignment_count = Assignment.objects.count()
+        total = quiz_count + assignment_count
+
+        quiz_subs = QuizSubmission.objects.all()
+        total_attempts = quiz_subs.count()
+        passed = quiz_subs.filter(passed=True).count()
+        pass_rate = (passed / total_attempts * 100) if total_attempts > 0 else 0
+
+        return Response({
+            'total': total,
+            'quizzes': quiz_count,
+            'assignments': assignment_count,
+            'pass_rate': round(pass_rate, 1),
+            'total_attempts': total_attempts,
+        })
+
+    def list(self, request):
+        """
+        GET /api/v1/superadmin/assessments/?type=quiz&page_size=20
+        Unified list of quizzes and assignments.
+        """
+        assessment_type = request.query_params.get('type', None)
+        results = []
+
+        if assessment_type != 'assignment':
+            for quiz in Quiz.objects.select_related('session', 'session__course').all():
+                results.append({
+                    'id': quiz.id,
+                    'type': 'quiz',
+                    'title': quiz.session.title,
+                    'course_title': quiz.session.course.title,
+                    'question_count': quiz.questions.count(),
+                    'submission_count': quiz.submissions.count(),
+                })
+
+        if assessment_type != 'quiz':
+            for asn in Assignment.objects.select_related('session', 'session__course').all():
+                results.append({
+                    'id': asn.id,
+                    'type': 'assignment',
+                    'title': asn.session.title,
+                    'course_title': asn.session.course.title,
+                    'max_points': asn.max_points,
+                    'submission_count': asn.submissions.count(),
+                })
+
+        # Simple pagination
+        page_size = int(request.query_params.get('page_size', 20))
+        page = int(request.query_params.get('page', 1))
+        start = (page - 1) * page_size
+        end = start + page_size
+
+        return Response({
+            'count': len(results),
+            'results': results[start:end],
+        })
+```
+
+**Step 2 — URL Registration.** Add to `apps/catalogue/urls.py` (or a new `apps/catalogue/urls_superadmin.py` included from `api_urls.py`):
+
+```python
+from apps.catalogue.views import AssessmentStatsViewSet  # or wherever you put it
+
+# In the router or urlpatterns:
+router.register(r'assessments', AssessmentStatsViewSet, basename='superadmin-assessments')
+```
+
+Then in `apps/common/api_urls.py`, ensure the superadmin prefix includes it:
+```python
+path("superadmin/", include("apps.catalogue.urls_superadmin")),
+```
+
+**Or simpler:** Register directly in an existing superadmin url file.
+
+---
+
+### Task 34: Superadmin Certificates — Admin-Scoped List + Stats ✅ DONE (27 Mar)
+
+**File:** `apps/learning/views.py` line 254 — `CertificateViewSet(viewsets.ReadOnlyModelViewSet)`
+
+**Problem:** Current `get_queryset()` filters to `request.user` only. Superadmin can't see all certificates.
+
+**Do this:**
+
+```python
+class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CertificateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role in ('tasc_admin', 'lms_manager'):
+            return Certificate.objects.all() \
+                .select_related('enrollment', 'enrollment__user', 'enrollment__course')
+        return Certificate.objects.filter(enrollment__user=user) \
+            .select_related('enrollment', 'enrollment__user', 'enrollment__course')
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /api/v1/learning/certificates/stats/"""
+        from django.utils import timezone
+
+        qs = Certificate.objects.all()
+        now = timezone.now()
+        total = qs.count()
+        valid = qs.filter(is_valid=True, expiry_date__gt=now).count()
+        expired = qs.filter(expiry_date__lte=now).count()
+        revoked = qs.filter(is_valid=False).count()
+
+        return Response({
+            'issued': total,
+            'valid': valid,
+            'expired': expired,
+            'revoked': revoked,
+        })
+
+    # Keep existing 'latest' and 'verify' actions unchanged
+```
+
+**Related names used:**
+- `Certificate.enrollment` → `Enrollment` (OneToOne, related_name="certificate")
+- `Enrollment.user` → `User` (related_name="enrollments")
+- `Enrollment.course` → `Course` (related_name="enrollments")
+
+---
+
+### Task 35: Superadmin Instructors — Stats & List ✅ DONE (27 Mar)
+
+**File:** `apps/accounts/views_superadmin.py` line 44 — `UserSuperadminViewSet`
+
+**Problem:** `InstructorsPage` shows hardcoded KPIs and table.
+
+**Option A — Add `instructor_stats` action to `UserSuperadminViewSet`:**
+
+```python
+class UserSuperadminViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    @action(detail=False, methods=['get'], url_path='instructor-stats')
+    def instructor_stats(self, request):
+        """GET /api/v1/superadmin/users/instructor-stats/"""
+        from django.db.models import Count, Avg
+        from apps.catalogue.models import CourseReview
+
+        instructors = User.objects.filter(role='instructor')
+        total = instructors.count()
+        active = instructors.filter(is_active=True).count()
+        total_courses = Course.objects.filter(
+            instructor__role='instructor'
+        ).count()
+
+        avg_rating = CourseReview.objects.filter(
+            course__instructor__role='instructor',
+            is_approved=True
+        ).aggregate(avg=Avg('rating'))['avg'] or 0
+
+        return Response({
+            'total': total,
+            'active': active,
+            'avg_rating': round(avg_rating, 1),
+            'total_courses': total_courses,
+        })
+```
+
+**Frontend type this must match** (`users.services.ts` line 42):
+```typescript
+export interface InstructorStats {
+    total: number;
+    active: number;
+    avg_rating: number;
+    total_courses: number;
+}
+```
+
+**For the instructor list**, the existing `GET /api/v1/superadmin/users/?role=instructor` already works. Frontend `InstructorListItem` extends `UserListItem` with `courses_count`, `students_count`, `rating`. To add these, annotate the queryset when `role=instructor` is filtered:
+
+```python
+def get_queryset(self):
+    qs = super().get_queryset()
+    role_filter = self.request.query_params.get('role')
+    if role_filter == 'instructor':
+        qs = qs.filter(role='instructor').annotate(
+            courses_count=Count('instructed_courses', distinct=True),
+            students_count=Count('instructed_courses__enrollments', distinct=True),
+        )
+    return qs
+```
+
+And expose `courses_count`, `students_count` in `UserSuperadminSerializer` as `IntegerField(read_only=True, default=0)`.
+
+---
+
+### Task 36: Invoice Stats Action ✅ DONE (27 Mar)
+
+**File:** `apps/payments/views.py` line 89 — `InvoiceViewSet(viewsets.ModelViewSet)`
+
+**Problem:** Invoice KPIs are hardcoded. Table already works.
+
+**Do this:**
+
+```python
+from django.db.models import Sum, Count
+
+class InvoiceViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /api/v1/payments/invoices/stats/"""
+        qs = self.get_queryset()  # respects existing role scoping
+        rows = qs.values('status').annotate(
+            count=Count('id'),
+            total=Sum('total_amount')
+        )
+        result = {}
+        for row in rows:
+            result[row['status']] = {
+                'count': row['count'],
+                'total': str(row['total'] or 0),
+            }
+        return Response(result)
+```
+
+**Invoice `status` choices from model:** `draft`, `pending`, `paid`, `overdue`, `cancelled`.
+
+---
+
+### Task 37: Superadmin Revenue Breakdown ✅ DONE (27 Mar)
+
+**Problem:** `RevenuePage` shows hardcoded revenue KPIs and per-org breakdown.
+
+**Step 1 — ViewSet** (append to `apps/payments/views.py` or new file):
+
+```python
+class RevenueViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]  # Add IsTascAdmin
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /api/v1/payments/revenue/stats/"""
+        from django.db.models import Sum
+        from django.utils import timezone
+        from dateutil.relativedelta import relativedelta
+
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        completed = Transaction.objects.filter(status='completed')
+        total = completed.aggregate(t=Sum('amount'))['t'] or 0
+        monthly = completed.filter(
+            completed_at__gte=month_start
+        ).aggregate(t=Sum('amount'))['t'] or 0
+
+        org_count = Organization.objects.filter(is_active=True).count()
+        avg_per_org = (total / org_count) if org_count > 0 else 0
+
+        return Response({
+            'total_revenue': str(total),
+            'monthly_revenue': str(monthly),
+            'avg_per_org': str(round(avg_per_org, 2)),
+        })
+
+    @action(detail=False, methods=['get'], url_path='by-organization')
+    def by_organization(self, request):
+        """GET /api/v1/payments/revenue/by-organization/"""
+        from django.db.models import Sum
+
+        rows = Transaction.objects.filter(
+            status='completed',
+            organization__isnull=False
+        ).values(
+            'organization__name'
+        ).annotate(
+            total_revenue=Sum('amount')
+        ).order_by('-total_revenue')
+
+        results = [
+            {
+                'org_name': row['organization__name'],
+                'total_revenue': str(row['total_revenue'] or 0),
+            }
+            for row in rows
+        ]
+        return Response(results)
+```
+
+**Step 2 — Registration.** In `apps/payments/urls.py`:
+
+```python
+router.register(r'revenue', RevenueViewSet, basename='revenue')
+```
+
+This gives:
+- `GET /api/v1/payments/revenue/stats/`
+- `GET /api/v1/payments/revenue/by-organization/`
+
+---
+
+### Task 6: SessionViewSet — Quiz/Assignment POST + Learner Submit ✅ DONE (28 Mar)
+
+**File:** `apps/catalogue/views.py` line 834 — `SessionViewSet(viewsets.ModelViewSet)`
+
+**Problem:** The `quiz` and `assignment` actions on `SessionViewSet` currently handle GET + PATCH only. Need POST for creation.
+
+**Do this — modify the existing `quiz` action** (find it in `SessionViewSet`):
+
+```python
+@action(detail=True, methods=['get', 'post', 'patch'], url_path='quiz')
+def quiz(self, request, pk=None):
+    session = self.get_object()
+
+    if request.method == 'GET':
+        # existing GET logic unchanged
+        ...
+
+    if request.method == 'POST':
+        if hasattr(session, 'quiz'):
+            return Response(
+                {'error': 'Quiz already exists for this session.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        quiz = Quiz.objects.create(
+            session=session,
+            settings=request.data.get('settings', {})
+        )
+        serializer = QuizDetailSerializer({
+            'session': QuizSessionSummarySerializer(session).data,
+            'settings': quiz.settings,
+            'questions': [],
+        })
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    if request.method == 'PATCH':
+        # existing PATCH logic unchanged
+        ...
+```
+
+**Same for `assignment` action:**
+
+```python
+@action(detail=True, methods=['get', 'post', 'put', 'patch'], url_path='assignment')
+def assignment(self, request, pk=None):
+    session = self.get_object()
+
+    if request.method == 'POST':
+        if hasattr(session, 'assignment'):
+            return Response(
+                {'error': 'Assignment already exists for this session.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        serializer = AssignmentCreateUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assignment = Assignment.objects.create(
+            session=session,
+            **serializer.validated_data
+        )
+        return Response(
+            AssignmentSerializer(assignment).data,
+            status=status.HTTP_201_CREATED
+        )
+
+    # existing GET/PUT/PATCH logic unchanged
+    ...
+```
+
+**Frontend service already has the quiz/assignment methods** (`catalogue.services.ts`):
+- `sessionApi.getQuiz(sessionId)` — GET
+- `sessionApi.patchQuiz(sessionId, payload)` — PATCH
+- `sessionApi.getAssignment(sessionId)` — GET
+- `sessionApi.putAssignment(sessionId, payload)` — PUT
+- `sessionApi.patchAssignment(sessionId, payload)` — PATCH
+
+Frontend will need to add `postQuiz` and `postAssignment` methods, but the backend endpoint is the same URL with POST method.
+
+---
+
+### Task 60: Mobile Money Payment (Flutterwave)
+
+**File:** `apps/payments/views.py` — add new view or action on `PaymentViewSet` (line 649)
+
+**Problem:** `CheckoutPaymentPage.tsx` uses `setTimeout` to simulate M-Pesa/MTN/Airtel success.
+
+**Do this:**
+
+```python
+class MobileMoneyChargeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        POST /api/v1/payments/flutterwave/charge-mobile-money/
+        Request: { enrollment: 12, phone_number: "+254...", provider: "mpesa", promo_code: "SAVE20" }
+        """
+        enrollment_id = request.data.get('enrollment')
+        phone_number = request.data.get('phone_number')
+        provider = request.data.get('provider')  # mpesa, mtn, airtel
+
+        # Validate enrollment exists and belongs to user
+        try:
+            enrollment = Enrollment.objects.get(id=enrollment_id, user=request.user)
+        except Enrollment.DoesNotExist:
+            return Response({'error': 'Enrollment not found'}, status=404)
+
+        # Calculate amount (apply promo if provided)
+        amount = enrollment.course.price
+        promo_code = request.data.get('promo_code')
+        # TODO: validate promo code if provided (Task 61)
+
+        # Call Flutterwave charge API
+        # Logic in apps/payments/services/flutterwave.py
+        from apps.payments.services.flutterwave import initiate_mobile_money_charge
+
+        result = initiate_mobile_money_charge(
+            amount=amount,
+            currency=enrollment.course.currency,
+            phone_number=phone_number,
+            provider=provider,
+            tx_ref=f"TASC-{enrollment.id}-{request.user.id}",
+            email=request.user.email,
+        )
+
+        if result.get('status') == 'success':
+            # Create Transaction record
+            Transaction.objects.create(
+                user=request.user,
+                course=enrollment.course,
+                amount=amount,
+                currency=enrollment.course.currency,
+                status='pending',
+                payment_method='mobile_money',
+                payment_provider='flutterwave',
+                gateway_transaction_id=result.get('data', {}).get('id'),
+                transaction_id=f"TASC-{enrollment.id}-{request.user.id}",
+            )
+            return Response({
+                'status': 'pending',
+                'message': 'Check your phone to authorize payment',
+                'flw_ref': result.get('data', {}).get('flw_ref'),
+            })
+
+        return Response({
+            'status': 'error',
+            'message': result.get('message', 'Payment initiation failed'),
+        }, status=400)
+```
+
+**URL Registration** (`apps/payments/urls.py`):
+
+```python
+from apps.payments.views import MobileMoneyChargeView
+
+urlpatterns += [
+    path('flutterwave/charge-mobile-money/',
+         MobileMoneyChargeView.as_view(),
+         name='flutterwave-mobile-money'),
+]
+```
+
+---
+
+## MEDIUM PRIORITY
+
+---
+
+### Task 1: AssignmentCreateUpdateSerializer — Missing `update()`
+
+**File:** `apps/catalogue/serializers.py` line 463 — `AssignmentCreateUpdateSerializer(serializers.Serializer)`
+
+**Problem:** Has `create()` logic in `SessionViewSet.assignment` action, but no `update()` method on the serializer. PUT/PATCH on `rubric_criteria` (JSONField) won't work correctly.
+
+**Do this — add `update()` method:**
+
+```python
+class AssignmentCreateUpdateSerializer(serializers.Serializer):
+    # ... existing field definitions ...
+
+    def update(self, instance, validated_data):
+        for field in [
+            'assignment_type', 'instructions', 'max_points', 'due_date',
+            'available_from', 'allow_late', 'late_cutoff_date', 'penalty_type',
+            'penalty_percent', 'max_attempts', 'allowed_file_types',
+            'max_file_size_mb', 'rubric_criteria', 'settings',
+        ]:
+            if field in validated_data:
+                setattr(instance, field, validated_data[field])
+        instance.save()
+        return instance
+```
+
+**Assignment model fields** (from schema, `catalogue_assignment` table):
+`assignment_type`, `instructions`, `max_points`, `due_date`, `available_from`, `allow_late`, `late_cutoff_date`, `penalty_type`, `penalty_percent`, `max_attempts`, `allowed_file_types` (JSONField), `max_file_size_mb`, `rubric_criteria` (JSONField), `settings` (JSONField).
+
+---
+
+### Task 43: Manager Organization Settings CRUD
+
+**Problem:** `ManagerSettingsPage` has hardcoded org name, industry, theme. No backend to read/save.
+
+**Simplest approach:** Add a `settings` JSONField to `Organization` model, or use the existing fields + a new endpoint.
+
+**Step 1 — View** (new file `apps/accounts/views_manager.py` or append to existing):
+
+```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from apps.accounts.models import Organization, Membership
+
+class ManagerSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _get_org(self, user):
+        membership = Membership.objects.filter(
+            user=user, is_active=True
+        ).select_related('organization').first()
+        if not membership:
+            return None
+        return membership.organization
+
+    def get(self, request):
+        """GET /api/v1/manager/settings/"""
+        org = self._get_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+        return Response({
+            'org_name': org.name,
+            'description': org.description,
+            'logo': org.logo,
+            'website': org.website,
+            'contact_email': org.contact_email,
+            'contact_phone': org.contact_phone,
+            'address': org.address,
+            'city': org.city,
+            'country': org.country,
+        })
+
+    def put(self, request):
+        """PUT /api/v1/manager/settings/"""
+        org = self._get_org(request.user)
+        if not org:
+            return Response({'error': 'No organization found'}, status=404)
+
+        for field in ['name', 'description', 'logo', 'website',
+                      'contact_email', 'contact_phone', 'address', 'city', 'country']:
+            if field in request.data:
+                setattr(org, field, request.data[field])
+        org.save()
+        return self.get(request)
+```
+
+**Step 2 — URL** (in `apps/common/api_urls.py` or a new `apps/accounts/urls_manager.py`):
+
+```python
+path("manager/settings/", ManagerSettingsView.as_view(), name="manager-settings"),
+```
+
+---
+
+### Task 44: Manager Billing / Subscription Info
+
+**Problem:** `ManagerBillingPage` shows hardcoded plan and usage.
+
+**Step 1 — View:**
+
+```python
+class ManagerBillingPlanView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/manager/billing/plan/"""
+        membership = Membership.objects.filter(
+            user=request.user, is_active=True
+        ).select_related('organization').first()
+        if not membership:
+            return Response({'error': 'No organization'}, status=404)
+
+        org = membership.organization
+        # Check if org has an active subscription
+        from apps.payments.models import UserSubscription
+        sub = UserSubscription.objects.filter(
+            organization=org, status='active'
+        ).select_related('subscription').first()
+
+        if sub:
+            return Response({
+                'plan_name': sub.subscription.name,
+                'price': str(sub.price),
+                'billing_cycle': sub.subscription.billing_cycle,
+                'renewal_date': sub.end_date,
+                'user_limit': org.max_seats,
+            })
+        return Response({
+            'plan_name': None,
+            'price': '0',
+            'billing_cycle': None,
+            'renewal_date': None,
+            'user_limit': org.max_seats,
+        })
+
+
+class ManagerBillingUsageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/manager/billing/usage/"""
+        membership = Membership.objects.filter(
+            user=request.user, is_active=True
+        ).select_related('organization').first()
+        if not membership:
+            return Response({'error': 'No organization'}, status=404)
+
+        org = membership.organization
+        active_users = Membership.objects.filter(
+            organization=org, is_active=True
+        ).count()
+        active_courses = Enrollment.objects.filter(
+            organization=org, status='active'
+        ).values('course').distinct().count()
+
+        return Response({
+            'active_users': active_users,
+            'active_courses': active_courses,
+        })
+```
+
+**Step 2 — URLs:**
+
+```python
+path("manager/billing/plan/", ManagerBillingPlanView.as_view(), name="manager-billing-plan"),
+path("manager/billing/usage/", ManagerBillingUsageView.as_view(), name="manager-billing-usage"),
+```
+
+---
+
+### Task 61: Promo Code System
+
+**Step 1 — Model** (`apps/payments/models.py`, append):
+
+```python
+class PromoCode(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    discount_percent = models.PositiveIntegerField(default=0)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    valid_from = models.DateTimeField()
+    valid_to = models.DateTimeField()
+    max_uses = models.PositiveIntegerField(default=0)  # 0 = unlimited
+    current_uses = models.PositiveIntegerField(default=0)
+    organization = models.ForeignKey(
+        'accounts.Organization', on_delete=models.CASCADE,
+        null=True, blank=True, related_name='promo_codes'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payments_promocode'
+
+    def __str__(self):
+        return self.code
+```
+
+**Step 2 — View** (append to `apps/payments/views.py` or new file):
+
+```python
+class PromoCodeVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """GET /api/v1/public/promo-codes/verify/?code=SAVE20&course=5"""
+        from django.utils import timezone
+
+        code = request.query_params.get('code', '').upper()
+        if not code:
+            return Response({'error': 'code parameter required'}, status=400)
+
+        try:
+            promo = PromoCode.objects.get(code=code, is_active=True)
+        except PromoCode.DoesNotExist:
+            return Response({'valid': False, 'error': 'Invalid promo code'}, status=404)
+
+        now = timezone.now()
+        if now < promo.valid_from or now > promo.valid_to:
+            return Response({'valid': False, 'error': 'Promo code expired'})
+
+        if promo.max_uses > 0 and promo.current_uses >= promo.max_uses:
+            return Response({'valid': False, 'error': 'Promo code usage limit reached'})
+
+        return Response({
+            'valid': True,
+            'code': promo.code,
+            'discount_percent': promo.discount_percent,
+            'discount_amount': str(promo.discount_amount),
+        })
+```
+
+**Step 3 — URL** (in `apps/catalogue/urls_public.py` or `apps/payments/urls.py`):
+
+```python
+path("promo-codes/verify/", PromoCodeVerifyView.as_view(), name="promo-verify"),
+```
+
+Since the frontend expects `GET /api/v1/public/promo-codes/verify/`, register under the public URL prefix.
+
+**Step 4 — Migration:**
+
+```bash
+python manage.py makemigrations payments
+python manage.py migrate
+```
+
+---
+
+### Task 62: Course Review Enhancements
+
+**File:** `apps/catalogue/views.py` line 1268 — `CourseReviewViewSet(viewsets.ModelViewSet)`
+
+**Problem:** No `helpful` or `report` actions. No `rating` filter.
+
+**Do this:**
+
+```python
+class CourseReviewViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        rating = self.request.query_params.get('rating')
+        if rating:
+            qs = qs.filter(rating=int(rating))
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='helpful')
+    def helpful(self, request, pk=None):
+        """POST /api/v1/catalogue/reviews/{id}/helpful/"""
+        review = self.get_object()
+        # If you add a helpful_count field to CourseReview model:
+        # review.helpful_count = F('helpful_count') + 1
+        # review.save(update_fields=['helpful_count'])
+        # For now, just acknowledge:
+        return Response({'status': 'marked helpful'})
+
+    @action(detail=True, methods=['post'], url_path='report')
+    def report(self, request, pk=None):
+        """POST /api/v1/catalogue/reviews/{id}/report/"""
+        review = self.get_object()
+        # Could create a ReviewReport model, or just flag:
+        # review.is_approved = False
+        # review.save(update_fields=['is_approved'])
+        return Response({'status': 'reported'})
+```
+
+**Note:** To fully implement, add `helpful_count = models.PositiveIntegerField(default=0)` and `report_count = models.PositiveIntegerField(default=0)` to `CourseReview` model, then run `makemigrations`.
+
+---
+
+### Task 63: Transaction & Invoice Exports
+
+**File:** `apps/payments/views.py`
+
+**Do this:**
+
+```python
+import csv
+from django.http import HttpResponse
+
+class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
+    # ... existing code ...
+
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/payments/transactions/export-csv/"""
+        qs = self.get_queryset()
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="transactions.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            'ID', 'Transaction ID', 'Amount', 'Currency', 'Status',
+            'Payment Method', 'Created At', 'Completed At',
+        ])
+        for t in qs:
+            writer.writerow([
+                t.id, t.transaction_id, t.amount, t.currency, t.status,
+                t.payment_method, t.created_at, t.completed_at,
+            ])
+        return response
+
+
+class InvoiceViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    @action(detail=True, methods=['get'], url_path='download-pdf')
+    def download_pdf(self, request, pk=None):
+        """GET /api/v1/payments/invoices/{id}/download-pdf/"""
+        invoice = self.get_object()
+        # Option 1: Return invoice data for frontend CSS-based printing
+        # Option 2: Use WeasyPrint (if installed)
+        serializer = self.get_serializer(invoice)
+        return Response(serializer.data)
+        # TODO: For real PDF, add weasyprint to requirements and render template
+
+    @action(detail=True, methods=['post'], url_path='email-receipt')
+    def email_receipt(self, request, pk=None):
+        """POST /api/v1/payments/invoices/{id}/email-receipt/"""
+        invoice = self.get_object()
+        # TODO: Send email via SendGrid with invoice data
+        return Response({'status': 'Receipt email queued'})
+```
+
+---
+
+### Task 22: Security Metrics
+
+**New view for superadmin:**
+
+```python
+class SecurityStatsView(APIView):
+    permission_classes = [IsAuthenticated]  # Add IsTascAdmin
+
+    def get(self, request):
+        """GET /api/v1/superadmin/security/stats/"""
+        from django.utils import timezone
+        from apps.accounts.models import User
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        failed_today = User.objects.filter(
+            failed_login_attempts__gt=0
+        ).count()
+
+        locked = User.objects.filter(
+            account_locked_until__gt=now
+        ).count()
+
+        return Response({
+            'failed_logins_today': failed_today,
+            'locked_accounts': locked,
+            'active_sessions': 0,  # Would need session tracking
+            'mfa_adoption_percent': 0,  # Would need MFA tracking
+        })
+```
+
+**URL:** Add to `apps/audit/urls.py` or `apps/accounts/urls_superadmin.py`:
+
+```python
+path("security/stats/", SecurityStatsView.as_view(), name="security-stats"),
+```
+
+Full endpoint: `GET /api/v1/superadmin/security/stats/`
+
+---
+
+### Task 25: Redis Integration
+
+**Files to modify:**
+- `requirements.txt` — add `redis` and `django-redis`
+- `config/settings.py` — cache config + Celery broker
+- `docker-compose.yml` — add Redis service
+
+**Step 1 — `requirements.txt`:**
+
+```
+redis>=5.0.0
+django-redis>=5.4.0
+```
+
+**Step 2 — `config/settings.py`** (replace lines 375-377 where `CELERY_BROKER_URL = "django://"` and `CELERY_RESULT_BACKEND = "django-db"`):
+
+```python
+# Cache
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://redis:6379/0",
+        "LOCATION": env("REDIS_URL", default="redis://redis:6379/0"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
@@ -1236,66 +1307,68 @@ CACHES = {
 }
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
+
+# Celery
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://redis:6379/1")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://redis:6379/2")
 ```
 
-**b) Switch Celery to Redis broker:**
-```python
-CELERY_BROKER_URL = "redis://redis:6379/1"
-CELERY_RESULT_BACKEND = "redis://redis:6379/2"
-```
-Currently set to `"django://"` and `"django-db"` (lines 375-377 in settings.py).
+**Step 3 — `docker-compose.yml`:**
 
-**c) Add Redis to docker-compose:**
 ```yaml
 redis:
   image: redis:7-alpine
   restart: unless-stopped
   ports:
     - "127.0.0.1:6379:6379"
-```
+  volumes:
+    - redis_data:/data
 
-**Impact:** Eliminates DB as bottleneck for sessions, caching, and async tasks.
+# Add to volumes section:
+volumes:
+  redis_data:
+```
 
 ---
 
-### 26. Database Connection Pooling
+### Task 26: DB Connection Pooling
 
-**Why:** Without connection pooling, each request opens a new PostgreSQL connection and closes it when done. At 1000 concurrent users, this exhausts PostgreSQL's default `max_connections` (100) and causes connection refused errors. `psycopg-pool` is already in `requirements.txt` (line 65) but is not configured.
+**File:** `config/settings.py` — `DATABASES` config
 
-**What to do:**
+**Do this** (psycopg 3.3.2 supports native pooling):
 
-Add to `DATABASES` config in `config/settings.py`:
 ```python
 DATABASES = {
     "default": {
-        # ... existing ENGINE, NAME, USER, PASSWORD, HOST, PORT ...
-        "CONN_MAX_AGE": 600,          # Keep connections alive for 10 min
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": env("DB_NAME"),
+        "USER": env("DB_USER"),
+        "PASSWORD": env("DB_PASSWORD"),
+        "HOST": env("DB_HOST", default="localhost"),
+        "PORT": env("DB_PORT", default="5432"),
+        "CONN_MAX_AGE": 600,
         "OPTIONS": {
             "pool": {
                 "min_size": 5,
                 "max_size": 20,
             }
-        }
+        },
     }
 }
 ```
 
-`CONN_MAX_AGE=600` alone gives a significant improvement. The `pool` option requires `psycopg[pool]` (psycopg v3) — verify the current psycopg version supports it, otherwise use `django-db-connection-pool`.
-
-**Impact:** Reduces connection overhead from ~5ms/request to near-zero; prevents connection exhaustion.
-
 ---
 
-### 27. Gunicorn Worker Scaling
+### Task 27: Gunicorn Worker Scaling
 
-**Why:** The Dockerfile hardcodes `--workers 3`. Each gunicorn worker handles one request at a time (sync). With 3 workers, only 3 requests can be processed simultaneously — at 1000 concurrent users, requests queue up and timeout.
+**Files:** `Dockerfile` (line 24), `docker-compose.staging.yml` (line 41)
 
-**Current config** (`Dockerfile` line 24 and `docker-compose.staging.yml` line 41):
+**Replace:**
 ```bash
 gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
 ```
 
-**What to change:**
+**With:**
 ```bash
 gunicorn config.wsgi:application \
   --bind 0.0.0.0:8000 \
@@ -1307,20 +1380,370 @@ gunicorn config.wsgi:application \
   --max-requests-jitter 50
 ```
 
-- `--workers 8`: Rule of thumb is `(2 × CPU cores) + 1`. 8 workers handles ~1200 req/sec.
-- `--threads 4`: Each worker handles 4 concurrent requests (32 total slots).
-- `--worker-class gthread`: Threaded workers for I/O-bound Django views.
-- `--max-requests 1000`: Recycle workers to prevent memory leaks.
+---
 
-**Alternative:** Use `--worker-class gevent` with `--worker-connections 1000` for even higher concurrency (requires `pip install gevent`).
+## LOW PRIORITY
 
-**Impact:** Increases concurrent request capacity from 3 to 32 (or 1000+ with gevent).
+---
+
+### Task 8: Email Templates
+
+**Create directory:** `templates/emails/`
+
+**Files to create:**
+
+| File | Variables |
+|------|----------|
+| `templates/emails/verification.html` | `user_name`, `verification_url` |
+| `templates/emails/password_reset.html` | `user_name`, `reset_url`, `expiry_hours` |
+| `templates/emails/enrollment_confirmation.html` | `user_name`, `course_title`, `start_date` |
+| `templates/emails/certificate_issued.html` | `user_name`, `course_title`, `certificate_url` |
+| `templates/emails/payment_receipt.html` | `user_name`, `course_title`, `amount`, `currency`, `transaction_id`, `date` |
+
+---
+
+### Task 9: Notification ViewSet Extras
+
+**File:** `apps/notifications/views.py` line 33 — `NotificationViewSet(viewsets.ModelViewSet)`
+
+**Add:**
+
+```python
+class NotificationViewSet(viewsets.ModelViewSet):
+    # ... existing code ...
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Date range filter
+        created_after = self.request.query_params.get('created_after')
+        created_before = self.request.query_params.get('created_before')
+        if created_after:
+            qs = qs.filter(created_at__gte=created_after)
+        if created_before:
+            qs = qs.filter(created_at__lte=created_before)
+        return qs
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """POST /api/v1/notifications/bulk-delete/  body: { "ids": [1,2,3] }"""
+        ids = request.data.get('ids', [])
+        deleted = Notification.objects.filter(
+            id__in=ids, user=request.user
+        ).delete()[0]
+        return Response({'deleted': deleted})
+```
+
+---
+
+### Task 17: N+1 Query Fixes
+
+Add `select_related` / `prefetch_related` to these viewsets:
+
+| ViewSet | File:Line | Add to `get_queryset()` |
+|---------|-----------|------------------------|
+| `EnrollmentViewSet` (learner branch) | `learning/views.py:31` | `.select_related('course', 'course__category', 'course__instructor', 'user', 'organization')` |
+| `DiscussionViewSet` | `learning/views.py:334` | `.select_related('user', 'course', 'session')` |
+| `DiscussionReplyViewSet` | `learning/views.py:430` | `.select_related('user', 'discussion')` |
+| `SubmissionViewSet` | `learning/views.py:598` | `.select_related('enrollment', 'enrollment__user', 'assignment', 'assignment__session', 'graded_by')` |
+| `NotificationViewSet` | `notifications/views.py:33` | `.select_related('user')` |
+| `InvoiceViewSet` | `payments/views.py:89` | `.select_related('user', 'organization', 'course', 'payment').prefetch_related('items')` |
+| `TransactionViewSet` | `payments/views.py:268` | `.select_related('user', 'organization', 'course', 'invoice')` |
+
+---
+
+### Task 10-16: Silent Exception Fixes
+
+Each is a 1-line fix:
+
+| # | File | Line(s) | Fix |
+|---|------|---------|-----|
+| 10 | `apps/payments/utils/webhook_handlers.py` | 271, 317 | Replace `pass` with `logger.warning(f"Payment not found: {transaction_id}")` |
+| 11 | `apps/payments/utils/payment_validators.py` | 328 | Add `logger.info(f"Phone validation skipped: {phone}: {e}")` |
+| 13 | `apps/audit/views.py` | 79, 89 | Return `Response({'error': 'Invalid date format. Expected YYYY-MM-DD.'}, status=400)` |
+| 14 | `apps/catalogue/views.py` | 118 | Return `Response({'error': 'Invalid category ID'}, status=400)` |
+| 16 | `apps/common/views.py` | 362-366 | Replace `except Exception: pass` with `logger.warning(f"S3 storage calc failed: {e}")` |
+
+---
+
+### Task 16b: Django Admin Registrations
+
+**File:** `apps/catalogue/admin.py`
+
+**Already registered:** `QuestionCategory`, `BankQuestion`, `Assignment`, `Quiz`, `QuizQuestion`, `Module`
+
+**Add:**
+
+```python
+from apps.catalogue.models import Course, Session, Category, Tag
+
+@admin.register(Course)
+class CourseAdmin(admin.ModelAdmin):
+    list_display = ['title', 'status', 'instructor', 'level', 'created_at']
+    list_filter = ['status', 'level', 'category']
+    search_fields = ['title', 'short_description']
+    prepopulated_fields = {'slug': ('title',)}
+
+@admin.register(Session)
+class SessionAdmin(admin.ModelAdmin):
+    list_display = ['title', 'course', 'module', 'session_type', 'order', 'status']
+    list_filter = ['session_type', 'status']
+    search_fields = ['title']
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'parent', 'is_active']
+    list_filter = ['is_active']
+    search_fields = ['name']
+    prepopulated_fields = {'slug': ('name',)}
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug']
+    search_fields = ['name']
+    prepopulated_fields = {'slug': ('name',)}
+```
+
+---
+
+### Task 40: Roles — Per-Role User Counts
+
+**File:** `apps/accounts/views_superadmin.py` line 44 — `UserSuperadminViewSet`
+
+**Find the existing `stats` action and add `by_role`:**
+
+```python
+@action(detail=False, methods=['get'], url_path='stats')
+def stats(self, request):
+    from django.db.models import Count
+
+    qs = User.objects.all()
+    total = qs.count()
+    active = qs.filter(is_active=True).count()
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    new_this_month = qs.filter(date_joined__gte=month_start).count()
+    suspended = qs.filter(is_active=False).count()
+
+    by_role = list(
+        qs.values('role').annotate(count=Count('id')).order_by('role')
+    )
+
+    return Response({
+        'total': total,
+        'active': active,
+        'new_this_month': new_this_month,
+        'suspended': suspended,
+        'by_role': by_role,
+    })
+```
+
+**Frontend `UserStats` interface** (`users.services.ts` line 101):
+```typescript
+export interface UserStats {
+    total: number;
+    active: number;
+    new_this_month: number;
+    suspended: number;
+}
+```
+After this change, the response adds `by_role` — frontend can read it without breaking.
+
+**Role choices from model:** `learner`, `org_admin`, `instructor`, `finance`, `tasc_admin`, `lms_manager`.
+
+---
+
+### Task 23: B2B Pricing Tiers
+
+**Problem:** `/for-business` page displays hardcoded pricing tiers.
+
+**Frontend already has** `businessPricingApi.getPlans()` in `public.services.ts` line 131 calling `GET /api/v1/public/business-plans/`.
+
+**Backend already has** `PublicSubscriptionPlanViewSet` at `apps/payments/views_public.py` line 19. If the subscription plans in the DB don't exist yet, create them via admin or a management command.
+
+**If you need a separate B2B endpoint**, create plans via `Subscription` model (which has `max_courses`, `max_users` fields) and filter:
+
+```python
+class BusinessPricingViewSet(viewsets.ViewSet):
+    permission_classes = [AllowAny]
+
+    def list(self, request):
+        """GET /api/v1/public/business-plans/"""
+        plans = Subscription.objects.filter(
+            status='active', max_users__isnull=False
+        ).order_by('price')
+        return Response([
+            {
+                'id': str(p.id),
+                'name': p.name,
+                'price': float(p.price),
+                'billing_period': p.billing_cycle,
+                'features': p.features,
+                'max_users': p.max_users,
+            }
+            for p in plans
+        ])
+```
+
+Register in `apps/catalogue/urls_public.py`:
+```python
+router.register(r'business-plans', BusinessPricingViewSet, basename='business-plans')
+```
+
+---
+
+### Task 38: System Settings & Health
+
+```python
+class SystemHealthView(APIView):
+    permission_classes = [IsAuthenticated]  # Add IsTascAdmin
+
+    def get(self, request):
+        """GET /api/v1/superadmin/system/health/"""
+        import time
+        from django.db import connection
+
+        # DB check
+        start = time.time()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        db_latency = round((time.time() - start) * 1000)
+
+        return Response({
+            'database': 'healthy',
+            'db_latency_ms': db_latency,
+            'storage': 'online',
+        })
+```
+
+Register in `apps/audit/urls.py`:
+```python
+path("system/health/", SystemHealthView.as_view(), name="system-health"),
+```
+
+Full endpoint: `GET /api/v1/superadmin/system/health/`
+
+---
+
+### Task 45: Manager Activity Log Summary
+
+**File:** `apps/audit/views.py` line 39 — `AuditLogListView(APIView)`
+
+**Add a summary endpoint or action:**
+
+```python
+class AuditLogSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/superadmin/audit-logs/summary/?period=today"""
+        from django.utils import timezone
+        from django.db.models import Count
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        qs = AuditLog.objects.filter(created_at__gte=today_start)
+
+        # Scope for managers
+        if request.user.role == 'lms_manager':
+            membership = Membership.objects.filter(
+                user=request.user, is_active=True
+            ).first()
+            if membership:
+                qs = qs.filter(organization=membership.organization)
+
+        counts = qs.values('action').annotate(count=Count('id'))
+        result = {row['action']: row['count'] for row in counts}
+
+        return Response({
+            'logins': result.get('login', 0),
+            'created': result.get('created', 0),
+            'updated': result.get('updated', 0),
+            'deleted': result.get('deleted', 0),
+        })
+```
+
+Register in `apps/audit/urls.py`:
+```python
+path("audit-logs/summary/", AuditLogSummaryView.as_view(), name="audit-log-summary"),
+```
+
+Full endpoint: `GET /api/v1/superadmin/audit-logs/summary/`
 
 ---
 
 ## Configuration TODOs
 
-- Set `ZOOM_WEBHOOK_SECRET` in production settings
-- Configure Google Meet: `GOOGLE_MEET_SERVICE_ACCOUNT_FILE`, `GOOGLE_MEET_DELEGATED_USER`, `GOOGLE_MEET_CALENDAR_ID` (code is ready, just needs credentials)
-- Configure Teams: `TEAMS_TENANT_ID`, `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_ORGANIZER_USER_ID` (code is ready, just needs Azure AD app registration)
-- Set up SendGrid email templates for production
+- [ ] Set `ZOOM_WEBHOOK_SECRET` in production `.env`
+- [ ] Set `GOOGLE_MEET_SERVICE_ACCOUNT_FILE`, `GOOGLE_MEET_DELEGATED_USER`, `GOOGLE_MEET_CALENDAR_ID`
+- [ ] Set `TEAMS_TENANT_ID`, `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, `TEAMS_ORGANIZER_USER_ID`
+- [ ] Set up SendGrid email templates for production
+- [ ] Create `Subscription` seed data for B2B pricing tiers
+
+---
+
+## Test Coverage Gaps
+
+| App | Current | Priority Tests to Add |
+|-----|---------|----------------------|
+| `learning` | 27 | SavedCourse CRUD, quiz submission edge cases, report generation |
+| `catalogue` | 95 | Quiz POST creation, assignment update, course review helpful/report |
+| `payments` | 8 | Webhook handlers, mobile money charge, promo code validation |
+| `accounts` | 48 | CSV bulk import, instructor stats, org annotation |
+| `audit` | 6 | Date filter validation, summary endpoint |
+| `notifications` | 2 | Bulk delete, date range filter, mark_read |
+
+---
+
+## Completed Items Archive
+
+<details>
+<summary>Click to expand — 28 completed items</summary>
+
+| # | Item | Date |
+|---|------|------|
+| 1 | Quiz Submission System | — |
+| 2 | Report Generation / Celery | — |
+| 3 | Bulk User Import (Superadmin) | — |
+| 4 | LivestreamQuestion Model | — |
+| 8 | ReportViewSet Data Queries | — |
+| 9a | Bulk Grade Action | — |
+| 9b | Grade Statistics Action | — |
+| 14 | Migration Backfill | — |
+| — | Course Reviews | — |
+| — | Public Endpoints | — |
+| — | Celery Setup | — |
+| 0a | Public Course Search & Ordering | — |
+| — | Category courses_count | — |
+| — | InvoiceViewSet date filters | — |
+| — | EnrollmentViewSet search | — |
+| — | SessionProgressViewSet filters | — |
+| — | Livestream Tests & Setup | — |
+| 12 | Calendar Service timezone fix | — |
+| 15 | Livestream Webhooks rename | — |
+| 46 | Livestream Session Creation permissions | — |
+| 24 | Messaging API (100% test coverage) | — |
+| 4 | DiscussionViewSet Moderation | 26 Mar |
+| 7 | SubmissionViewSet Validation | 26 Mar |
+| 0b | Manager Bulk Import | 26 Mar |
+| DB | Analytics ViewSets | 26 Mar |
+| 5 | Module Bulk Reorder | 27 Mar |
+| 18 | Analytics Endpoints | 26 Mar |
+| 19 | Certificate Auto-Creation | 27 Mar |
+| 20 | Bulk Enrollment Endpoint | 27 Mar |
+| 21 | Session Attachments | 27 Mar |
+| 28 | Badges System | 27 Mar |
+
+</details>
+```
+
+---
+
+That's the complete rewritten document. Every task now uses:
+
+- **Exact model field names** from the schema dump (e.g., `related_name="memberships"`, `related_name="enrollments"`, `related_name="instructed_courses"`)
+- **Exact serializer class names** and line numbers (e.g., `CourseListSerializer` at line 619, `AssignmentCreateUpdateSerializer` at line 463)
+- **Exact ViewSet class names** and line numbers (e.g., `CourseViewSet` at line 215, `SessionViewSet` at line 834)
+- **Exact URL registration patterns** matching `apps/common/api_urls.py`
+- **Response shapes matching frontend TypeScript interfaces** (e.g., `Organization.users_count`, `UserStats.by_role`, `CourseList` nested structure)
+- **Correct `status` choice values** from model definitions (e.g., Course: `draft`/`pending_approval`/`published`/`rejected`/`archived`)

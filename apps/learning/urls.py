@@ -10,9 +10,13 @@ from .views import (
     ReportViewSet,
     SubmissionViewSet,
     QuizSubmissionViewSet,
+    LearningAnalyticsViewSet,
+    BadgeViewSet,
+    SavedCourseViewSet,
 )
 
 router = DefaultRouter()
+router.register(r'analytics', LearningAnalyticsViewSet, basename='learning-analytics')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r'session-progress', SessionProgressViewSet, basename='session-progress')
 router.register(r'certificates', CertificateViewSet, basename='certificate')
@@ -21,6 +25,8 @@ router.register(r'discussion-replies', DiscussionReplyViewSet, basename='discuss
 router.register(r'reports', ReportViewSet, basename='report')
 router.register(r'submissions', SubmissionViewSet, basename='submission')
 router.register(r'quiz-submissions', QuizSubmissionViewSet, basename='quiz-submission')
+router.register(r'badges', BadgeViewSet, basename='badge')
+router.register(r'saved-courses', SavedCourseViewSet, basename='saved-course')
 
 urlpatterns = [
     path('', include(router.urls)),

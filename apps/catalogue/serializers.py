@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 
-from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
+from .models import Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module, Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview, SessionAttachment
 
 
 def _get_user_enrollment(user, course):
@@ -135,6 +135,18 @@ class ModuleSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ModuleReorderItemSerializer(serializers.Serializer):
+    """Serializer for a single module reorder item."""
+    id = serializers.IntegerField()
+    order = serializers.IntegerField(min_value=0)
+
+
+class ModuleBulkReorderSerializer(serializers.Serializer):
+    """Serializer for bulk reordering course modules."""
+    course = serializers.IntegerField()
+    order = ModuleReorderItemSerializer(many=True)
 
 
 class SessionSerializer(serializers.ModelSerializer):
@@ -287,7 +299,7 @@ class QuizQuestionSerializer(serializers.ModelSerializer):
     """Serializer for QuizQuestion in quiz detail and write payloads."""
     class Meta:
         model = QuizQuestion
-        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload']
+        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload', 'explanation']
         read_only_fields = ['id']
 
     def validate_question_type(self, value):
@@ -532,6 +544,12 @@ class AssignmentCreateUpdateSerializer(serializers.Serializer):
             raise serializers.ValidationError({'settings': 'settings must be a JSON object.'})
 
         return attrs
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 
 class QuestionCategorySerializer(serializers.ModelSerializer):
@@ -902,8 +920,11 @@ class CourseReviewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CourseReview
-        fields = ['id', 'course', 'user', 'user_name', 'rating', 'content', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'course', 'user', 'user_name', 'rating', 'content',
+            'helpful_count', 'report_count', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'helpful_count', 'report_count', 'created_at', 'updated_at']
 
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
@@ -958,3 +979,16 @@ class ApproveActionSerializer(serializers.Serializer):
 class RejectActionSerializer(serializers.Serializer):
     """Required body for reject action."""
     reviewer_comments = serializers.CharField(required=True, allow_blank=False)
+
+
+class SessionAttachmentSerializer(serializers.ModelSerializer):
+    uploaded_by_name = serializers.SerializerMethodField()
+    file_url = serializers.FileField(source='file', read_only=True)
+
+    class Meta:
+        model = SessionAttachment
+        fields = ['id', 'session', 'title', 'file', 'file_url', 'file_type', 'file_size', 'uploaded_by', 'uploaded_by_name', 'created_at']
+        read_only_fields = ['id', 'file_url', 'file_type', 'file_size', 'uploaded_by', 'uploaded_by_name', 'created_at']
+
+    def get_uploaded_by_name(self, obj):
+        return obj.uploaded_by.get_full_name() if obj.uploaded_by else None

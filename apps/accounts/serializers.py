@@ -451,3 +451,29 @@ class UserUpdateSerializer(serializers.ModelSerializer):
                 f"Invalid role. Must be one of: {', '.join(valid_roles)}"
             )
         return value
+
+
+class ManagerOrganizationSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Managers to update their own organization settings.
+    """
+    class Meta:
+        model = Organization
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "logo",
+            "website",
+            "industry",
+            "contact_email",
+            "contact_phone",
+            "address",
+            "city",
+            "country",
+            "settings",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "slug", "created_at", "updated_at"]

@@ -260,6 +260,33 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'invoice_number': invoice.invoice_number
         })
 
+    @extend_schema(
+        summary='Invoice statistics (superadmin)',
+        description='Returns aggregate invoice stats for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level invoice statistics."""
+        from django.db.models import Sum
+        all_invoices = Invoice.objects.all()
+        now = timezone.now()
+
+        total = all_invoices.count()
+        paid = all_invoices.filter(status='paid').count()
+        pending = all_invoices.filter(status='pending').count()
+        overdue = all_invoices.filter(status='pending', due_date__lt=now).count()
+        total_revenue = all_invoices.filter(
+            status='paid'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+
+        return Response({
+            'total': total,
+            'paid': paid,
+            'pending': pending,
+            'overdue': overdue,
+            'total_revenue': str(total_revenue),
+        })
+
 
 @extend_schema(
     tags=['Payments - Transactions'],
@@ -378,12 +405,6 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
         
         # Set the user
         serializer.save(user=request.user)
-        
-        # If this is the first payment method, make it default
-        if PaymentMethod.objects.filter(user=request.user).count() == 1:
-            payment_method = PaymentMethod.objects.get(id=serializer.data['id'])
-            payment_method.is_default = True
-            payment_method.save()
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
@@ -784,6 +805,53 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 'error': result.get('message', 'Verification failed'),
                 'details': result.get('data')
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(
+        summary='Revenue statistics (superadmin)',
+        description='Returns monthly revenue breakdown and growth rate for admin dashboards',
+    )
+    @action(detail=False, methods=['get'], url_path='revenue-stats')
+    def revenue_stats(self, request):
+        """Admin-level revenue statistics."""
+        from django.db.models import Sum
+        from django.db.models.functions import TruncMonth
+
+        months = int(request.query_params.get('months', 12))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        monthly = (
+            Transaction.objects.filter(
+                status='completed',
+                created_at__gte=start_date,
+            )
+            .annotate(month=TruncMonth('created_at'))
+            .values('month')
+            .annotate(revenue=Sum('amount'))
+            .order_by('month')
+        )
+
+        monthly_data = []
+        prev_revenue = None
+        for m in monthly:
+            rev = float(m['revenue'] or 0)
+            growth = None
+            if prev_revenue is not None and prev_revenue > 0:
+                growth = round(((rev - prev_revenue) / prev_revenue) * 100, 1)
+            monthly_data.append({
+                'month': m['month'].strftime('%b %Y') if m['month'] else None,
+                'revenue': str(m['revenue'] or 0),
+                'growth_percent': growth,
+            })
+            prev_revenue = rev
+
+        total_revenue = Transaction.objects.filter(
+            status='completed'
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        return Response({
+            'total_revenue': str(total_revenue),
+            'monthly': monthly_data,
+        })
     
     @extend_schema(
         summary='Get banks',
@@ -883,6 +951,59 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 {'error': str(e)}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+from django.db.models import Sum, Count
+from django.db.models.functions import TruncMonth
+
+@extend_schema(tags=['Payments - Analytics'])
+class PaymentAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding revenue."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='revenue')
+    def revenue(self, request):
+        months = int(request.query_params.get('months', 6))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        user = request.user
+        base_qs = Transaction.objects.filter(
+            status='completed',
+            created_at__gte=start_date
+        )
+
+        # Scope by role
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(organization=user.organization)
+
+        monthly = base_qs.annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            total=Sum('amount')
+        ).order_by('month')
+
+        # Build consistent month list
+        labels_map = {}
+        for i in range(months - 1, -1, -1):
+            d = timezone.now() - timedelta(days=i * 30)
+            label = d.strftime('%b %Y')
+            labels_map[label] = 0
+
+        for m in monthly:
+            if m['month']:
+                key = m['month'].strftime('%b %Y')
+                if key in labels_map:
+                    labels_map[key] = float(m['total'] or 0)
+
+        labels = list(labels_map.keys())
+        revenue = list(labels_map.values())
+        total_revenue = sum(revenue)
+
+        return Response({
+            "labels": labels,
+            "revenue": revenue,
+            "total_revenue": total_revenue,
+        })
 
 
 @extend_schema(

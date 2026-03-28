@@ -2,17 +2,17 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins, serializers
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer
+    QuizSubmission, QuizAnswer, SavedCourse
 )
 from .serializers import (
-    EnrollmentSerializer, EnrollmentCreateSerializer,
+    EnrollmentSerializer, EnrollmentCreateSerializer, BulkEnrollmentSerializer,
     SessionProgressSerializer, SessionProgressUpdateSerializer,
     CertificateSerializer,
     DiscussionSerializer, DiscussionCreateSerializer,
@@ -21,6 +21,7 @@ from .serializers import (
     SubmissionSerializer, SubmissionCreateSerializer,
     SubmissionUpdateSerializer, GradeSubmissionSerializer,
     QuizSubmissionSerializer, QuizSubmissionCreateSerializer,
+    SavedCourseSerializer,
 )
 
 
@@ -134,6 +135,66 @@ class EnrollmentViewSet(
         serializer = CertificateSerializer(certificate)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        summary='Bulk enroll users',
+        description='Manager only. Enrolls multiple users from the manager\'s organization into a course.',
+        request=BulkEnrollmentSerializer,
+        responses={
+            200: OpenApiResponse(description='Bulk enrollment results'),
+            403: OpenApiResponse(description='Not an LMS manager'),
+        },
+    )
+    @action(detail=False, methods=['post'])
+    def bulk(self, request):
+        from apps.accounts.rbac import is_lms_manager
+        from django.db import transaction
+        from django.contrib.auth import get_user_model
+        
+        user = request.user
+        if not is_lms_manager(user):
+            return Response({'error': 'Only LMS Managers can bulk enroll users.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        serializer = BulkEnrollmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        course = serializer.validated_data['course']
+        user_ids = serializer.validated_data['user_ids']
+        
+        User = get_user_model()
+        valid_users = User.objects.filter(id__in=user_ids, organization=user.organization)
+        valid_user_ids = set(valid_users.values_list('id', flat=True))
+        
+        existing_enrollments = set(Enrollment.objects.filter(
+            course=course, 
+            user_id__in=valid_user_ids
+        ).values_list('user_id', flat=True))
+        
+        new_user_ids = valid_user_ids - existing_enrollments
+        
+        enrollments_to_create = [
+            Enrollment(
+                user_id=uid,
+                course=course,
+                organization=user.organization,
+                paid_amount=0,
+                currency='USD'
+            )
+            for uid in new_user_ids
+        ]
+        
+        if enrollments_to_create:
+            with transaction.atomic():
+                Enrollment.objects.bulk_create(enrollments_to_create, ignore_conflicts=True)
+                
+        failed = len(user_ids) - len(valid_user_ids)
+        
+        return Response({
+            'enrolled': len(new_user_ids),
+            'already_enrolled': len(existing_enrollments),
+            'failed': failed,
+            'errors': ['Some users were not found or do not belong to your organization.'] if failed > 0 else []
+        }, status=status.HTTP_200_OK)
+
 
 @extend_schema(
     tags=['Learning - Session Progress'],
@@ -197,6 +258,11 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CertificateSerializer
     permission_classes = [IsAuthenticated]
     
+    def get_permissions(self):
+        if self.action == 'verify':
+            return [AllowAny()]
+        return super().get_permissions()
+    
     def get_queryset(self):
         return Certificate.objects.filter(enrollment__user=self.request.user)
     
@@ -213,6 +279,25 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+        
+    @extend_schema(
+        summary='Get latest certificate',
+        description='Returns the most recently issued certificate for the authenticated user',
+        responses={
+            200: CertificateSerializer,
+            404: OpenApiResponse(description='No certificates found'),
+        },
+    )
+    @action(detail=False, methods=['get'])
+    def latest(self, request):
+        certificate = self.get_queryset().order_by('-issued_at').first()
+        if not certificate:
+            return Response(
+                {'detail': 'No certificates found for this user.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = self.get_serializer(certificate)
+        return Response(serializer.data)
     
     @extend_schema(
         summary='Verify certificate',
@@ -242,6 +327,30 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+    @extend_schema(
+        summary='Certificate statistics',
+        description='Returns aggregate certificate stats for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level certificate statistics."""
+        from django.db.models.functions import TruncMonth
+        all_certs = Certificate.objects.all()
+        now = timezone.now()
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        total = all_certs.count()
+        this_month = all_certs.filter(issued_at__gte=start_of_month).count()
+        total_courses = all_certs.values('enrollment__course').distinct().count()
+        valid = all_certs.filter(is_valid=True).count()
+
+        return Response({
+            'total': total,
+            'this_month': this_month,
+            'total_courses_with_certs': total_courses,
+            'valid': valid,
+        })
+
 
 @extend_schema(
     tags=['Learning - Discussions'],
@@ -258,7 +367,22 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         return DiscussionSerializer
     
     def get_queryset(self):
-        return Discussion.objects.all()
+        qs = Discussion.objects.all()
+        
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            qs = qs.filter(course_id=course_id)
+            
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            qs = qs.filter(session_id=session_id)
+            
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(title__icontains=search) | Q(content__icontains=search))
+            
+        return qs
     
     @extend_schema(
         summary='List discussions',
@@ -266,6 +390,7 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         parameters=[
             OpenApiParameter(name='course', type=int, description='Filter by course ID'),
             OpenApiParameter(name='session', type=int, description='Filter by session ID'),
+            OpenApiParameter(name='search', type=str, description='Search in title and content'),
         ],
     )
     def list(self, request, *args, **kwargs):
@@ -285,6 +410,42 @@ class DiscussionViewSet(viewsets.ModelViewSet):
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Pin/unpin discussion',
+        description='Toggle pin status (Instructor/Manager only)',
+        responses={200: OpenApiResponse(response={'type': 'object', 'properties': {'is_pinned': {'type': 'boolean'}}})},
+    )
+    @action(detail=True, methods=['post'])
+    def pin(self, request, pk=None):
+        """Pin or unpin a discussion thread."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response({'detail': 'Only instructors and admins can pin discussions.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        discussion = self.get_object()
+        discussion.is_pinned = not discussion.is_pinned
+        discussion.save()
+        return Response({'is_pinned': discussion.is_pinned})
+
+    @extend_schema(
+        summary='Lock/unlock discussion',
+        description='Toggle lock status (Instructor/Manager only). When locked, no new replies are allowed.',
+        responses={200: OpenApiResponse(response={'type': 'object', 'properties': {'is_locked': {'type': 'boolean'}}})},
+    )
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        """Lock or unlock a discussion thread."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if getattr(request.user, 'role', None) not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Response({'detail': 'Only instructors and admins can lock discussions.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        discussion = self.get_object()
+        discussion.is_locked = not discussion.is_locked
+        discussion.save()
+        return Response({'is_locked': discussion.is_locked})
 
 
 @extend_schema(
@@ -564,6 +725,38 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         })
 
     @extend_schema(
+        summary='Assessment statistics (superadmin)',
+        description='Returns aggregate assessment stats: quizzes, assignments, grading status',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level assessment statistics."""
+        from django.db.models import Avg
+        total_assignments = Submission.objects.count()
+        graded = Submission.objects.filter(status=Submission.Status.GRADED).count()
+        pending = Submission.objects.filter(status=Submission.Status.SUBMITTED).count()
+        avg_grade = Submission.objects.filter(
+            status=Submission.Status.GRADED, grade__isnull=False
+        ).aggregate(avg=Avg('grade'))['avg'] or 0
+
+        total_quizzes = QuizSubmission.objects.count()
+        avg_quiz_score = QuizSubmission.objects.aggregate(avg=Avg('score'))['avg'] or 0
+        quiz_pass_rate = 0
+        if total_quizzes > 0:
+            passed = QuizSubmission.objects.filter(passed=True).count()
+            quiz_pass_rate = round((passed / total_quizzes) * 100, 1)
+
+        return Response({
+            'total_assignments': total_assignments,
+            'graded': graded,
+            'pending': pending,
+            'average_grade': round(avg_grade, 1),
+            'total_quizzes': total_quizzes,
+            'average_quiz_score': round(avg_quiz_score, 1),
+            'quiz_pass_rate': quiz_pass_rate,
+        })
+
+    @extend_schema(
         summary='Bulk grade submissions',
         description='Grade multiple submissions at once',
         request=serializers.Serializer,
@@ -684,3 +877,243 @@ class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixi
             QuizSubmissionSerializer(submission).data,
             status=status.HTTP_201_CREATED
         )
+
+from django.db.models import Count, Avg
+from django.db.models.functions import TruncMonth
+from datetime import timedelta
+
+@extend_schema(tags=['Learning - Analytics'])
+class LearningAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding enrollments and completion."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='enrollment-trends')
+    def enrollment_trends(self, request):
+        months = int(request.query_params.get('months', 6))
+        start_date = timezone.now() - timedelta(days=months * 30)
+
+        user = request.user
+        base_qs = Enrollment.objects.filter(created_at__gte=start_date)
+
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(user__organization=user.organization)
+        elif user.role == 'instructor':
+            base_qs = base_qs.filter(course__instructor=user)
+
+        # Enrolls by month
+        enrolls = base_qs.annotate(
+            month=TruncMonth('created_at')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+
+        # Completions by month
+        comps = base_qs.filter(status='completed').annotate(
+            month=TruncMonth('completed_at')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+
+        # Build consistent month list
+        labels_map = {}
+        for i in range(months-1, -1, -1):
+            d = timezone.now() - timedelta(days=i*30)
+            label = d.strftime('%b %Y')
+            labels_map[label] = {'enrollments': 0, 'completions': 0}
+
+        for e in enrolls:
+            if e['month']:
+                labels_map[e['month'].strftime('%b %Y')]['enrollments'] = e['count']
+        for c in comps:
+            if c['month']:
+                labels_map[c['month'].strftime('%b %Y')]['completions'] = c['count']
+
+        labels = list(labels_map.keys())
+        enrollments = [labels_map[l]['enrollments'] for l in labels]
+        completions = [labels_map[l]['completions'] for l in labels]
+
+        return Response({
+            "labels": labels,
+            "enrollments": enrollments,
+            "completions": completions
+        })
+
+    @action(detail=False, methods=['get'], url_path='learning-stats')
+    def learning_stats(self, request):
+        user = request.user
+        base_qs = Enrollment.objects.all()
+
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            base_qs = base_qs.filter(user__organization=user.organization)
+        elif user.role == 'instructor':
+            base_qs = base_qs.filter(course__instructor=user)
+
+        total_learners = base_qs.values('user').distinct().count()
+        
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        active_learners = base_qs.filter(updated_at__gte=thirty_days_ago).values('user').distinct().count()
+        
+        avg_completion = base_qs.aggregate(avg=Avg('progress_percentage'))['avg'] or 0.0
+
+        in_progress = base_qs.filter(status='in_progress').count()
+        completed = base_qs.filter(status='completed').count()
+
+        quiz_qs = QuizSubmission.objects.all()
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            quiz_qs = quiz_qs.filter(enrollment__user__organization=user.organization)
+        elif user.role == 'instructor':
+            quiz_qs = quiz_qs.filter(enrollment__course__instructor=user)
+            
+        avg_quiz = quiz_qs.aggregate(avg=Avg('score'))['avg'] or 0.0
+
+        return Response({
+            "total_learners": total_learners,
+            "active_learners": active_learners,
+            "avg_completion_rate": round(avg_completion, 1),
+            "total_courses_in_progress": in_progress,
+            "total_completed_courses": completed,
+            "avg_quiz_score": round(avg_quiz, 1)
+        })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BADGES
+# ═══════════════════════════════════════════════════════════════════════════
+
+@extend_schema(
+    tags=['Learning - Badges'],
+    description='Badge definitions and user badge tracking',
+)
+class BadgeViewSet(viewsets.GenericViewSet, mixins.ListModelMixin):
+    """
+    ViewSet for badges.
+    - GET  /badges/         → list all badge definitions
+    - GET  /badges/my-badges/ → current user's earned badges
+    - POST /badges/check/   → trigger badge evaluation, return newly earned
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        from apps.learning.badge_serializers import UserBadgeSerializer, BadgeSerializer
+        if self.action == 'my_badges':
+            return UserBadgeSerializer
+        return BadgeSerializer
+
+    def get_queryset(self):
+        from apps.learning.models import Badge
+        return Badge.objects.all()
+
+    @extend_schema(
+        summary='List all badge definitions',
+        description='Returns all available badges with their criteria.',
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Get current user earned badges',
+        description='Returns badges earned by the currently authenticated user.',
+    )
+    @action(detail=False, methods=['get'], url_path='my-badges')
+    def my_badges(self, request):
+        from apps.learning.models import UserBadge
+        from apps.learning.badge_serializers import UserBadgeSerializer
+        qs = UserBadge.objects.filter(user=request.user).select_related('badge')
+        serializer = UserBadgeSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(
+        summary='Check and award badges',
+        description='Triggers badge evaluation for the current user. Returns any newly earned badges.',
+    )
+    @action(detail=False, methods=['post'], url_path='check')
+    def check_badges(self, request):
+        from apps.learning.badge_engine import check_and_award_badges
+        from apps.learning.badge_serializers import UserBadgeSerializer
+        newly_earned = check_and_award_badges(request.user)
+        serializer = UserBadgeSerializer(newly_earned, many=True)
+        return Response({'newly_earned': serializer.data})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SAVED COURSES
+# ═══════════════════════════════════════════════════════════════════════════
+
+@extend_schema(
+    tags=['Learning - Saved Courses'],
+    description='Manage user\'s bookmarked/saved courses',
+)
+class SavedCourseViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """ViewSet for managing saved/bookmarked courses."""
+    serializer_class = SavedCourseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedCourse.objects.filter(
+            user=self.request.user
+        ).select_related('course', 'course__instructor', 'course__category')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @extend_schema(
+        summary='List saved courses',
+        description='Returns all courses saved/bookmarked by the authenticated user',
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Save a course',
+        description='Bookmark a course. Send { "course": <id> }.',
+        responses={201: SavedCourseSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Unsave a course',
+        description='Remove a course from bookmarks by saved-course ID',
+    )
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Toggle save/unsave a course',
+        description='If the course is saved, unsave it. If not saved, save it. Returns { "saved": bool }.',
+        request={'application/json': {'type': 'object', 'properties': {'course': {'type': 'integer'}}}},
+        responses={200: {'type': 'object', 'properties': {'saved': {'type': 'boolean'}, 'id': {'type': 'integer', 'nullable': True}}}},
+    )
+    @action(detail=False, methods=['post'])
+    def toggle(self, request):
+        course_id = request.data.get('course')
+        if not course_id:
+            return Response(
+                {'error': 'course field is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            saved = SavedCourse.objects.get(user=request.user, course_id=course_id)
+            saved.delete()
+            return Response({'saved': False, 'id': None})
+        except SavedCourse.DoesNotExist:
+            from apps.catalogue.models import Course as CatCourse
+            try:
+                course = CatCourse.objects.get(id=course_id)
+            except CatCourse.DoesNotExist:
+                return Response(
+                    {'error': 'Course not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            saved = SavedCourse.objects.create(user=request.user, course=course)
+            return Response(
+                {'saved': True, 'id': saved.id},
+                status=status.HTTP_201_CREATED
+            )

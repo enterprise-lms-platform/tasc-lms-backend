@@ -35,6 +35,8 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "billing_email",
             "billing_address",
             "tax_id",
+            "user_count",
+            "courses_count",
             "created_at",
             "updated_at",
             "user_count",

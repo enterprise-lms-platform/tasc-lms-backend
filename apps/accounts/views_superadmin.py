@@ -1,3 +1,4 @@
+from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -15,7 +16,10 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
     CRUD API for Organizations intended for Superadmins (TASC_ADMIN).
     """
 
-    queryset = Organization.objects.all().order_by("-created_at")
+    queryset = Organization.objects.annotate(
+        user_count=models.Count("memberships", distinct=True),
+        courses_count=models.Count("enrollments__course", distinct=True),
+    ).order_by("-created_at")
     serializer_class = OrganizationSuperadminSerializer
     permission_classes = [IsTascAdminUser]
 
@@ -74,6 +78,32 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
             }
         )
 
+    @action(detail=False, methods=["get"], url_path="instructor-stats")
+    def instructor_stats(self, request):
+        """
+        Returns instructor-specific KPI counts for the superadmin Instructors page.
+        """
+        from django.db.models import Count, Avg
+        instructors = User.objects.filter(role=User.Role.INSTRUCTOR)
+        total = instructors.count()
+        active = instructors.filter(is_active=True).count()
+
+        instructor_course_stats = instructors.annotate(
+            course_count=Count('instructed_courses')
+        )
+        avg_courses = instructor_course_stats.aggregate(
+            avg=Avg('course_count')
+        )['avg'] or 0
+
+        with_courses = instructor_course_stats.filter(course_count__gt=0).count()
+
+        return Response({
+            "total": total,
+            "active": active,
+            "avg_courses_per_instructor": round(avg_courses, 1),
+            "with_courses": with_courses,
+        })
+
     @action(detail=False, methods=["post"])
     def bulk_import(self, request):
         """
@@ -126,12 +156,22 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
         for row_num, row in enumerate(reader, start=2):
             total_rows += 1
             
-            email = row.get('email', '').strip()
-            first_name = row.get('first_name', '').strip()
-            last_name = row.get('last_name', '').strip()
-            role = row.get('role', 'learner').strip().lower()
+            # Map frontend export columns to backend expected columns
+            email = (row.get('email') or row.get('email_address') or '').strip()
+            role = (row.get('role') or row.get('user_role') or 'learner').strip().lower()
             department = row.get('department', '').strip()
             phone_number = row.get('phone_number', '').strip()
+            
+            # Handle full_name splitting if first_name/last_name are missing
+            first_name = row.get('first_name', '').strip()
+            last_name = row.get('last_name', '').strip()
+            full_name = row.get('full_name', '').strip()
+            
+            if not first_name and not last_name and full_name:
+                parts = full_name.split(' ', 1)
+                first_name = parts[0]
+                if len(parts) > 1:
+                    last_name = parts[1]
             
             if not email:
                 errors.append({
@@ -221,7 +261,7 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = 'attachment; filename="users_import_template.csv"'
 
         writer = csv.writer(response)
-        writer.writerow(['email', 'first_name', 'last_name', 'role', 'phone_number'])
-        writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', '+1234567890'])
+        writer.writerow(['email', 'first_name', 'last_name', 'role', 'department', 'phone_number'])
+        writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', 'Engineering', '+1234567890'])
 
         return response

@@ -520,6 +520,7 @@ class QuizQuestion(models.Model):
     question_text = models.TextField()
     points = models.PositiveIntegerField(default=10)
     answer_payload = models.JSONField(default=dict, blank=True)
+    explanation = models.TextField(blank=True, default='')
     source_bank_question = models.ForeignKey(
         BankQuestion,
         null=True,
@@ -562,6 +563,8 @@ class CourseReview(models.Model):
     )
     content = models.TextField(blank=True, default='')
     is_approved = models.BooleanField(default=True)
+    helpful_count = models.PositiveIntegerField(default=0)
+    report_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -592,3 +595,26 @@ class Tag(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class SessionAttachment(models.Model):
+    """
+    Session attachment (Resource) for downloading course materials.
+    """
+    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='attachments')
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to='session_attachments/')
+    file_type = models.CharField(max_length=50)  # pdf, zip, code, etc.
+    file_size = models.PositiveIntegerField()  # bytes
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} ({self.file_type})"

@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -15,11 +15,11 @@ from django.contrib.auth import get_user_model
 from apps.accounts.rbac import is_admin_like
 from apps.common.spaces import create_boto3_client, delete_spaces_object
 from apps.payments.permissions import HasActiveSubscription
-from apps.learning.models import Enrollment
+from apps.learning.models import Enrollment, QuizSubmission, Submission
 
 from .models import (
     Assignment, BankQuestion, Category, Course, CourseApprovalRequest, Module,
-    Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview
+    Quiz, QuizQuestion, QuestionCategory, Session, Tag, CourseReview, SessionAttachment
 )
 from .permissions import (
     CanEditBankQuestion, CanEditQuestionCategory, CanEditCourse,
@@ -31,13 +31,17 @@ from .serializers import (
     BankQuestionListSerializer, BankQuestionSerializer,
     CategoryDetailSerializer, CategorySerializer,
     CourseCreateSerializer, CourseDetailSerializer, CourseListSerializer,
-    ModuleSerializer,
+    ModuleSerializer, ModuleBulkReorderSerializer,
     QuestionCategorySerializer,
     QuizDetailSerializer, QuizQuestionListWriteSerializer, QuizQuestionSerializer,
-    QuizSettingsUpdateSerializer,
+    QuizSettingsUpdateSerializer, QuizSessionSummarySerializer,
     SessionCreateSerializer, SessionSerializer,
     TagSerializer, CourseReviewSerializer, CourseReviewCreateSerializer,
-    CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer,
+    CourseReviewSummarySerializer,     CourseApprovalRequestSerializer, ApproveActionSerializer, RejectActionSerializer, SessionAttachmentSerializer,
+)
+from apps.learning.serializers import (
+    QuizSubmissionCreateSerializer, QuizSubmissionSerializer,
+    SubmissionCreateSerializer, SubmissionSerializer
 )
 
 User = get_user_model()
@@ -237,6 +241,11 @@ class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all()
     permission_classes = [IsAuthenticated, IsCourseWriter, CanEditCourse, CanDeleteCourse]
 
+    from rest_framework.filters import OrderingFilter, SearchFilter
+    filter_backends = [OrderingFilter, SearchFilter]
+    ordering_fields = ['title', 'price', 'published_at', 'created_at', 'enrollment_count']
+    search_fields = ['title', 'short_description']
+
     def get_serializer_class(self):
         if self.action == 'list':
             return CourseListSerializer
@@ -271,7 +280,25 @@ class CourseViewSet(viewsets.ModelViewSet):
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(instructor_id=self.request.user.id)
 
-        return queryset.distinct()
+        return queryset.annotate(
+            enrollment_count=Count('enrollments')
+        ).distinct()
+
+    @extend_schema(
+        summary='Course statistics (superadmin)',
+        description='Returns aggregate course counts for admin dashboards',
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Admin-level course statistics."""
+        qs = Course.objects.all()
+        return Response({
+            'total': qs.count(),
+            'published': qs.filter(status=Course.Status.PUBLISHED).count(),
+            'draft': qs.filter(status=Course.Status.DRAFT).count(),
+            'archived': qs.filter(status=Course.Status.ARCHIVED).count(),
+            'pending_approval': qs.filter(status=Course.Status.PENDING_APPROVAL).count(),
+        })
 
     @extend_schema(
         summary='List courses',
@@ -812,6 +839,40 @@ class ModuleViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
+    @extend_schema(
+        summary='Bulk reorder modules',
+        description='Update the order of multiple modules for a specific course in a single request.',
+        request=ModuleBulkReorderSerializer,
+        responses={200: dict},
+        examples=[
+            OpenApiExample(
+                'Reorder example',
+                value={'course': 5, 'order': [{'id': 10, 'order': 0}, {'id': 11, 'order': 1}]},
+                request_only=True,
+            ),
+        ]
+    )
+    @action(detail=False, methods=['post'])
+    def reorder(self, request):
+        serializer = ModuleBulkReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        course_id = serializer.validated_data['course']
+        order_data = serializer.validated_data['order']
+        course = get_object_or_404(Course, id=course_id)
+        role = getattr(request.user, 'role', None)
+        if role == User.Role.INSTRUCTOR and course.instructor_id != request.user.id:
+            raise PermissionDenied('You can only reorder modules in your own courses.')
+        module_ids = [item['id'] for item in order_data]
+        modules = list(Module.objects.filter(id__in=module_ids, course_id=course_id))
+        if len(modules) != len(module_ids):
+            raise ValidationError('One or more modules do not belong to the specified course or do not exist.')
+        order_map = {item['id']: item['order'] for item in order_data}
+        for module in modules:
+            module.order = order_map[module.id]
+        with transaction.atomic():
+            Module.objects.bulk_update(modules, ['order'])
+        return Response({'updated': len(modules)}, status=status.HTTP_200_OK)
+
 
 @extend_schema(
     tags=['Catalogue - Sessions'],
@@ -824,6 +885,8 @@ class SessionViewSet(viewsets.ModelViewSet):
     pagination_class = CataloguePageNumberPagination
 
     def get_permissions(self):
+        if self.action == 'submit':
+            return [IsAuthenticated()]
         perms = list(super().get_permissions())
         if self.action == 'asset_url':
             perms.append(HasActiveSubscription())
@@ -1032,6 +1095,61 @@ class SessionViewSet(viewsets.ModelViewSet):
             'method': 'GET',
         })
 
+    @extend_schema(
+        summary='Submit quiz or assignment (Learner)',
+        description='Learner-facing endpoint to submit work for this session. '
+                    'Infers Enrollment and Quiz/Assignment from session context.',
+        request=None,
+        responses={201: dict, 403: dict, 404: dict},
+    )
+    @action(detail=True, methods=['post'], url_path='submit')
+    def submit(self, request, pk=None):
+        session = self.get_object()
+        user = request.user
+
+        # 1. Find Enrollment
+        enrollment = Enrollment.objects.filter(user=user, course=session.course).first()
+        if not enrollment:
+            return Response(
+                {'detail': 'You must be enrolled in this course to submit work.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 2. Identify Work Type and Submit
+        if session.session_type == Session.SessionType.QUIZ:
+            quiz = self._get_or_create_quiz(session)
+            if not quiz:
+                return Response({'detail': 'Quiz not found for this session.'}, status=status.HTTP_404_NOT_FOUND)
+
+            data = request.data.copy()
+            data['quiz'] = quiz.id
+            data['enrollment'] = enrollment.id
+
+            serializer = QuizSubmissionCreateSerializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            submission = serializer.save()
+            return Response(QuizSubmissionSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+        elif session.session_type == Session.SessionType.ASSIGNMENT:
+            assignment = self._get_assignment(session)
+            if not assignment:
+                return Response({'detail': 'Assignment not found for this session.'}, status=status.HTTP_404_NOT_FOUND)
+
+            data = request.data.copy()
+            data['assignment'] = assignment.id
+            data['enrollment'] = enrollment.id
+
+            serializer = SubmissionCreateSerializer(data=data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            submission = serializer.save()
+            return Response(SubmissionSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+        else:
+            return Response(
+                {'detail': 'This session type does not support submissions.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
     def _build_quiz_detail_response(self, session, quiz):
         """Build QuizDetailSerializer payload for GET/PATCH responses."""
         session_data = {
@@ -1050,25 +1168,39 @@ class SessionViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Get or update quiz for a session',
-        description='GET: Returns quiz detail. PATCH: Merges settings. Only for session_type=quiz.',
+        description='GET: Returns quiz detail. POST: Create quiz. PATCH: Merges settings. Only for session_type=quiz.',
         request=QuizSettingsUpdateSerializer,
         responses={
             200: OpenApiResponse(description='Quiz detail'),
+            201: OpenApiResponse(description='Quiz created'),
+            400: OpenApiResponse(description='Quiz already exists'),
             404: OpenApiResponse(description='Session not found or not a quiz session'),
         },
     )
-    @action(detail=True, methods=['get', 'patch'], url_path='quiz')
+    @action(detail=True, methods=['get', 'post', 'patch'], url_path='quiz')
     def quiz(self, request, pk=None):
         session = self.get_object()
-        quiz = self._get_or_create_quiz(session)
-        if quiz is None:
+        if session.session_type != Session.SessionType.QUIZ:
             return Response(
                 {'detail': 'Session is not a quiz session.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
         if request.method == 'GET':
+            quiz = self._get_or_create_quiz(session)
             return Response(self._build_quiz_detail_response(session, quiz))
+
+        if request.method == 'POST':
+            if Quiz.objects.filter(session=session).exists():
+                return Response(
+                    {'detail': 'Quiz already exists for this session.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            quiz = Quiz.objects.create(session=session, settings=request.data.get('settings', {}))
+            return Response(self._build_quiz_detail_response(session, quiz), status=status.HTTP_201_CREATED)
+
         # PATCH
+        quiz = self._get_or_create_quiz(session)
         serializer = QuizSettingsUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         incoming = serializer.validated_data.get('settings', {})
@@ -1115,6 +1247,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                 ap = item.get('answer_payload')
                 if ap is None:
                     ap = {}
+                expl = (item.get('explanation') or '').strip()
 
                 if qid is not None:
                     try:
@@ -1138,6 +1271,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                     qobj.question_text = qtext
                     qobj.points = _coerce_quiz_question_points(pts, existing_points=qobj.points)
                     qobj.answer_payload = ap if isinstance(ap, dict) else {}
+                    qobj.explanation = expl
                     qobj.save()
                 else:
                     QuizQuestion.objects.create(
@@ -1147,6 +1281,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                         question_text=qtext,
                         points=_coerce_quiz_question_points(pts, existing_points=None),
                         answer_payload=ap if isinstance(ap, dict) else {},
+                        explanation=expl,
                     )
             to_delete = existing_ids - seen_ids
             if to_delete:
@@ -1204,6 +1339,7 @@ class SessionViewSet(viewsets.ModelViewSet):
                     question_text=bq.question_text,
                     points=bq.points,
                     answer_payload=dict(bq.answer_payload or {}),
+                    explanation=bq.explanation or '',
                     source_bank_question=bq,
                 )
                 created.append(qq)
@@ -1215,39 +1351,51 @@ class SessionViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Assignment config',
-        description='GET: Return assignment config. 404 if not assignment session or no config. '
-                    'PUT: Create/replace config. PATCH: Partial update.',
+        description='GET: Return assignment config. 404 if not assignment session. '
+                    'POST: Create config. PUT: Replace config. PATCH: Partial update.',
         request=AssignmentCreateUpdateSerializer,
         responses={
             200: AssignmentSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            404: OpenApiResponse(description='Session not assignment type or no config'),
+            201: AssignmentSerializer,
+            400: OpenApiResponse(description='Validation error or Assignment already exists'),
+            404: OpenApiResponse(description='Session not assignment type'),
         },
     )
-    @action(detail=True, methods=['get', 'put', 'patch'], url_path='assignment')
+    @action(detail=True, methods=['get', 'post', 'put', 'patch'], url_path='assignment')
     def assignment(self, request, pk=None):
         session = self.get_object()
-        if request.method == 'GET':
-            assignment = self._get_assignment(session)
-            if assignment is None:
-                return Response(
-                    {'detail': 'Assignment config not found or session is not an assignment session.'},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-            return Response(AssignmentSerializer(assignment).data)
-        # PUT / PATCH: create if missing, then update
-        assignment = self._get_or_create_assignment(session)
-        if assignment is None:
+        if session.session_type != Session.SessionType.ASSIGNMENT:
             return Response(
                 {'detail': 'Session is not an assignment session.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if request.method == 'GET':
+            assignment = self._get_assignment(session)
+            if assignment is None:
+                return Response(
+                    {'detail': 'Assignment config not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            return Response(AssignmentSerializer(assignment).data)
+
+        if request.method == 'POST':
+            if hasattr(session, 'assignment'):
+                return Response(
+                    {'detail': 'Assignment already exists for this session.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            serializer = AssignmentCreateUpdateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            assignment = Assignment.objects.create(session=session, **serializer.validated_data)
+            return Response(AssignmentSerializer(assignment).data, status=status.HTTP_201_CREATED)
+
+        # PUT / PATCH: create if missing, then update
+        assignment = self._get_or_create_assignment(session)
         partial = request.method == 'PATCH'
-        serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=partial)
+        serializer = AssignmentCreateUpdateSerializer(assignment, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        for key, value in serializer.validated_data.items():
-            setattr(assignment, key, value)
-        assignment.save()
+        assignment = serializer.save()
         return Response(AssignmentSerializer(assignment).data)
 
 
@@ -1276,8 +1424,39 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
         course_id = self.request.query_params.get('course')
         if course_id:
             queryset = queryset.filter(course_id=course_id)
-        
+            
+        rating = self.request.query_params.get('rating')
+        if rating:
+            queryset = queryset.filter(rating=rating)
+            
         return queryset
+
+    @extend_schema(
+        summary="Mark review as helpful",
+        description="Increments the helpful count for a review.",
+        responses={200: CourseReviewSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def helpful(self, request, pk=None):
+        review = self.get_object()
+        from django.db.models import F
+        CourseReview.objects.filter(pk=review.pk).update(helpful_count=F('helpful_count') + 1)
+        review.refresh_from_db()
+        return Response(CourseReviewSerializer(review).data)
+
+    @extend_schema(
+        summary="Report a review",
+        description="Increments the report count for a review.",
+        responses={200: CourseReviewSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def report(self, request, pk=None):
+        review = self.get_object()
+        from django.db.models import F
+        CourseReview.objects.filter(pk=review.pk).update(report_count=F('report_count') + 1)
+        review.refresh_from_db()
+        return Response(CourseReviewSerializer(review).data)
+
 
     def create(self, request, *args, **kwargs):
         course_id = request.data.get('course')
@@ -1373,4 +1552,79 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
         })
 
 
-from django.db.models import Avg
+from django.db.models import Avg, Count, Q
+
+@extend_schema(tags=['Catalogue - Analytics'])
+class CatalogueAnalyticsViewSet(viewsets.ViewSet):
+    """ViewSet for dashboard analytics regarding catalogue."""
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='courses-by-category')
+    def courses_by_category(self, request):
+        user = request.user
+        
+        course_filter = Q(courses__status='published')
+        
+        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
+            course_filter &= Q(courses__organization=user.organization)
+        elif user.role == 'instructor':
+            course_filter &= Q(courses__instructor=user)
+            # Instructors might want to see drafts too in their analytics
+            course_filter = Q(courses__instructor=user) & ~Q(courses__status='archived')
+
+        categories = Category.objects.annotate(
+            course_count=Count('courses', filter=course_filter)
+        ).filter(course_count__gt=0).order_by('-course_count')[:10]
+
+        data = [
+            {"name": c.name, "count": c.course_count}
+            for c in categories
+        ]
+
+        return Response(data)
+
+
+@extend_schema(tags=['Catalogue - Attachments'])
+class SessionAttachmentViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing session attachments (resources)."""
+    serializer_class = SessionAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = SessionAttachment.objects.all().select_related('uploaded_by')
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            qs = qs.filter(session_id=session_id)
+        return qs
+
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+        session = serializer.validated_data['session']
+        course = session.module.course
+        user = self.request.user
+        
+        is_owner = course.instructor == user
+        from apps.accounts.rbac import is_admin_like, is_lms_manager
+        if not (is_owner or is_admin_like(user) or is_lms_manager(user)):
+             raise PermissionDenied("You do not have permission to add attachments to this course.")
+
+        file_obj = self.request.FILES.get('file')
+        file_size = file_obj.size if file_obj else 0
+        file_name = file_obj.name.lower() if file_obj else ''
+        file_type = file_name.split('.')[-1] if '.' in file_name else 'unknown'
+
+        serializer.save(
+            uploaded_by=user,
+            file_size=file_size,
+            file_type=file_type
+        )
+
+    def perform_destroy(self, instance):
+        from rest_framework.exceptions import PermissionDenied
+        course = instance.session.module.course
+        user = self.request.user
+        is_owner = course.instructor == user
+        from apps.accounts.rbac import is_admin_like, is_lms_manager
+        if not (is_owner or is_admin_like(user) or is_lms_manager(user)):
+             raise PermissionDenied("You do not have permission to delete this attachment.")
+        instance.delete()
