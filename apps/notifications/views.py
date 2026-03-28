@@ -58,6 +58,14 @@ class NotificationViewSet(viewsets.ModelViewSet):
         if notification_type:
             queryset = queryset.filter(type=notification_type)
         
+        # Filter by date range
+        created_after = self.request.query_params.get('created_after')
+        created_before = self.request.query_params.get('created_before')
+        if created_after:
+            queryset = queryset.filter(created_at__gte=created_after)
+        if created_before:
+            queryset = queryset.filter(created_at__lte=created_before)
+        
         return queryset
     
     @extend_schema(
@@ -106,3 +114,17 @@ class NotificationViewSet(viewsets.ModelViewSet):
             is_read=False
         ).count()
         return Response({'unread_count': count})
+    
+    @extend_schema(
+        summary='Bulk delete notifications',
+        description='Delete multiple notifications by their IDs',
+        responses={200: {'description': 'Number of notifications deleted'}},
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """POST /api/v1/notifications/bulk-delete/  body: { "ids": [1,2,3] }"""
+        ids = request.data.get('ids', [])
+        deleted = Notification.objects.filter(
+            id__in=ids, user=request.user
+        ).delete()[0]
+        return Response({'deleted': deleted})

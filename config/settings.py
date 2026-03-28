@@ -382,3 +382,12 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# PESA PAL SETTINGS
+PESAPAL_CONSUMER_KEY    = os.environ.get("PESAPAL_CONSUMER_KEY", "")
+PESAPAL_CONSUMER_SECRET = os.environ.get("PESAPAL_CONSUMER_SECRET", "")
+PESAPAL_ENV             = os.environ.get("PESAPAL_ENV", "demo")
+PESAPAL_IPN_URL         = os.environ.get("PESAPAL_IPN_URL", "")
+PESAPAL_CALLBACK_URL    = os.environ.get("PESAPAL_CALLBACK_URL", "")
+PESAPAL_IPN_ID          = os.environ.get("PESAPAL_IPN_ID", "")

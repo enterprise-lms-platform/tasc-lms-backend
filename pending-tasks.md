@@ -95,13 +95,13 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | MED | 44 | Manager billing/plan | new endpoint | `ManagerBillingPage` |
 | MED | 61 | Promo codes | `apps/payments/` (new model) | `CheckoutPaymentPage` |
 | ✅ | 62 | ~~Review helpful/report~~ | `apps/catalogue/views.py:1268` | `CourseReviews` |
-| MED | 63 | Transaction/invoice exports | `apps/payments/views.py` | Download buttons |
+| ✅ | 63 | ~~Transaction/invoice exports~~ | `apps/payments/views.py` | Download buttons |
 | MED | 22 | Security metrics | new superadmin view | `SecurityPage` |
 | MED | 25 | Redis integration | `config/settings.py` | Infrastructure |
 | MED | 26 | DB connection pooling | `config/settings.py` | Infrastructure |
 | MED | 27 | Gunicorn scaling | `Dockerfile` | Infrastructure |
 | LOW | 8 | Email templates | `templates/emails/` (new) | — |
-| LOW | 9 | Notification extras | `apps/notifications/views.py:33` | — |
+| ✅ | 9 | ~~Notification extras~~ | `apps/notifications/views.py:33` | — |
 | LOW | 17 | N+1 query fixes | various views.py | Performance |
 | LOW | 10-16 | Silent exception fixes | various | Code quality |
 | LOW | 16b | Django admin registrations | `apps/catalogue/admin.py` | — |
@@ -1180,7 +1180,7 @@ class CourseReviewViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 63: Transaction & Invoice Exports
+### Task 63: Transaction & Invoice Exports ✅ DONE
 
 **File:** `apps/payments/views.py`
 
@@ -1402,7 +1402,7 @@ gunicorn config.wsgi:application \
 
 ---
 
-### Task 9: Notification ViewSet Extras
+### Task 9: Notification ViewSet Extras ✅ DONE
 
 **File:** `apps/notifications/views.py` line 33 — `NotificationViewSet(viewsets.ModelViewSet)`
 

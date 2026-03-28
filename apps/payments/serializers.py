@@ -2,10 +2,12 @@ from decimal import Decimal
 
 from rest_framework import serializers
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from .models import (
     Payment, Invoice, InvoiceItem, Transaction, 
     PaymentMethod, Subscription, UserSubscription, PaymentWebhook
 )
+from .models import Payment, PesapalIPN  # Import PesapalIPN model for IPN serializer
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -27,6 +29,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             'metadata', 'user', 'course_title'
         ]
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
 
@@ -117,8 +120,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
-    remaining_amount = serializers.ReadOnlyField()
-    is_paid = serializers.ReadOnlyField()
+    remaining_amount = serializers.SerializerMethodField()
+    is_paid = serializers.SerializerMethodField()
     
     class Meta:
         model = Invoice
@@ -136,14 +139,25 @@ class InvoiceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'invoice_number', 'created_at', 'updated_at', 'paid_at']
     
+    @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() if obj.user else obj.customer_name
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
+    
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_remaining_amount(self, obj):
+        return obj.remaining_amount
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_paid(self, obj):
+        return obj.is_paid
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
@@ -185,15 +199,19 @@ class TransactionSerializer(serializers.ModelSerializer):
             'updated_at', 'completed_at'
         ]
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_user_name(self, obj):
         return obj.user.email if obj.user else obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_invoice_number(self, obj):
         return obj.invoice.invoice_number if obj.invoice else None
 
@@ -215,7 +233,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     display_name = serializers.SerializerMethodField()
-    is_expired = serializers.ReadOnlyField()
+    is_expired = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentMethod
@@ -230,14 +248,21 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.EmailField(allow_null=True))
     def get_user_email(self, obj):
         return obj.user.email if obj.user else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField)
     def get_display_name(self, obj):
         return str(obj)
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_expired(self, obj):
+        return obj.is_expired
 
 
 class PaymentMethodCreateSerializer(serializers.ModelSerializer):
@@ -293,8 +318,8 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     subscription_name = serializers.SerializerMethodField()
-    is_trial = serializers.ReadOnlyField()
-    is_active = serializers.ReadOnlyField()
+    is_trial = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
     
     class Meta:
         model = UserSubscription
@@ -307,14 +332,25 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
+    @extend_schema_field(serializers.EmailField(allow_null=True))
     def get_user_email(self, obj):
         return obj.user.email if obj.user else None
     
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
     
+    @extend_schema_field(serializers.CharField)
     def get_subscription_name(self, obj):
         return obj.subscription.name
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_trial(self, obj):
+        return obj.is_trial
+    
+    @extend_schema_field(serializers.BooleanField)
+    def get_is_active(self, obj):
+        return obj.is_active
 
 
 class SubscriptionStatusSerializer(serializers.Serializer):
@@ -359,3 +395,99 @@ class UserSubscriptionCreateSerializer(serializers.ModelSerializer):
         validated_data.setdefault('currency', subscription_plan.currency or 'UGX')
         validated_data.setdefault('status', UserSubscription.Status.ACTIVE)
         return super().create(validated_data)
+    
+
+class PesapalInitiateSerializer(serializers.Serializer):
+    """
+    Request body for POST /api/v1/payments/pesapal/initiate/
+    Validates and resolves the course + amount before hitting Pesapal.
+    """
+ 
+    course_id = serializers.UUIDField(required=False)
+    currency = serializers.ChoiceField(
+        choices=Payment.CURRENCIES, default="UGX", required=False
+    )
+    amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal("0.01"), required=False
+    )
+    description = serializers.CharField(required=False, allow_blank=True)
+ 
+    def validate(self, data):
+        from catalogue.models import Course  # adjust import path to your project
+ 
+        course_id = data.get("course_id")
+        if course_id:
+            try:
+                course = Course.objects.get(id=course_id)
+                data["course"] = course
+                if not data.get("amount"):
+                    data["amount"] = course.price
+            except Course.DoesNotExist:
+                raise serializers.ValidationError({"course_id": "Course not found."})
+ 
+        if not data.get("amount"):
+            raise serializers.ValidationError({"amount": "Amount is required."})
+ 
+        return data
+ 
+ 
+class PesapalRecurringInitiateSerializer(serializers.Serializer):
+    """
+    Request body for POST /api/v1/payments/pesapal/recurring/initiate/
+    Links a Payment to a UserSubscription and submits a recurring order.
+    """
+ 
+    subscription_id = serializers.IntegerField()
+    currency = serializers.ChoiceField(
+        choices=Payment.CURRENCIES, default="UGX", required=False
+    )
+ 
+    def validate_subscription_id(self, value):
+        from .models import Subscription
+ 
+        try:
+            return Subscription.objects.get(id=value, status="active")
+        except Subscription.DoesNotExist:
+            raise serializers.ValidationError("Subscription plan not found or inactive.")
+ 
+ 
+class PesapalWebhookQuerySerializer(serializers.Serializer):
+    """
+    Validates the GET query params Pesapal sends to the IPN endpoint.
+    Pesapal IPN is a GET request — params are in the query string.
+    """
+ 
+    orderTrackingId = serializers.CharField()
+    orderMerchantReference = serializers.CharField(required=False, allow_blank=True)
+    orderNotificationType = serializers.CharField(required=False, allow_blank=True)
+ 
+
+# PESAPAL IPN 
+class PesapalIPNSerializer(serializers.ModelSerializer):
+    """Read-only serializer for listing registered IPN URLs."""
+ 
+    class Meta:
+        model = PesapalIPN
+        fields = [
+            "id",
+            "ipn_id",
+            "url",
+            "notification_type",
+            "is_active",
+            "environment",
+            "registered_at",
+            "notes",
+        ]
+        read_only_fields = fields
+ 
+ 
+class PesapalOrderStatusSerializer(serializers.Serializer):
+    """Response shape for transaction status checks."""
+ 
+    order_tracking_id = serializers.CharField()
+    status = serializers.CharField()
+    payment_method = serializers.CharField(allow_blank=True)
+    amount = serializers.FloatField(allow_null=True)
+    currency = serializers.CharField(allow_blank=True)
+    confirmation_code = serializers.CharField(allow_blank=True)
+    message = serializers.CharField(allow_blank=True)

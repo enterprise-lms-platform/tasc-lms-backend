@@ -786,6 +786,7 @@ class LivestreamWebhookView(viewsets.GenericViewSet):
     """
     
     permission_classes = [AllowAny]
+    serializer_class = None  # Webhooks don't use traditional serializers; see action decorators
     
     @extend_schema(
         summary='Zoom webhook',
@@ -890,6 +891,7 @@ class TimezoneViewSet(viewsets.GenericViewSet):
     """
     
     permission_classes = [IsAuthenticated]
+    serializer_class = UserTimezoneSerializer
     
     @extend_schema(
         summary='Get timezone options',

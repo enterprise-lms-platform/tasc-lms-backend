@@ -18,12 +18,15 @@ class Payment(models.Model):
     ]
     
     PAYMENT_METHODS = [
-        ('flutterwave', 'Flutterwave')
+         ('pesapal', 'Pesapal'), 
     ]
     
     CURRENCIES = [
         ('USD', 'US Dollar'),
         ('UGX', 'Ugandan Shilling'),
+        ('KES', 'Kenyan Shilling'),
+        ('TZS', 'Tanzanian Shilling'),
+
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -414,7 +417,7 @@ class PaymentMethod(models.Model):
     class MethodType(models.TextChoices):
         CREDIT_CARD = 'credit_card', 'Credit Card'
         DEBIT_CARD = 'debit_card', 'Debit Card'
-        PAYPAL = 'paypal', 'PayPal'
+        # PAYPAL = 'paypal', 'PayPal'
         BANK_ACCOUNT = 'bank_account', 'Bank Account'
 
     user = models.ForeignKey(
@@ -593,3 +596,38 @@ class UserSubscription(models.Model):
         if self.end_date and timezone.now() > self.end_date:
             return False
         return True
+    
+
+    # PESA PAL IPN Model
+class PesapalIPN(models.Model):
+    """
+    Stores registered Pesapal IPN URLs and their assigned IPN IDs.
+ 
+    You only need to register an IPN URL once per environment (demo/live).
+    After registering via the management command or admin action, copy the
+    returned ipn_id into PESAPAL_IPN_ID in your .env file.
+ 
+    This model keeps an audit trail in case you register multiple URLs
+    (e.g. during a domain change).
+    """
+ 
+    ipn_id = models.CharField(max_length=255, unique=True)
+    url = models.URLField()
+    notification_type = models.CharField(max_length=10, default="GET")
+    is_active = models.BooleanField(default=True)
+    environment = models.CharField(
+        max_length=10,
+        choices=[("demo", "Demo / Sandbox"), ("live", "Live / Production")],
+        default="demo",
+    )
+    registered_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+ 
+    class Meta:
+        verbose_name = "Pesapal IPN"
+        verbose_name_plural = "Pesapal IPNs"
+        ordering = ["-registered_at"]
+ 
+    def __str__(self):
+        return f"{self.environment.upper()} IPN: {self.ipn_id} → {self.url}"
+ 
