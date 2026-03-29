@@ -268,8 +268,8 @@ class FlutterwaveWebhookHandler(BaseWebhookHandler):
                         gateway_response=data
                     )
                 except Payment.DoesNotExist:
-                    pass
-            
+                    logger.warning(f"Payment not found for failed transaction: {data.get('id')}")
+
             webhook.processed = True
             webhook.processed_at = timezone.now()
             webhook.save()
@@ -314,12 +314,12 @@ class FlutterwaveWebhookHandler(BaseWebhookHandler):
                     ).update(status='dropped')
                 
             except Payment.DoesNotExist:
-                pass
-            
+                logger.warning(f"Payment not found for refund: {data.get('id')}")
+
             webhook.processed = True
             webhook.processed_at = timezone.now()
             webhook.save()
-            
+
             return {
                 'success': True,
                 'message': 'Refund recorded'

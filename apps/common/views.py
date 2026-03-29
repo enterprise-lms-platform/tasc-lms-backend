@@ -1,6 +1,9 @@
+import logging
 import re
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -359,11 +362,11 @@ class StorageQuotaView(APIView):
                             if 'Contents' in response:
                                 for obj in response['Contents']:
                                     used_bytes += obj.get('Size', 0)
-                        except Exception:
-                            pass
-                            
-            except Exception:
-                pass
+                        except Exception as e:
+                            logger.warning(f"S3 storage calc failed for bucket {bucket}: {e}")
+
+            except Exception as e:
+                logger.warning(f"S3 storage calc failed: {e}")
         
         return Response({
             "used_bytes": used_bytes,

@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import me, verify_email, invite_user
-from .views_manager import ManagerOrganizationSettingsView
+from .views_manager import ManagerOrganizationSettingsView, ManagerBillingPlanView, ManagerBillingUsageView
 from .auth_views import (
     LoginView,
     VerifyOTPView,
@@ -51,4 +51,6 @@ urlpatterns = [
     path("google/unlink/", google_oauth_unlink, name="google-oauth-unlink"),
     path("google/status/", google_oauth_status, name="google-oauth-status"),
     path("manager/organization-settings/", ManagerOrganizationSettingsView.as_view(), name="manager-organization-settings"),
+    path("manager/billing/plan/", ManagerBillingPlanView.as_view(), name="manager-billing-plan"),
+    path("manager/billing/usage/", ManagerBillingUsageView.as_view(), name="manager-billing-usage"),
 ]

@@ -100,10 +100,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        # Check user role - adjust based on your User model
+        qs = Invoice.objects.select_related('user', 'organization', 'course', 'payment').prefetch_related('items')
         if hasattr(user, 'role') and user.role in ['finance', 'tasc_admin', 'lms_manager']:
-            return Invoice.objects.all()
-        return Invoice.objects.filter(user=user)
+            return qs
+        return qs.filter(user=user)
     
     @extend_schema(
         summary='List invoices',
@@ -327,9 +327,10 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        qs = Transaction.objects.select_related('user', 'organization', 'course', 'invoice')
         if hasattr(user, 'role') and user.role in ['finance', 'tasc_admin', 'lms_manager']:
-            return Transaction.objects.all()
-        return Transaction.objects.filter(user=user)
+            return qs
+        return qs.filter(user=user)
     
     @extend_schema(
         summary='List transactions',

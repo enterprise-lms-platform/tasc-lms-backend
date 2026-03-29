@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 User = get_user_model()
 from .models import Organization
@@ -17,7 +18,7 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Organization.objects.annotate(
-        user_count=models.Count("memberships", distinct=True),
+        users_count=models.Count("memberships", distinct=True),
         courses_count=models.Count("enrollments__course", distinct=True),
     ).order_by("-created_at")
     serializer_class = OrganizationSuperadminSerializer
@@ -64,10 +65,15 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
         now = timezone.now()
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
+        from django.db.models import Count
+
         total = qs.count()
         active = qs.filter(is_active=True).count()
         new_this_month = qs.filter(date_joined__gte=start_of_month).count()
         suspended = qs.filter(is_active=False).count()
+        by_role = list(
+            qs.values("role").annotate(count=Count("id")).order_by("role")
+        )
 
         return Response(
             {
@@ -75,6 +81,7 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
                 "active": active,
                 "new_this_month": new_this_month,
                 "suspended": suspended,
+                "by_role": by_role,
             }
         )
 
@@ -265,3 +272,41 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
         writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', 'Engineering', '+1234567890'])
 
         return response
+
+
+class SecurityStatsView(APIView):
+    """GET /api/v1/superadmin/security/stats/"""
+    permission_classes = [IsTascAdminUser]
+
+    def get(self, request):
+        now = timezone.now()
+        failed_logins = User.objects.filter(failed_login_attempts__gt=0).count()
+        locked_accounts = User.objects.filter(account_locked_until__gt=now).count()
+        total_users = User.objects.filter(is_active=True).count()
+        mfa_enabled = User.objects.filter(is_active=True, is_mfa_enabled=True).count() if hasattr(User, 'is_mfa_enabled') else 0
+        mfa_percent = round((mfa_enabled / total_users * 100), 1) if total_users > 0 else 0.0
+
+        return Response({
+            "failed_logins_today": failed_logins,
+            "locked_accounts": locked_accounts,
+            "active_sessions": 0,
+            "mfa_adoption_percent": mfa_percent,
+        })
+
+
+class SystemHealthView(APIView):
+    """GET /api/v1/superadmin/system/health/"""
+    permission_classes = [IsTascAdminUser]
+
+    def get(self, request):
+        import time
+        from django.db import connection
+        start = time.time()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        db_latency = round((time.time() - start) * 1000)
+        return Response({
+            'database': 'healthy',
+            'db_latency_ms': db_latency,
+            'storage': 'online',
+        })

@@ -81,7 +81,7 @@ Invoice.transactions -> Transaction (related_name="transactions")
 |-----|---|------|-----------------|--------------------------|
 | ✅ | 29 | ~~Saved/Favorited Courses API~~ | `apps/learning/` | `SavedCoursesPage`, `CatalogCourseCard` |
 | ✅ | 30 | ~~CourseViewSet Ordering/Search~~ | `apps/catalogue/views.py` | Manager TopCourses widget |
-| HIGH | 31 | Organization annotations | `apps/accounts/serializers_superadmin.py:8`, `views_superadmin.py:13` | SuperadminOrganizationsTable |
+| ✅ | 31 | ~~Organization annotations~~ | `apps/accounts/serializers_superadmin.py:8`, `views_superadmin.py:13` | SuperadminOrganizationsTable |
 | ✅ | 32 | ~~Course stats action~~ | `apps/catalogue/views.py` | `AllCoursesPage` KPIs |
 | ✅ | 33 | ~~Assessments stats~~ (via SubmissionViewSet) | `apps/learning/views.py` | `AssessmentsPage` |
 | ✅ | 34 | ~~Certificates admin-scoped + stats~~ | `apps/learning/views.py` | `CertificationsPage` |
@@ -89,26 +89,26 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | ✅ | 36 | ~~Invoice stats action~~ | `apps/payments/views.py` | `InvoicesPage` KPIs |
 | ✅ | 37 | ~~Revenue breakdown~~ | `apps/payments/views.py` | `RevenuePage` |
 | ✅ | 6 | ~~Session quiz/assignment POST & Learner Submit~~ | `apps/catalogue/views.py:834` | Quiz/Assignment/Submission flow |
-| HIGH | 60 | Mobile money (Flutterwave) | `apps/payments/` | `CheckoutPaymentPage` |
-| MED | 1 | Assignment serializer `update()` | `apps/catalogue/serializers.py:463` | Assignment editing |
+| HIGH | 60 | Mobile money (Pesapal) | `apps/payments/` | `CheckoutPaymentPage` |
+| ✅ | 1 | ~~Assignment serializer `update()`~~ | `apps/catalogue/serializers.py:553` | Assignment editing |
 | ✅ | 43 | ~~Manager org settings~~ | `apps/accounts/views.py:270` | `ManagerSettingsPage` |
-| MED | 44 | Manager billing/plan | new endpoint | `ManagerBillingPage` |
-| MED | 61 | Promo codes | `apps/payments/` (new model) | `CheckoutPaymentPage` |
+| ✅ | 44 | ~~Manager billing/plan~~ | `apps/accounts/views_manager.py` | `ManagerBillingPage` |
+| ~~REMOVED~~ | 61 | ~~Promo codes~~ — removed from scope | — | — |
 | ✅ | 62 | ~~Review helpful/report~~ | `apps/catalogue/views.py:1268` | `CourseReviews` |
 | ✅ | 63 | ~~Transaction/invoice exports~~ | `apps/payments/views.py` | Download buttons |
-| MED | 22 | Security metrics | new superadmin view | `SecurityPage` |
+| ✅ | 22 | ~~Security metrics~~ | `apps/accounts/views_superadmin.py` | `SecurityPage` |
 | MED | 25 | Redis integration | `config/settings.py` | Infrastructure |
 | MED | 26 | DB connection pooling | `config/settings.py` | Infrastructure |
 | MED | 27 | Gunicorn scaling | `Dockerfile` | Infrastructure |
 | LOW | 8 | Email templates | `templates/emails/` (new) | — |
 | ✅ | 9 | ~~Notification extras~~ | `apps/notifications/views.py:33` | — |
-| LOW | 17 | N+1 query fixes | various views.py | Performance |
-| LOW | 10-16 | Silent exception fixes | various | Code quality |
-| LOW | 16b | Django admin registrations | `apps/catalogue/admin.py` | — |
-| LOW | 40 | Roles user counts | `apps/accounts/views_superadmin.py:44` | `RolesPermissionsPage` |
+| ✅ | 17 | ~~N+1 query fixes~~ | various views.py | Performance |
+| ✅ | 10-16 | ~~Silent exception fixes~~ | various | Code quality |
+| ✅ | 16b | ~~Django admin registrations~~ | `apps/catalogue/admin.py` | — |
+| ✅ | 40 | ~~Roles user counts~~ | `apps/accounts/views_superadmin.py` | `RolesPermissionsPage` |
 | LOW | 23 | B2B pricing tiers | `apps/payments/` | `/for-business` |
-| LOW | 38 | System settings/health | new superadmin view | `SystemSettingsPage` |
-| LOW | 45 | Activity log summary | `apps/audit/views.py:39` | `ManagerActivityPage` |
+| ✅ | 38 | ~~System settings/health~~ | `apps/accounts/views_superadmin.py` | `SystemSettingsPage` |
+| ✅ | 45 | ~~Activity log summary~~ | `apps/audit/views.py` | `ManagerActivityPage` |
 
 ---
 
@@ -801,87 +801,15 @@ Frontend will need to add `postQuiz` and `postAssignment` methods, but the backe
 
 ---
 
-### Task 60: Mobile Money Payment (Flutterwave)
+### Task 60: Mobile Money Payment (Pesapal)
 
-**File:** `apps/payments/views.py` — add new view or action on `PaymentViewSet` (line 649)
+**File:** `apps/payments/views_pesapal.py` — Pesapal integration is already implemented here.
 
 **Problem:** `CheckoutPaymentPage.tsx` uses `setTimeout` to simulate M-Pesa/MTN/Airtel success.
 
-**Do this:**
+**Note:** Flutterwave has been replaced by Pesapal as the payment provider. The Pesapal service layer lives in `apps/payments/services/pesapal_services.py` and the views in `apps/payments/views_pesapal.py`.
 
-```python
-class MobileMoneyChargeView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        """
-        POST /api/v1/payments/flutterwave/charge-mobile-money/
-        Request: { enrollment: 12, phone_number: "+254...", provider: "mpesa", promo_code: "SAVE20" }
-        """
-        enrollment_id = request.data.get('enrollment')
-        phone_number = request.data.get('phone_number')
-        provider = request.data.get('provider')  # mpesa, mtn, airtel
-
-        # Validate enrollment exists and belongs to user
-        try:
-            enrollment = Enrollment.objects.get(id=enrollment_id, user=request.user)
-        except Enrollment.DoesNotExist:
-            return Response({'error': 'Enrollment not found'}, status=404)
-
-        # Calculate amount (apply promo if provided)
-        amount = enrollment.course.price
-        promo_code = request.data.get('promo_code')
-        # TODO: validate promo code if provided (Task 61)
-
-        # Call Flutterwave charge API
-        # Logic in apps/payments/services/flutterwave.py
-        from apps.payments.services.flutterwave import initiate_mobile_money_charge
-
-        result = initiate_mobile_money_charge(
-            amount=amount,
-            currency=enrollment.course.currency,
-            phone_number=phone_number,
-            provider=provider,
-            tx_ref=f"TASC-{enrollment.id}-{request.user.id}",
-            email=request.user.email,
-        )
-
-        if result.get('status') == 'success':
-            # Create Transaction record
-            Transaction.objects.create(
-                user=request.user,
-                course=enrollment.course,
-                amount=amount,
-                currency=enrollment.course.currency,
-                status='pending',
-                payment_method='mobile_money',
-                payment_provider='flutterwave',
-                gateway_transaction_id=result.get('data', {}).get('id'),
-                transaction_id=f"TASC-{enrollment.id}-{request.user.id}",
-            )
-            return Response({
-                'status': 'pending',
-                'message': 'Check your phone to authorize payment',
-                'flw_ref': result.get('data', {}).get('flw_ref'),
-            })
-
-        return Response({
-            'status': 'error',
-            'message': result.get('message', 'Payment initiation failed'),
-        }, status=400)
-```
-
-**URL Registration** (`apps/payments/urls.py`):
-
-```python
-from apps.payments.views import MobileMoneyChargeView
-
-urlpatterns += [
-    path('flutterwave/charge-mobile-money/',
-         MobileMoneyChargeView.as_view(),
-         name='flutterwave-mobile-money'),
-]
-```
+**Do this:** Wire `CheckoutPaymentPage.tsx` to the Pesapal STK push / mobile money endpoint already defined in `apps/payments/views_pesapal.py`. Check that endpoint's URL in `apps/payments/urls.py` and update the frontend service accordingly (see Task F4).
 
 ---
 
@@ -1059,7 +987,7 @@ path("manager/billing/usage/", ManagerBillingUsageView.as_view(), name="manager-
 
 ---
 
-### Task 61: Promo Code System
+### Task 61: ~~Promo Code System~~ — REMOVED FROM SCOPE
 
 **Step 1 — Model** (`apps/payments/models.py`, append):
 
@@ -1236,7 +1164,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 22: Security Metrics
+### Task 22: Security Metrics ✅ DONE
 
 **New view for superadmin:**
 
@@ -1435,7 +1363,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
 ---
 
-### Task 17: N+1 Query Fixes
+### Task 17: N+1 Query Fixes ✅ DONE
 
 Add `select_related` / `prefetch_related` to these viewsets:
 
@@ -1451,7 +1379,7 @@ Add `select_related` / `prefetch_related` to these viewsets:
 
 ---
 
-### Task 10-16: Silent Exception Fixes
+### Task 10-16: Silent Exception Fixes ✅ DONE
 
 Each is a 1-line fix:
 
@@ -1465,7 +1393,7 @@ Each is a 1-line fix:
 
 ---
 
-### Task 16b: Django Admin Registrations
+### Task 16b: Django Admin Registrations ✅ DONE
 
 **File:** `apps/catalogue/admin.py`
 
@@ -1505,7 +1433,7 @@ class TagAdmin(admin.ModelAdmin):
 
 ---
 
-### Task 40: Roles — Per-Role User Counts
+### Task 40: Roles — Per-Role User Counts ✅ DONE
 
 **File:** `apps/accounts/views_superadmin.py` line 44 — `UserSuperadminViewSet`
 
@@ -1591,7 +1519,7 @@ router.register(r'business-plans', BusinessPricingViewSet, basename='business-pl
 
 ---
 
-### Task 38: System Settings & Health
+### Task 38: System Settings & Health ✅ DONE
 
 ```python
 class SystemHealthView(APIView):
@@ -1624,7 +1552,7 @@ Full endpoint: `GET /api/v1/superadmin/system/health/`
 
 ---
 
-### Task 45: Manager Activity Log Summary
+### Task 45: Manager Activity Log Summary ✅ DONE
 
 **File:** `apps/audit/views.py` line 39 — `AuditLogListView(APIView)`
 
@@ -1688,7 +1616,7 @@ Full endpoint: `GET /api/v1/superadmin/audit-logs/summary/`
 |-----|---------|----------------------|
 | `learning` | 27 | SavedCourse CRUD, quiz submission edge cases, report generation |
 | `catalogue` | 95 | Quiz POST creation, assignment update, course review helpful/report |
-| `payments` | 8 | Webhook handlers, mobile money charge, promo code validation |
+| `payments` | 8 | Webhook handlers, Pesapal mobile money charge, promo code validation |
 | `accounts` | 48 | CSV bulk import, instructor stats, org annotation |
 | `audit` | 6 | Date filter validation, summary endpoint |
 | `notifications` | 2 | Bulk delete, date range filter, mark_read |

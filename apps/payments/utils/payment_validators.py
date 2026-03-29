@@ -5,9 +5,12 @@ Handles validation of payment data, signatures, and webhook authenticity.
 import hmac
 import hashlib
 import json
+import logging
 from decimal import Decimal, InvalidOperation
 from django.conf import settings
 from django.core.exceptions import ValidationError
+
+logger = logging.getLogger(__name__)
 from django.utils import timezone, re
 from ..models import Payment
 
@@ -323,9 +326,9 @@ class FlutterwaveValidator:
             try:
                 PaymentValidator.validate_phone(customer['phone'])
                 validated['phone'] = str(customer['phone'])
-            except ValidationError:
+            except ValidationError as e:
                 # Don't fail on invalid phone, just skip it
-                pass
+                logger.info(f"Phone validation skipped: {customer['phone']}: {e}")
         
         return validated
 
