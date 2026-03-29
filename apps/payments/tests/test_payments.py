@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
 from apps.catalogue.models import Course
-from apps.payments.models import Subscription
+from apps.payments.models import Subscription, Invoice, Transaction
 
 User = get_user_model()
 
@@ -70,3 +70,49 @@ class PaymentTests(APITestCase):
         """Authenticated user can list their invoices."""
         response = self.client.get("/api/v1/payments/invoices/")
         self.assertEqual(response.status_code, 200)
+
+    def test_invoice_download_pdf(self):
+        invoice = Invoice.objects.create(
+            user=self.user,
+            invoice_type='subscription',
+            customer_name="payuser",
+            customer_email="test@example.com",
+            subtotal=99.99,
+            total_amount=99.99,
+            currency='USD',
+            status='pending',
+        )
+        response = self.client.get(f"/api/v1/payments/invoices/{invoice.id}/download-pdf/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('invoice_number', response.json())
+
+    def test_invoice_email_receipt(self):
+        invoice = Invoice.objects.create(
+            user=self.user,
+            invoice_type='subscription',
+            customer_name="payuser",
+            customer_email="test@example.com",
+            subtotal=99.99,
+            total_amount=99.99,
+            currency='USD',
+            status='paid',
+        )
+        response = self.client.post(f"/api/v1/payments/invoices/{invoice.id}/email-receipt/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'Receipt email queued')
+
+    def test_transaction_export_csv(self):
+        Transaction.objects.create(
+            user=self.user,
+            course=self.course,
+            amount=99.99,
+            currency='USD',
+            status='completed',
+            payment_method='card',
+        )
+        response = self.client.get("/api/v1/payments/transactions/export-csv/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('Content-Disposition', response)
+        self.assertTrue(response.content.decode('utf-8').startswith('ID,Transaction ID,Amount,Currency,Status,Payment Method,Created At,Completed At'))
+        self.assertIn('99.99', response.content.decode('utf-8'))
