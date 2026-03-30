@@ -90,11 +90,16 @@ class Enrollment(models.Model):
         """Update progress based on completed sessions"""
         completed_sessions = SessionProgress.objects.filter(
             enrollment=self,
-            is_completed=True
-        ).count()
-        total_sessions = self.course.total_sessions or 1
-        
-        self.progress_percentage = (completed_sessions / total_sessions) * 100
+            is_completed=True,
+            session__course=self.course,
+        ).values('session_id').distinct().count()
+        total_sessions = self.course.sessions.count()
+
+        if total_sessions <= 0:
+            self.progress_percentage = 0
+        else:
+            progress = (completed_sessions / total_sessions) * 100
+            self.progress_percentage = min(progress, 100)
         
         # Check if course is completed
         if self.progress_percentage >= 100 and self.status != self.Status.COMPLETED:
