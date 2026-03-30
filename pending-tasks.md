@@ -109,6 +109,14 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | LOW | 23 | B2B pricing tiers | `apps/payments/` | `/for-business` |
 | ✅ | 38 | ~~System settings/health~~ | `apps/accounts/views_superadmin.py` | `SystemSettingsPage` |
 | ✅ | 45 | ~~Activity log summary~~ | `apps/audit/views.py` | `ManagerActivityPage` |
+| HIGH | 64 | Bulk export endpoints (CSV/PDF) | `apps/payments/views.py`, `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | Finance Export buttons, Superadmin Export buttons (F28) |
+| HIGH | 65 | Superadmin list endpoints for table data | `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | AllCoursesPage table, InstructorsPage table, InvoicesPage table, CertificationsPage table, AssessmentsPage table (F22) |
+| HIGH | 66 | Pesapal gateway health/stats endpoint | `apps/payments/views.py` | GatewayPesapalPage KPIs + transaction list (F24) |
+| HIGH | 67 | System settings PATCH + SMTP config + test email | `apps/accounts/views_superadmin.py` | SystemSettingsPage Save buttons (F29) |
+| HIGH | 68 | Security policy endpoints (MFA/password/session save + terminate all sessions) | `apps/accounts/views_superadmin.py` | SecurityPage Save buttons (F30) |
+| HIGH | 69 | Pesapal config save + test connection | `apps/payments/views_pesapal.py` | GatewaySettingsPage Save/Test buttons (F31) |
+| MED | 70 | User invite endpoint (email invite flow) | `apps/accounts/views.py` or `views_superadmin.py` | InstructorsPage Invite Instructor button (F32) |
+| MED | 71 | Subscription plan admin PATCH endpoint | `apps/payments/views.py` | FinancePricingPage Edit Plans / Manage Plan buttons (F34) |
 
 ---
 
@@ -1597,6 +1605,195 @@ path("audit-logs/summary/", AuditLogSummaryView.as_view(), name="audit-log-summa
 ```
 
 Full endpoint: `GET /api/v1/superadmin/audit-logs/summary/`
+
+---
+
+---
+
+### Task 67: System Settings PATCH + SMTP Config + Test Email
+
+**File:** `apps/accounts/views_superadmin.py`
+
+**Do this:** Add endpoints so `SystemSettingsPage.tsx` Save buttons work.
+
+```python
+class SystemSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/superadmin/system/settings/"""
+        # Return current platform settings (store in DB model or env-backed config)
+        return Response({
+            "platform_name": settings.PLATFORM_NAME,
+            "platform_url": settings.PLATFORM_URL,
+            "support_email": settings.SUPPORT_EMAIL,
+            "default_timezone": settings.TIME_ZONE,
+            "max_upload_mb": settings.MAX_UPLOAD_MB,
+        })
+
+    def patch(self, request):
+        """PATCH /api/v1/superadmin/system/settings/"""
+        # Save to a SystemConfig model or update env-backed settings store
+        return Response({"detail": "Settings saved."})
+
+
+class SMTPSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        """PATCH /api/v1/superadmin/system/smtp/"""
+        # Save SMTP host/port/username/password/from_name/from_email to secure config
+
+    def post(self, request):
+        """POST /api/v1/superadmin/system/smtp/test/"""
+        # Send a test email using the provided SMTP settings
+        return Response({"detail": "Test email sent."})
+```
+
+**URLs to add in** `apps/common/api_urls.py`:
+```python
+path("superadmin/system/settings/", SystemSettingsView.as_view(), name="system-settings"),
+path("superadmin/system/smtp/", SMTPSettingsView.as_view(), name="smtp-settings"),
+path("superadmin/system/smtp/test/", SMTPSettingsView.as_view(), name="smtp-test"),
+```
+
+**Frontend dependency:** F29 (`SystemSettingsPage.tsx`)
+
+---
+
+### Task 68: Security Policy Endpoints (MFA / Password / Session / Terminate)
+
+**File:** `apps/accounts/views_superadmin.py`
+
+**Do this:** Add endpoints for SecurityPage policy save buttons.
+
+```python
+class SecurityPolicyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/superadmin/security/policy/"""
+        # Return current MFA, password, and session policy settings
+
+    def patch(self, request):
+        """PATCH /api/v1/superadmin/security/policy/"""
+        # Save policy settings to a SecurityPolicy model
+        # Fields: mfa_enabled, mfa_required_roles[], mfa_methods[],
+        #         min_password_length, require_uppercase, require_special,
+        #         password_expiry_days, password_history,
+        #         max_failed_attempts, lockout_duration_minutes,
+        #         session_timeout_minutes, idle_timeout_minutes,
+        #         max_concurrent_sessions, force_single_session
+
+
+class TerminateAllSessionsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """POST /api/v1/superadmin/security/terminate-sessions/"""
+        # Flush all active tokens/sessions (e.g., rotate Django signing key or
+        # delete all TokenAuth/BlacklistToken records)
+        from rest_framework.authtoken.models import Token
+        Token.objects.all().delete()
+        return Response({"detail": "All sessions terminated."})
+```
+
+**URLs to add:**
+```python
+path("superadmin/security/policy/", SecurityPolicyView.as_view(), name="security-policy"),
+path("superadmin/security/terminate-sessions/", TerminateAllSessionsView.as_view(), name="terminate-sessions"),
+```
+
+**Frontend dependency:** F30 (`SecurityPage.tsx`)
+
+---
+
+### Task 69: Pesapal Gateway Config Save + Test Connection
+
+**File:** `apps/payments/views_pesapal.py`
+
+**Do this:** Allow superadmin to save Pesapal API keys and test the connection.
+
+```python
+class PesapalConfigView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/v1/superadmin/gateway/pesapal/config/"""
+        # Return masked consumer_key, consumer_secret, ipn_url, environment
+
+    def patch(self, request):
+        """PATCH /api/v1/superadmin/gateway/pesapal/config/"""
+        # Save consumer_key, consumer_secret, environment (sandbox/production) to
+        # a GatewayConfig model or encrypted env store
+
+
+class PesapalTestConnectionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """POST /api/v1/superadmin/gateway/pesapal/test/"""
+        # Attempt to get a Pesapal OAuth token using saved credentials
+        # Return {"ok": true} or {"ok": false, "error": "..."}
+```
+
+**URLs to add:**
+```python
+path("superadmin/gateway/pesapal/config/", PesapalConfigView.as_view(), name="pesapal-config"),
+path("superadmin/gateway/pesapal/test/", PesapalTestConnectionView.as_view(), name="pesapal-test"),
+```
+
+**Frontend dependency:** F31 (`GatewaySettingsPage.tsx`)
+
+---
+
+### Task 70: User Invite Endpoint
+
+**File:** `apps/accounts/views_superadmin.py` or `apps/accounts/views.py`
+
+**Do this:** Allow superadmin to invite a new instructor by email.
+
+```python
+class InviteUserView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """POST /api/v1/superadmin/users/invite/"""
+        # Expected body: { "email": "...", "role": "instructor", "name": "..." }
+        # 1. Create an inactive User record (or use a pending invite model)
+        # 2. Send invitation email with a one-time signup link
+        # 3. Return { "detail": "Invitation sent to email@example.com" }
+```
+
+**URL to add:**
+```python
+path("superadmin/users/invite/", InviteUserView.as_view(), name="invite-user"),
+```
+
+**Frontend dependency:** F32 (`InstructorsPage.tsx` Invite Instructor button)
+
+---
+
+### Task 71: Subscription Plan Admin PATCH Endpoint
+
+**File:** `apps/payments/views.py` — `SubscriptionViewSet`
+
+**Do this:** Allow finance admin to edit subscription plan details (name, price, features).
+
+```python
+class SubscriptionViewSet(viewsets.ModelViewSet):
+    # Change from ReadOnlyModelViewSet to ModelViewSet
+    # Add permission: only finance_manager or superadmin can write
+    queryset = Subscription.objects.all()
+    serializer_class = SubscriptionSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsFinanceOrSuperAdmin()]
+```
+
+**Frontend dependency:** F34 (`FinancePricingPage.tsx` Edit Plans / Manage Plan buttons)
 
 ---
 
