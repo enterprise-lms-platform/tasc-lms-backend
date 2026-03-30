@@ -166,6 +166,20 @@ class SessionProgressViewSet(viewsets.ModelViewSet):
 
         return qs
 
+    def _sync_enrollment_rollup(self, instance: SessionProgress) -> None:
+        """Keep enrollment progress and resume fields aligned after SessionProgress writes."""
+        enrollment = instance.enrollment
+        enrollment.last_accessed_session = instance.session
+        enrollment.update_progress()
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        self._sync_enrollment_rollup(instance)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        self._sync_enrollment_rollup(instance)
+
     @extend_schema(
         summary='List session progress',
         description='Returns progress for all sessions across user enrollments',
