@@ -1797,6 +1797,44 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 
 ---
 
+### Task 72: Workshop Model + CRUD API
+
+**Priority:** MED
+**App:** `apps/workshops/` (new app) or `apps/learning/`
+**Why:** Workshops are physical in-person training sessions — not livestreams. The frontend `WorkshopsPage.tsx` was incorrectly pulling from the livestream API; it has been decoupled and now needs a dedicated backend.
+
+**Model fields:**
+```python
+class Workshop(models.Model):
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    location = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    max_participants = models.PositiveIntegerField(default=30)
+    grading_type = models.CharField(max_length=20, choices=[('attendance','Attendance Only'),('pass_fail','Pass / Fail'),('score','Score (0-100)')], default='attendance')
+    category = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=[('upcoming','Upcoming'),('ongoing','Ongoing'),('completed','Completed')], default='upcoming')
+    instructor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='workshops')
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+**Endpoints needed:**
+- `GET /api/v1/workshops/` — list (instructors see own, managers/superadmin see all)
+- `POST /api/v1/workshops/` — create (instructors + managers)
+- `GET /api/v1/workshops/{id}/` — retrieve
+- `PATCH /api/v1/workshops/{id}/` — update
+- `DELETE /api/v1/workshops/{id}/` — delete
+
+**Response shape expected by frontend (`Workshop` interface):**
+```typescript
+{ id, title, description, location, start_date, end_date, max_participants, grading_type, category, status }
+```
+
+**Frontend dependency:** F35 (`WorkshopsPage.tsx` — wire Create/list to `workshopApi`)
+
+---
+
 ## Configuration TODOs
 
 - [ ] Set `ZOOM_WEBHOOK_SECRET` in production `.env`
