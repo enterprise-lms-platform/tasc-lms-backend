@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max, Count
+from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -280,9 +280,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(instructor_id=self.request.user.id)
 
-        return queryset.annotate(
-            enrollment_count=Count('enrollments')
-        ).distinct()
+        # NOTE:
+        # Do not annotate with `enrollment_count` because Course defines a
+        # read-only @property with the same name. Annotating that name causes
+        # Django to try setting the property and crash on list/retrieve.
+        return queryset.distinct()
 
     @extend_schema(
         summary='Course statistics (superadmin)',
