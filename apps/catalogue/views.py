@@ -610,7 +610,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
         from apps.audit.services import log_event
         log_event(
-            action='submitted_for_approval',
+            action='updated',
             resource='course',
             resource_id=str(course.id),
             actor=request.user,
