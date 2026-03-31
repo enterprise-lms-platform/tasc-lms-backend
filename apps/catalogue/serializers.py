@@ -304,7 +304,7 @@ class QuizQuestionSerializer(serializers.ModelSerializer):
     """Serializer for QuizQuestion in quiz detail and write payloads."""
     class Meta:
         model = QuizQuestion
-        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload', 'explanation']
+        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload']
         read_only_fields = ['id']
 
     def validate_question_type(self, value):

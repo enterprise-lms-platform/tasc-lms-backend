@@ -520,7 +520,6 @@ class QuizQuestion(models.Model):
     question_text = models.TextField()
     points = models.PositiveIntegerField(default=10)
     answer_payload = models.JSONField(default=dict, blank=True)
-    explanation = models.TextField(blank=True, default='')
     source_bank_question = models.ForeignKey(
         BankQuestion,
         null=True,
