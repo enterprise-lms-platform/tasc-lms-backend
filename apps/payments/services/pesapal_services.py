@@ -38,8 +38,8 @@ class PesapalService:
     def __init__(self):
         self.consumer_key = settings.PESAPAL_CONSUMER_KEY
         self.consumer_secret = settings.PESAPAL_CONSUMER_SECRET
+        self.base_url = settings.PESAPAL_BASE_URL or PESAPAL_DEMO_BASE or PESAPAL_LIVE_BASE
         env = getattr(settings, "PESAPAL_ENV", "demo")
-        self.base_url = PESAPAL_LIVE_BASE if env == "live" else PESAPAL_DEMO_BASE
         self.ipn_url = getattr(settings, "PESAPAL_IPN_URL", "")
         self.callback_url = getattr(settings, "PESAPAL_CALLBACK_URL", "")
 
@@ -50,7 +50,6 @@ class PesapalService:
     def _get_token(self) -> str:
         """
         Returns a valid bearer token, fetching a fresh one if needed.
-        Token is cached in Django's cache backend (Redis / memcache / local).
         """
         cached = cache.get(self.TOKEN_CACHE_KEY)
         if cached:

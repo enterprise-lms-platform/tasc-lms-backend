@@ -391,3 +391,4 @@ PESAPAL_ENV             = os.environ.get("PESAPAL_ENV", "demo")
 PESAPAL_IPN_URL         = os.environ.get("PESAPAL_IPN_URL", "")
 PESAPAL_CALLBACK_URL    = os.environ.get("PESAPAL_CALLBACK_URL", "")
 PESAPAL_IPN_ID          = os.environ.get("PESAPAL_IPN_ID", "")
+PESAPAL_BASE_URL        = os.environ.get("PESAPAL_BASE_URL", "https://cybqa.pesapal.com/pesapalv3") #CHANGE IT OUT TO LIVE LATER
