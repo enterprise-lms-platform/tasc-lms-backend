@@ -30,28 +30,26 @@ router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-subscription')
 
 
-urlpatterns = [
-    path('subscription/me/', SubscriptionMeView.as_view(), name='subscription-me'),
-    path('', include(router.urls)),
-    # FIX: Updated action mapping to 'flutterwave_webhook'
-    # Reason: The ViewSet defines flutterwave_webhook() as the @action method.
-    # Previous mapping to 'webhook' caused schema generation failure.
-    path('webhook/<str:provider>/',
-         WebhookView.as_view({'post': 'flutterwave_webhook'}),
-         name='payment-webhook'),
-    path('webhook/flutterwave/',
-         WebhookView.as_view({'post': 'flutterwave_webhook'}),
-         {'provider': 'flutterwave'},
-         name='flutterwave-webhook'),
-]
-
- # ── pesapal routes ─────────────────────────────────────────────────
+# ── pesapal routes ─────────────────────────────────────────────────
 router.register(r'pesapal', PesapalPaymentViewSet, basename='pesapal-payment')
 router.register(r'pesapal/recurring', PesapalRecurringViewSet, basename='pesapal-recurring')
 router.register(r'pesapal/ipn-admin', PesapalIPNViewSet, basename='pesapal-ipn')
 
 urlpatterns = [
+    path('subscription/me/', SubscriptionMeView.as_view(), name='subscription-me'),
     path('', include(router.urls)),
+    # Keep existing webhook routes reachable while Pesapal rollout is in progress.
+    path(
+        'webhook/<str:provider>/',
+        WebhookView.as_view({'post': 'flutterwave_webhook'}),
+        name='payment-webhook',
+    ),
+    path(
+        'webhook/flutterwave/',
+        WebhookView.as_view({'post': 'flutterwave_webhook'}),
+        {'provider': 'flutterwave'},
+        name='flutterwave-webhook',
+    ),
 
     # These two are standalone views (not ViewSets) because Pesapal
     # calls them directly — no DRF router wrapping needed.
