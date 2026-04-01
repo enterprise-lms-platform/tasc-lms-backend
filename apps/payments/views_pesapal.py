@@ -15,6 +15,7 @@ Architecture recap:
 
 import logging
 
+from datetime import timedelta
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status, viewsets
@@ -159,6 +160,27 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
                 payment.mark_completed()
                 payment.provider_payment_id = result.get("confirmation_code", "")
                 payment.save(update_fields=["provider_payment_id"])
+                # Reconcile linked recurring subscription in case webhook is delayed.
+                subscription_id = payment.metadata.get("user_subscription_id")
+                if subscription_id:
+                    try:
+                        us = UserSubscription.objects.get(id=subscription_id)
+                        if us.status != UserSubscription.Status.ACTIVE:
+                            cycle_days = {
+                                "monthly": 30,
+                                "quarterly": 90,
+                                "yearly": 365,
+                            }
+                            us.status = UserSubscription.Status.ACTIVE
+                            if us.end_date and us.end_date <= timezone.now():
+                                us.end_date = timezone.now() + timedelta(
+                                    days=cycle_days.get(us.subscription.billing_cycle, 30)
+                                )
+                                us.save(update_fields=["status", "end_date"])
+                            else:
+                                us.save(update_fields=["status"])
+                    except UserSubscription.DoesNotExist:
+                        pass
                 log_event(
                     action="updated",
                     resource="payment",
@@ -276,6 +298,14 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = PesapalRecurringInitiateSerializer
 
+    def _subscription_end_date(self, subscription_plan):
+        cycle_days = {
+            "monthly": 30,
+            "quarterly": 90,
+            "yearly": 365,
+        }
+        return timezone.now() + timedelta(days=cycle_days.get(subscription_plan.billing_cycle, 30))
+
     @extend_schema(
         summary="Initiate recurring Pesapal payment",
         description=(
@@ -308,15 +338,14 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
             description=f"{subscription_plan.name} subscription",
         )
 
-        # Create a pending UserSubscription
-        from datetime import timedelta
+        # Create a pre-activation UserSubscription; becomes active after verified completion.
         user_subscription = UserSubscription.objects.create(
             user=request.user,
             subscription=subscription_plan,
-            status="inactive",  # activate after first payment confirmed
+            status=UserSubscription.Status.PAUSED,
             price=subscription_plan.price,
             currency=currency,
-            end_date=timezone.now() + timedelta(days=365),
+            end_date=self._subscription_end_date(subscription_plan),
         )
 
         service = PesapalService()
@@ -420,6 +449,22 @@ class PesapalWebhookView(APIView):
     """
 
     permission_classes = [AllowAny]
+    
+    @staticmethod
+    def _activate_user_subscription(user_subscription):
+        user_subscription.status = UserSubscription.Status.ACTIVE
+        if user_subscription.end_date and user_subscription.end_date <= timezone.now():
+            cycle_days = {
+                "monthly": 30,
+                "quarterly": 90,
+                "yearly": 365,
+            }
+            user_subscription.end_date = timezone.now() + timedelta(
+                days=cycle_days.get(user_subscription.subscription.billing_cycle, 30)
+            )
+            user_subscription.save(update_fields=["status", "end_date"])
+            return
+        user_subscription.save(update_fields=["status"])
 
     @extend_schema(
         summary="Pesapal IPN webhook",
@@ -468,8 +513,7 @@ class PesapalWebhookView(APIView):
             if subscription_id:
                 try:
                     us = UserSubscription.objects.get(id=subscription_id)
-                    us.status = "active"
-                    us.save(update_fields=["status"])
+                    self._activate_user_subscription(us)
                 except UserSubscription.DoesNotExist:
                     pass
 

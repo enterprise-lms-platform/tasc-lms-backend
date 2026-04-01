@@ -51,7 +51,7 @@ class CreatePaymentSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     
     def validate(self, data):
-        from learning.models import Course
+        from apps.catalogue.models import Course
         
         # If course_id provided, validate it exists
         course_id = data.get('course_id')
@@ -413,7 +413,7 @@ class PesapalInitiateSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
  
     def validate(self, data):
-        from catalogue.models import Course  # adjust import path to your project
+        from apps.catalogue.models import Course
  
         course_id = data.get("course_id")
         if course_id:
