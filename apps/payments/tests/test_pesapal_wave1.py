@@ -13,6 +13,7 @@ from rest_framework.test import APITestCase
 from apps.catalogue.models import Course
 from apps.payments.models import Payment, Subscription, UserSubscription
 from apps.learning.models import Enrollment
+from apps.payments.services.pesapal_services import PesapalService
 
 User = get_user_model()
 
@@ -213,3 +214,35 @@ class PesapalFlowWave1Test(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('active subscription', response.json().get('error', '').lower())
+
+    def test_recurring_payload_uses_ddmmyyyy_dates_and_valid_frequency(self):
+        """
+        Regression: Pesapal recurring requires dd-MM-yyyy dates and frequency in:
+        DAILY|WEEKLY|MONTHLY|YEARLY.
+        """
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            description="Test recurring payload",
+        )
+
+        captured = {}
+
+        def fake_post(self, path: str, payload: dict) -> dict:
+            captured["path"] = path
+            captured["payload"] = payload
+            return {"order_tracking_id": "TRACK-1", "redirect_url": "https://sandbox.pesapal.com/checkout/rec"}
+
+        with patch.object(PesapalService, "_post", new=fake_post):
+            service = PesapalService()
+            result = service.initialize_recurring_payment(payment, self.plan)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["path"], "/api/Transactions/SubmitOrderRequest")
+        sub = captured["payload"]["subscription_details"]
+        self.assertRegex(sub["start_date"], r"^\d{2}-\d{2}-\d{4}$")
+        self.assertRegex(sub["end_date"], r"^\d{2}-\d{2}-\d{4}$")
+        self.assertIn(sub["frequency"], {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"})
