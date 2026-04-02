@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 import uuid
 import csv
+from django.db.models import Q
 
 from .services.flutterwave_service import FlutterwaveService
 
@@ -603,6 +604,23 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         
         # Set the user
         is_trial = serializer.validated_data.get('is_trial', False)
+
+        # Phase 1: enforce one learner subscription at a time.
+        # Block creation when an ACTIVE/PAUSED subscription already exists with an end_date in the future.
+        now = timezone.now()
+        has_other_active_or_paused = UserSubscription.objects.filter(
+            user=request.user,
+            status__in=[UserSubscription.Status.ACTIVE, UserSubscription.Status.PAUSED],
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gt=now)
+        ).exists()
+
+        if has_other_active_or_paused:
+            return Response(
+                {'error': 'An active subscription already exists for this user.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer.save(user=request.user)
         
         # Configure active access window for Phase 1 gating.
@@ -613,7 +631,7 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
             end_date = timezone.now() + timedelta(days=7)
             subscription.trial_end_date = end_date
         else:
-            end_date = timezone.now() + timedelta(days=180)  # biannual paid access
+            end_date = timezone.now() + timedelta(days=subscription_plan.duration_days)
             subscription.trial_end_date = None
 
         subscription.status = UserSubscription.Status.ACTIVE
@@ -687,8 +705,8 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         subscription.status = 'active'
         subscription.cancelled_at = None
         
-        # Extend end date using the paid Phase 1 duration (6 months).
-        subscription.end_date = timezone.now() + timedelta(days=180)
+        # Extend end date using the paid Phase 1 duration (plan-derived; 6 months).
+        subscription.end_date = timezone.now() + timedelta(days=subscription.subscription.duration_days)
         
         subscription.save()
         

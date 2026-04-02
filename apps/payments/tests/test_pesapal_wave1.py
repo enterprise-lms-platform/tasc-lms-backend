@@ -1,14 +1,18 @@
 """Wave 1 regression tests for Pesapal/backend subscription truth wiring."""
 
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from django.urls import resolve, reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.catalogue.models import Course
 from apps.payments.models import Payment, Subscription, UserSubscription
+from apps.learning.models import Enrollment
 
 User = get_user_model()
 
@@ -50,6 +54,7 @@ class PesapalFlowWave1Test(APITestCase):
             currency="UGX",
             billing_cycle="monthly",
             status=Subscription.Status.ACTIVE,
+            duration_days=180,
         )
 
     @patch("apps.payments.views_pesapal.PesapalService.initialize_payment")
@@ -101,6 +106,7 @@ class PesapalFlowWave1Test(APITestCase):
             price=self.plan.price,
             currency=self.plan.currency,
         )
+        before = timezone.now()
         payment = Payment.objects.create(
             user=self.user,
             amount=self.plan.price,
@@ -135,3 +141,75 @@ class PesapalFlowWave1Test(APITestCase):
         user_subscription.refresh_from_db()
         self.assertEqual(payment.status, "completed")
         self.assertEqual(user_subscription.status, UserSubscription.Status.ACTIVE)
+        self.assertIsNotNone(user_subscription.end_date)
+        expected_seconds = self.plan.duration_days * 24 * 60 * 60
+        actual_seconds = (user_subscription.end_date - before).total_seconds()
+        self.assertLess(abs(actual_seconds - expected_seconds), 120)  # 2 minute tolerance
+
+    def test_subscription_payment_completion_does_not_enroll_into_course(self):
+        course = Course.objects.create(
+            title="Test Course",
+            slug="test-course-1",
+            description="desc",
+            price=Decimal("99.99"),
+        )
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-WEBHOOK-2",
+            course=course,
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring plan charge",
+        )
+
+        with patch("apps.payments.views_pesapal.PesapalService.handle_webhook") as mock_handle_webhook:
+            mock_handle_webhook.return_value = {
+                "success": True,
+                "merchant_reference": str(payment.id),
+                "order_tracking_id": "TRACK-WEBHOOK-2",
+                "status": "COMPLETED",
+                "confirmation_code": "CONF-1",
+            }
+
+            self.client.force_authenticate(user=None)
+            response = self.client.get(
+                "/api/v1/payments/pesapal/webhook/ipn/",
+                {
+                    "orderTrackingId": "TRACK-WEBHOOK-2",
+                    "orderMerchantReference": str(payment.id),
+                    "orderNotificationType": "IPNCHANGE",
+                },
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        enrollment_exists = Enrollment.objects.filter(user=self.user, course=course, status="active").exists()
+        self.assertFalse(enrollment_exists)
+
+    def test_recurring_initiate_rejects_when_user_has_active_subscription(self):
+        UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.ACTIVE,
+            start_date=timezone.now(),
+            end_date=timezone.now() + timedelta(days=30),
+            price=self.plan.price,
+            currency=self.plan.currency,
+        )
+
+        response = self.client.post(
+            "/api/v1/payments/pesapal/recurring/initiate/",
+            {"subscription_id": self.plan.id, "currency": "UGX"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('active subscription', response.json().get('error', '').lower())

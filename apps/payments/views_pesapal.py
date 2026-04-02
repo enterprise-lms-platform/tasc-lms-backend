@@ -23,6 +23,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Q
 
 from apps.audit.services import log_event  # your existing audit service
 
@@ -166,16 +167,11 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
                     try:
                         us = UserSubscription.objects.get(id=subscription_id)
                         if us.status != UserSubscription.Status.ACTIVE:
-                            cycle_days = {
-                                "monthly": 30,
-                                "quarterly": 90,
-                                "yearly": 365,
-                            }
+                            now = timezone.now()
+                            duration_days = getattr(us.subscription, "duration_days", 180)
                             us.status = UserSubscription.Status.ACTIVE
-                            if us.end_date and us.end_date <= timezone.now():
-                                us.end_date = timezone.now() + timedelta(
-                                    days=cycle_days.get(us.subscription.billing_cycle, 30)
-                                )
+                            if (not us.end_date) or us.end_date <= now:
+                                us.end_date = now + timedelta(days=duration_days)
                                 us.save(update_fields=["status", "end_date"])
                             else:
                                 us.save(update_fields=["status"])
@@ -299,12 +295,8 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
     serializer_class = PesapalRecurringInitiateSerializer
 
     def _subscription_end_date(self, subscription_plan):
-        cycle_days = {
-            "monthly": 30,
-            "quarterly": 90,
-            "yearly": 365,
-        }
-        return timezone.now() + timedelta(days=cycle_days.get(subscription_plan.billing_cycle, 30))
+        duration_days = getattr(subscription_plan, "duration_days", 180)
+        return timezone.now() + timedelta(days=duration_days)
 
     @extend_schema(
         summary="Initiate recurring Pesapal payment",
@@ -326,6 +318,22 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
             data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
+
+        # Phase 1: enforce one learner subscription at a time.
+        now = timezone.now()
+        has_other_active_or_paused = UserSubscription.objects.filter(
+            user=request.user,
+            status__in=[UserSubscription.Status.ACTIVE, UserSubscription.Status.PAUSED],
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gt=now)
+        ).exists()
+
+        if has_other_active_or_paused:
+            return Response(
+                {'error': 'An active subscription already exists for this user.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         subscription_plan = serializer.validated_data["subscription_id"]  # resolved to Subscription object
         currency = serializer.validated_data.get("currency", "UGX")
 
@@ -452,18 +460,16 @@ class PesapalWebhookView(APIView):
     
     @staticmethod
     def _activate_user_subscription(user_subscription):
+        now = timezone.now()
         user_subscription.status = UserSubscription.Status.ACTIVE
-        if user_subscription.end_date and user_subscription.end_date <= timezone.now():
-            cycle_days = {
-                "monthly": 30,
-                "quarterly": 90,
-                "yearly": 365,
-            }
-            user_subscription.end_date = timezone.now() + timedelta(
-                days=cycle_days.get(user_subscription.subscription.billing_cycle, 30)
-            )
+
+        # Phase 1: plan-derived paid duration.
+        duration_days = getattr(user_subscription.subscription, "duration_days", 180)
+        if (not user_subscription.end_date) or user_subscription.end_date <= now:
+            user_subscription.end_date = now + timedelta(days=duration_days)
             user_subscription.save(update_fields=["status", "end_date"])
             return
+
         user_subscription.save(update_fields=["status"])
 
     @extend_schema(

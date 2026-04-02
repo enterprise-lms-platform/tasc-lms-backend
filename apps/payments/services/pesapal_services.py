@@ -224,7 +224,9 @@ class PesapalService:
         frequency = billing_cycle_map.get(subscription_plan.billing_cycle, "MONTHLY")
 
         start_date = timezone.now().date().isoformat()
-        end_date = (timezone.now() + timedelta(days=365)).date().isoformat()
+        # Phase 1 target: subscription activation duration is 6 months (plan-derived).
+        duration_days = getattr(subscription_plan, "duration_days", 180)
+        end_date = (timezone.now() + timedelta(days=duration_days)).date().isoformat()
 
         payload = {
             "id": str(payment.id),

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
@@ -13,6 +14,7 @@ from apps.payments.models import Subscription, UserSubscription
 User = get_user_model()
 
 SUBSCRIPTION_ME_URL = '/api/v1/payments/subscription/me/'
+USER_SUBSCRIPTIONS_URL = '/api/v1/payments/user-subscriptions/'
 
 
 def _auth(user):
@@ -182,3 +184,56 @@ class SubscriptionMeViewTest(APITestCase):
         # Must prefer the one with latest end_date
         self.assertEqual(data['plan']['name'], 'Plan B')
         self.assertGreaterEqual(data['days_remaining'], 170)
+
+    def test_paid_subscription_duration_is_plan_derived(self):
+        plan = self._create_plan(name='6-Month Plan', billing_cycle='monthly')
+        # Sanity check: Phase 1 target is 180 days plan-derived
+        self.assertEqual(plan.duration_days, 180)
+
+        before = timezone.now()
+        response = self.client.post(
+            USER_SUBSCRIPTIONS_URL,
+            {'subscription': plan.id, 'is_trial': False},
+            format='json',
+            **_auth(self.user),
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+
+        end_date = parse_datetime(data['end_date'])
+        self.assertIsNotNone(end_date)
+        expected_seconds = plan.duration_days * 24 * 60 * 60
+        actual_seconds = (end_date - before).total_seconds()
+        self.assertLess(abs(actual_seconds - expected_seconds), 120)  # 2 minute tolerance
+
+        self.assertEqual(data['status'], UserSubscription.Status.ACTIVE)
+        self.assertFalse(data['is_trial'])
+
+    def test_one_active_subscription_is_enforced_for_paid_and_trial(self):
+        plan_a = self._create_plan(name='Plan A')
+        plan_b = self._create_plan(name='Plan B')
+
+        # Create a trial subscription (should be considered "active" for the one-subscription rule).
+        trial_before = timezone.now()
+        trial_response = self.client.post(
+            USER_SUBSCRIPTIONS_URL,
+            {'subscription': plan_a.id, 'is_trial': True},
+            format='json',
+            **_auth(self.user),
+        )
+        self.assertEqual(trial_response.status_code, status.HTTP_201_CREATED)
+        trial_data = trial_response.json()
+        trial_end_date = parse_datetime(trial_data['end_date'])
+        self.assertIsNotNone(trial_end_date)
+        self.assertLess(abs((trial_end_date - trial_before).total_seconds() - 7 * 24 * 60 * 60), 120)
+        self.assertTrue(trial_data['is_trial'])
+
+        # Attempt to create a second paid subscription while trial is still active.
+        paid_response = self.client.post(
+            USER_SUBSCRIPTIONS_URL,
+            {'subscription': plan_b.id, 'is_trial': False},
+            format='json',
+            **_auth(self.user),
+        )
+        self.assertEqual(paid_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('active subscription', paid_response.json().get('error', '').lower())
