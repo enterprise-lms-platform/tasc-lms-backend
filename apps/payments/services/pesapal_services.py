@@ -82,6 +82,11 @@ class PesapalService:
             "Accept": "application/json",
         }
 
+    @staticmethod
+    def _format_ddmmyyyy(d) -> str:
+        """Pesapal recurring expects dates in dd-MM-yyyy."""
+        return d.strftime("%d-%m-%Y")
+
     def _post(self, path: str, payload: dict) -> dict:
         resp = requests.post(
             f"{self.base_url}{path}",
@@ -219,14 +224,14 @@ class PesapalService:
         billing_cycle_map = {
             "monthly": "MONTHLY",
             "quarterly": "MONTHLY",   # Pesapal has no QUARTERLY; bill monthly x3
-            "yearly": "ANNUALLY",
+            "yearly": "YEARLY",
         }
         frequency = billing_cycle_map.get(subscription_plan.billing_cycle, "MONTHLY")
 
-        start_date = timezone.now().date().isoformat()
+        start_date = self._format_ddmmyyyy(timezone.now().date())
         # Phase 1 target: subscription activation duration is 6 months (plan-derived).
         duration_days = getattr(subscription_plan, "duration_days", 180)
-        end_date = (timezone.now() + timedelta(days=duration_days)).date().isoformat()
+        end_date = self._format_ddmmyyyy((timezone.now() + timedelta(days=duration_days)).date())
 
         payload = {
             "id": str(payment.id),
