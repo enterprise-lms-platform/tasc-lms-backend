@@ -89,7 +89,7 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | ✅ | 36 | ~~Invoice stats action~~ | `apps/payments/views.py` | `InvoicesPage` KPIs |
 | ✅ | 37 | ~~Revenue breakdown~~ | `apps/payments/views.py` | `RevenuePage` |
 | ✅ | 6 | ~~Session quiz/assignment POST & Learner Submit~~ | `apps/catalogue/views.py:834` | Quiz/Assignment/Submission flow |
-| HIGH | 60 | Mobile money (Pesapal) | `apps/payments/` | `CheckoutPaymentPage` |
+| ✅ | 60 | ~~Mobile money (Pesapal) — Wave 1~~ | `apps/payments/views_pesapal.py`, `urls.py`, `models.py`, `serializers.py`, `services/pesapal_services.py` | `CheckoutPaymentPage`, `PesapalReturnPage` |
 | ✅ | 1 | ~~Assignment serializer `update()`~~ | `apps/catalogue/serializers.py:553` | Assignment editing |
 | ✅ | 43 | ~~Manager org settings~~ | `apps/accounts/views.py:270` | `ManagerSettingsPage` |
 | ✅ | 44 | ~~Manager billing/plan~~ | `apps/accounts/views_manager.py` | `ManagerBillingPage` |
@@ -809,15 +809,35 @@ Frontend will need to add `postQuiz` and `postAssignment` methods, but the backe
 
 ---
 
-### Task 60: Mobile Money Payment (Pesapal)
+### Task 60: Pesapal Payment Integration — Wave 1 ✅ DONE (3 Apr)
 
-**File:** `apps/payments/views_pesapal.py` — Pesapal integration is already implemented here.
+**Files changed (this sprint):**
+- `apps/payments/views_pesapal.py` (+62 lines) — added `initiate`, `initiateRecurring`, and status-check endpoints
+- `apps/payments/urls.py` — registered new Pesapal routes
+- `apps/payments/models.py` — Subscription model updates
+- `apps/payments/serializers.py` — serializer updates for Pesapal payloads
+- `apps/payments/services/pesapal_services.py` — logic tweaks
+- `apps/payments/migrations/0005_subscription_duration_days.py` — **new migration** adds `duration_days: int` field to `Subscription` model
+- `apps/payments/tests/test_pesapal_wave1.py` — **new file**, 248-line test suite covering initiate, recurring, and status flows
+- `apps/payments/tests/test_subscription_me.py` — **new file**, 55-line tests for `/api/v1/payments/subscription/me/` endpoint
 
-**Problem:** `CheckoutPaymentPage.tsx` uses `setTimeout` to simulate M-Pesa/MTN/Airtel success.
+**Endpoints now live:**
 
-**Note:** Flutterwave has been replaced by Pesapal as the payment provider. The Pesapal service layer lives in `apps/payments/services/pesapal_services.py` and the views in `apps/payments/views_pesapal.py`.
+| Method | URL | Description |
+|--------|-----|-------------|
+| `POST` | `/api/v1/payments/pesapal/initiate/` | One-time payment initiation → returns `{ payment_id, redirect_url, order_tracking_id }` |
+| `POST` | `/api/v1/payments/pesapal/recurring/initiate/` | Subscription initiation → returns `{ payment_id, redirect_url, order_tracking_id, subscription_id }` |
+| `GET` | `/api/v1/payments/pesapal/{payment_id}/status/` | Status polling → returns `{ order_tracking_id, status, payment_method, amount, currency, confirmation_code, message }` |
 
-**Do this:** Wire `CheckoutPaymentPage.tsx` to the Pesapal STK push / mobile money endpoint already defined in `apps/payments/views_pesapal.py`. Check that endpoint's URL in `apps/payments/urls.py` and update the frontend service accordingly (see Task F4).
+**New `duration_days` field on Subscription:**
+Migration `0005` adds `duration_days` (integer) to the `Subscription` model. Frontend `Subscription` type in `types.ts` should add `duration_days?: number` to match.
+
+**Frontend:** `CheckoutPaymentPage.tsx` and `PesapalReturnPage.tsx` fully wired — see frontend Task F4 ✅ DONE.
+
+**Remaining / Wave 2:**
+- IPN (Instant Payment Notification) webhook handler — backend needs to receive Pesapal's async callback and update `UserSubscription.status` + trigger enrollment activation
+- Billing info passthrough — frontend collects first name / last name / email but does not yet send them to Pesapal; backend should accept and forward to Pesapal `billing_address` fields
+- One-time course payment flow (current implementation is subscription-only)
 
 ---
 
