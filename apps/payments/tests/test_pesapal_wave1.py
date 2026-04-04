@@ -246,3 +246,128 @@ class PesapalFlowWave1Test(APITestCase):
         self.assertRegex(sub["start_date"], r"^\d{2}-\d{2}-\d{4}$")
         self.assertRegex(sub["end_date"], r"^\d{2}-\d{2}-\d{4}$")
         self.assertIn(sub["frequency"], {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"})
+
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_recurring_payment_status_invalid_releases_paused_subscription(self, mock_verify):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-INV-STATUS",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        mock_verify.return_value = {
+            "success": True,
+            "status": "INVALID",
+            "payment_method": "",
+            "amount": None,
+            "currency": "",
+            "confirmation_code": "",
+            "message": "",
+            "raw": {},
+        }
+
+        response = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        payment.refresh_from_db()
+        user_subscription.refresh_from_db()
+        self.assertEqual(payment.status, "cancelled")
+        self.assertEqual(user_subscription.status, UserSubscription.Status.CANCELLED)
+        self.assertIsNotNone(user_subscription.cancelled_at)
+        self.assertFalse(user_subscription.auto_renew)
+
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_recurring_payment_status_failed_releases_paused_subscription(self, mock_verify):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-FAIL-STATUS",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        mock_verify.return_value = {
+            "success": True,
+            "status": "FAILED",
+            "payment_method": "",
+            "amount": None,
+            "currency": "",
+            "confirmation_code": "",
+            "message": "",
+            "raw": {},
+        }
+
+        response = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        payment.refresh_from_db()
+        user_subscription.refresh_from_db()
+        self.assertEqual(payment.status, "failed")
+        self.assertEqual(user_subscription.status, UserSubscription.Status.CANCELLED)
+
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_recurring_payment_status_completed_still_activates_subscription(self, mock_verify):
+        before = timezone.now()
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-OK-STATUS",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        mock_verify.return_value = {
+            "success": True,
+            "status": "COMPLETED",
+            "payment_method": "MOBILE",
+            "amount": float(self.plan.price),
+            "currency": "UGX",
+            "confirmation_code": "CONF-STATUS-1",
+            "message": "OK",
+            "raw": {},
+        }
+
+        response = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        payment.refresh_from_db()
+        user_subscription.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertEqual(payment.provider_payment_id, "CONF-STATUS-1")
+        self.assertEqual(user_subscription.status, UserSubscription.Status.ACTIVE)
+        self.assertIsNotNone(user_subscription.end_date)
+        expected_seconds = self.plan.duration_days * 24 * 60 * 60
+        actual_seconds = (user_subscription.end_date - before).total_seconds()
+        self.assertLess(abs(actual_seconds - expected_seconds), 120)
