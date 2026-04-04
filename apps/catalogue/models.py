@@ -561,7 +561,9 @@ class CourseReview(models.Model):
         ]
     )
     content = models.TextField(blank=True, default='')
-    is_approved = models.BooleanField(default=True)
+    is_approved = models.BooleanField(default=False)
+    is_rejected = models.BooleanField(default=False)
+    is_featured = models.BooleanField(default=False)
     helpful_count = models.PositiveIntegerField(default=0)
     report_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

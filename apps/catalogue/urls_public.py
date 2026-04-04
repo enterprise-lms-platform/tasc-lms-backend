@@ -7,6 +7,9 @@ from .views_public import (
     PublicTagViewSet,
     PublicStatsViewSet,
     TrustedClientsViewSet,
+    PublicTestimonialsViewSet,
+    PublicDemoRequestViewSet,
+    PublicInstructorViewSet,
 )
 from apps.payments.views_public import PublicSubscriptionPlanViewSet
 
@@ -18,6 +21,9 @@ router.register(r'categories', PublicCategoryViewSet, basename='public-category'
 router.register(r'tags', PublicTagViewSet, basename='public-tag')
 router.register(r'stats', PublicStatsViewSet, basename='public-stats')
 router.register(r'clients', TrustedClientsViewSet, basename='public-clients')
+router.register(r'testimonials', PublicTestimonialsViewSet, basename='public-testimonials')
+router.register(r'demo-requests', PublicDemoRequestViewSet, basename='public-demo-requests')
+router.register(r'instructors', PublicInstructorViewSet, basename='public-instructors')
 
 urlpatterns = [
     path('', include(router.urls)),

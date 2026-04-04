@@ -316,6 +316,34 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         })
 
 
+    @extend_schema(summary='Export invoices as CSV')
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/payments/invoices/export-csv/"""
+        import csv as csv_module
+        from django.http import HttpResponse
+        qs = self.get_queryset()
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="invoices.csv"'
+        writer = csv_module.writer(response)
+        writer.writerow([
+            'ID', 'Invoice Number', 'Customer', 'Amount', 'Currency',
+            'Status', 'Due Date', 'Created At',
+        ])
+        for inv in qs.select_related('user'):
+            writer.writerow([
+                inv.id,
+                inv.invoice_number,
+                inv.user.get_full_name() or inv.user.email if inv.user else '',
+                inv.total_amount,
+                getattr(inv, 'currency', 'USD'),
+                inv.status,
+                inv.due_date,
+                inv.created_at,
+            ])
+        return response
+
+
 @extend_schema(
     tags=['Payments - Transactions'],
     description='Manage payment transactions',

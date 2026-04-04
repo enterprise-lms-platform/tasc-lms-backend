@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from .models import Organization
+from .models import Organization, DemoRequest
 
 User = get_user_model()
 
@@ -83,3 +83,23 @@ class UserSuperadminSerializer(serializers.ModelSerializer):
             "failed_login_attempts",
             "account_locked_until",
         ]
+
+
+class DemoRequestSerializer(serializers.ModelSerializer):
+    """Full representation of a demo request for superadmin."""
+
+    class Meta:
+        model = DemoRequest
+        fields = [
+            'id', 'first_name', 'last_name', 'email', 'company',
+            'team_size', 'phone', 'status', 'notes', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class DemoRequestCreateSerializer(serializers.ModelSerializer):
+    """Public-facing serializer for submitting a demo request (no auth)."""
+
+    class Meta:
+        model = DemoRequest
+        fields = ['first_name', 'last_name', 'email', 'company', 'team_size', 'phone']

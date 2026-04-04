@@ -941,14 +941,19 @@ class PublicCourseDetailSerializer(CourseListSerializer):
 class CourseReviewSerializer(serializers.ModelSerializer):
     """Serializer for CourseReview model."""
     user_name = serializers.SerializerMethodField()
+    course_title = serializers.CharField(source='course.title', read_only=True)
 
     class Meta:
         model = CourseReview
         fields = [
-            'id', 'course', 'user', 'user_name', 'rating', 'content',
+            'id', 'course', 'course_title', 'user', 'user_name', 'rating', 'content',
+            'is_approved', 'is_rejected', 'is_featured',
             'helpful_count', 'report_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'helpful_count', 'report_count', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'helpful_count', 'report_count', 'created_at', 'updated_at',
+            'course_title', 'user_name',
+        ]
 
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):

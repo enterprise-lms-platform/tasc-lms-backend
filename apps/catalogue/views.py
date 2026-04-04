@@ -302,6 +302,33 @@ class CourseViewSet(viewsets.ModelViewSet):
             'pending_approval': qs.filter(status=Course.Status.PENDING_APPROVAL).count(),
         })
 
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/catalogue/courses/export-csv/"""
+        import csv as csv_module
+        from django.http import HttpResponse
+        qs = self.get_queryset().select_related('instructor', 'category')
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="courses.csv"'
+        writer = csv_module.writer(response)
+        writer.writerow([
+            'ID', 'Title', 'Status', 'Category', 'Instructor',
+            'Level', 'Price', 'Enrollment Count', 'Created At',
+        ])
+        for course in qs:
+            writer.writerow([
+                course.id,
+                course.title,
+                course.status,
+                course.category.name if course.category else '',
+                course.instructor.get_full_name() if course.instructor else '',
+                course.level,
+                course.price,
+                getattr(course, 'enrollment_count', 0),
+                course.created_at,
+            ])
+        return response
+
     @extend_schema(
         summary='List courses',
         description='Returns paginated list of courses with filtering options',

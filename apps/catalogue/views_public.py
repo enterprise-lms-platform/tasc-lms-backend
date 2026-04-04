@@ -5,19 +5,24 @@ These endpoints are accessible without authentication for public browsing.
 """
 
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.decorators import action
 
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Avg
+from django.contrib.auth import get_user_model
 
-from .models import Category, Course, Tag
+from .models import Category, Course, Tag, CourseReview
 from .serializers import (
     CategorySerializer,
     TagSerializer,
     CourseListSerializer,
     PublicCourseDetailSerializer,
+    CourseReviewSerializer,
 )
+from apps.accounts.models import DemoRequest
+from apps.accounts.serializers_superadmin import DemoRequestCreateSerializer
 
 
 @extend_schema(
@@ -339,3 +344,86 @@ class TrustedClientsViewSet(viewsets.ViewSet):
             {'name': 'DataDynamics', 'logo_url': ''},
         ]
         return Response(clients)
+
+
+@extend_schema(tags=['Public - Testimonials'])
+class PublicTestimonialsViewSet(viewsets.ViewSet):
+    """
+    GET /api/v1/public/testimonials/
+    Returns superadmin-featured reviews for landing page testimonial sections.
+    No authentication required.
+    """
+    permission_classes = [AllowAny]
+
+    def list(self, request):
+        reviews = (
+            CourseReview.objects
+            .filter(is_featured=True, is_approved=True)
+            .select_related('user', 'course')
+            .order_by('-updated_at')[:20]
+        )
+        return Response(CourseReviewSerializer(reviews, many=True).data)
+
+
+@extend_schema(tags=['Public - Demo Requests'])
+class PublicDemoRequestViewSet(viewsets.ViewSet):
+    """
+    POST /api/v1/public/demo-requests/
+    Submit a demo request from the /for-business page. No authentication required.
+    """
+    permission_classes = [AllowAny]
+
+    def create(self, request):
+        serializer = DemoRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {'detail': 'Demo request submitted. Our team will be in touch shortly.'},
+            status=201,
+        )
+
+
+@extend_schema(tags=['Public - Instructors'])
+class PublicInstructorViewSet(viewsets.ViewSet):
+    """
+    GET /api/v1/public/instructors/{id}/
+    Returns a public instructor profile with bio, stats, and social links.
+    No authentication required.
+    """
+    permission_classes = [AllowAny]
+
+    def retrieve(self, request, pk=None):
+        User = get_user_model()
+        try:
+            instructor = User.objects.get(pk=pk, role='instructor', is_active=True)
+        except User.DoesNotExist:
+            return Response({'detail': 'Instructor not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        total_courses = Course.objects.filter(instructor=instructor, status='published').count()
+
+        from apps.learning.models import Enrollment
+        total_students = (
+            Enrollment.objects
+            .filter(course__instructor=instructor)
+            .values('user')
+            .distinct()
+            .count()
+        )
+
+        rating_data = (
+            CourseReview.objects
+            .filter(course__instructor=instructor, is_approved=True)
+            .aggregate(avg=Avg('rating'), count=Count('id'))
+        )
+
+        return Response({
+            'id': instructor.id,
+            'name': instructor.get_full_name() or instructor.email,
+            'bio': instructor.bio or '',
+            'avatar_url': instructor.avatar,
+            'rating': round(rating_data['avg'], 1) if rating_data['avg'] else None,
+            'total_reviews': rating_data['count'],
+            'total_students': total_students,
+            'total_courses': total_courses,
+            'social_links': {},
+        })
