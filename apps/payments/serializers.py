@@ -449,6 +449,26 @@ class PesapalRecurringInitiateSerializer(serializers.Serializer):
             return Subscription.objects.get(id=value, status="active")
         except Subscription.DoesNotExist:
             raise serializers.ValidationError("Subscription plan not found or inactive.")
+
+
+class PesapalSubscriptionOneTimeInitiateSerializer(serializers.Serializer):
+    """
+    Request body for POST /api/v1/payments/pesapal/initiate-subscription-onetime/
+    Client sends catalog plan id only; standard Pesapal SubmitOrderRequest (not recurring).
+    """
+
+    subscription_id = serializers.IntegerField()
+    currency = serializers.ChoiceField(
+        choices=Payment.CURRENCIES, default="UGX", required=False
+    )
+
+    def validate_subscription_id(self, value):
+        from .models import Subscription
+
+        try:
+            return Subscription.objects.get(id=value, status="active")
+        except Subscription.DoesNotExist:
+            raise serializers.ValidationError("Subscription plan not found or inactive.")
  
  
 class PesapalWebhookQuerySerializer(serializers.Serializer):
