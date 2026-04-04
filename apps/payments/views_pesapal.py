@@ -40,6 +40,31 @@ from .services.pesapal_services import PesapalService
 logger = logging.getLogger(__name__)
 
 
+def _release_paused_subscription_for_failed_recurring(payment):
+    """
+    Recurring checkout leaves UserSubscription PAUSED until payment completes.
+    On terminal non-success (failed/cancelled payment row), cancel a still-PAUSED
+    linked sub so PesapalRecurringViewSet.initiate can retry.
+    Same local fields as PesapalRecurringViewSet.cancel (without the Pesapal API call).
+    """
+    if payment.payment_method != "pesapal":
+        return
+    meta = payment.metadata or {}
+    sub_id = meta.get("user_subscription_id")
+    if not sub_id:
+        return
+    try:
+        us = UserSubscription.objects.get(id=sub_id)
+    except UserSubscription.DoesNotExist:
+        return
+    if us.status != UserSubscription.Status.PAUSED:
+        return
+    us.status = UserSubscription.Status.CANCELLED
+    us.cancelled_at = timezone.now()
+    us.auto_renew = False
+    us.save(update_fields=["status", "cancelled_at", "auto_renew"])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # One-time payments
 # ─────────────────────────────────────────────────────────────────────────────
@@ -188,9 +213,11 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
             elif pesapal_status == "FAILED":
                 payment.status = "failed"
                 payment.save(update_fields=["status"])
+                _release_paused_subscription_for_failed_recurring(payment)
             elif pesapal_status == "INVALID":
                 payment.status = "cancelled"
                 payment.save(update_fields=["status"])
+                _release_paused_subscription_for_failed_recurring(payment)
 
         return Response(
             {
@@ -228,6 +255,7 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
         if result["success"]:
             payment.status = "cancelled"
             payment.save(update_fields=["status"])
+            _release_paused_subscription_for_failed_recurring(payment)
             log_event(
                 action="updated",
                 resource="payment",
@@ -535,10 +563,12 @@ class PesapalWebhookView(APIView):
         elif pesapal_status == "FAILED" and payment.status == "pending":
             payment.status = "failed"
             payment.save(update_fields=["status"])
+            _release_paused_subscription_for_failed_recurring(payment)
 
         elif pesapal_status == "INVALID":
             payment.status = "cancelled"
             payment.save(update_fields=["status"])
+            _release_paused_subscription_for_failed_recurring(payment)
 
         return Response({"success": True})
 
