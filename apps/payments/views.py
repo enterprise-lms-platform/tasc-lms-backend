@@ -976,6 +976,37 @@ class PaymentViewSet(viewsets.ModelViewSet):
         ],
         responses={200: OpenApiResponse(description='List of banks')},
     )
+    @extend_schema(
+        summary='Revenue breakdown by organization',
+        description='Returns total revenue grouped by organization for superadmin dashboards',
+    )
+    @action(detail=False, methods=['get'], url_path='revenue-by-org')
+    def revenue_by_org(self, request):
+        """Revenue totals grouped by organization."""
+        from django.db.models import Sum
+        from rest_framework.exceptions import PermissionDenied
+
+        if not hasattr(request.user, 'role') or request.user.role not in ['tasc_admin', 'finance']:
+            raise PermissionDenied('Superadmin or finance access required.')
+
+        rows = (
+            Transaction.objects.filter(status='completed', organization__isnull=False)
+            .values('organization__id', 'organization__name')
+            .annotate(revenue=Sum('amount'))
+            .order_by('-revenue')
+        )
+
+        data = [
+            {
+                'organization_id': r['organization__id'],
+                'organization': r['organization__name'],
+                'revenue': str(r['revenue'] or 0),
+            }
+            for r in rows
+        ]
+
+        return Response({'results': data})
+
     @action(detail=False, methods=['get'], url_path='banks')
     def get_banks(self, request):
         """Get list of banks for a country"""

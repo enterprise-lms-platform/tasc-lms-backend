@@ -1,5 +1,9 @@
+from datetime import timedelta
+
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.db.models import Count
+from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -330,6 +334,65 @@ class SecurityStatsView(APIView):
             "locked_accounts": locked_accounts,
             "active_sessions": 0,
             "mfa_adoption_percent": mfa_percent,
+        })
+
+
+class UserGrowthStatsView(APIView):
+    """GET /api/v1/superadmin/analytics/user-growth/"""
+    permission_classes = [IsTascAdminUser]
+
+    @staticmethod
+    def _pct_change(curr, prev):
+        if prev == 0:
+            return 0.0
+        return round(((curr - prev) / prev) * 100, 1)
+
+    def get(self, request):
+        now = timezone.now()
+        period_start = now - timedelta(days=30)
+        prev_start   = now - timedelta(days=60)
+
+        # New signups
+        curr_signups = User.objects.filter(date_joined__gte=period_start).count()
+        prev_signups = User.objects.filter(date_joined__gte=prev_start, date_joined__lt=period_start).count()
+
+        # Active users (logged in last 30 days)
+        curr_active = User.objects.filter(last_login__gte=period_start, is_active=True).count()
+        prev_active = User.objects.filter(last_login__gte=prev_start, last_login__lt=period_start, is_active=True).count()
+
+        # Returning users (logged in this period, joined before this period)
+        curr_returning = User.objects.filter(last_login__gte=period_start, date_joined__lt=period_start, is_active=True).count()
+        prev_returning = User.objects.filter(last_login__gte=prev_start, last_login__lt=period_start, date_joined__lt=prev_start, is_active=True).count()
+
+        # Churned: active in prev window but not in current window
+        curr_churned = User.objects.filter(last_login__gte=prev_start, last_login__lt=period_start).exclude(last_login__gte=period_start).count()
+        pre_prev_start = now - timedelta(days=90)
+        prev_churned  = User.objects.filter(last_login__gte=pre_prev_start, last_login__lt=prev_start).exclude(last_login__gte=prev_start).count()
+
+        # Monthly signups — last 6 months
+        six_months_ago = now - timedelta(days=180)
+        monthly_qs = (
+            User.objects
+            .filter(date_joined__gte=six_months_ago)
+            .annotate(month=TruncMonth('date_joined'))
+            .values('month')
+            .annotate(count=Count('id'))
+            .order_by('month')
+        )
+        monthly_signups = [
+            {'month': row['month'].strftime('%b'), 'count': row['count']}
+            for row in monthly_qs
+        ]
+
+        churn_change = self._pct_change(curr_churned, prev_churned)
+        return Response({
+            'metrics': [
+                {'label': 'New Signups',     'value': curr_signups,  'change': self._pct_change(curr_signups, prev_signups),   'positive': self._pct_change(curr_signups, prev_signups) >= 0},
+                {'label': 'Active Users',    'value': curr_active,   'change': self._pct_change(curr_active, prev_active),     'positive': self._pct_change(curr_active, prev_active) >= 0},
+                {'label': 'Returning Users', 'value': curr_returning,'change': self._pct_change(curr_returning, prev_returning),'positive': self._pct_change(curr_returning, prev_returning) >= 0},
+                {'label': 'Churned',         'value': curr_churned,  'change': churn_change,                                    'positive': churn_change <= 0},
+            ],
+            'monthly_signups': monthly_signups,
         })
 
 

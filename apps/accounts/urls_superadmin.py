@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views_superadmin import (
     OrganizationSuperadminViewSet, UserSuperadminViewSet,
-    SecurityStatsView, SystemHealthView,
+    SecurityStatsView, SystemHealthView, UserGrowthStatsView,
     SuperadminReviewViewSet, DemoRequestViewSet,
     SystemSettingsView, SMTPSettingsView,
     SecurityPolicyView, TerminateAllSessionsView,
@@ -23,6 +23,8 @@ urlpatterns = [
     path("security/stats/", SecurityStatsView.as_view(), name="security-stats"),
     path("security/policy/", SecurityPolicyView.as_view(), name="security-policy"),
     path("security/terminate-sessions/", TerminateAllSessionsView.as_view(), name="terminate-sessions"),
+    # Analytics
+    path("analytics/user-growth/", UserGrowthStatsView.as_view(), name="user-growth-stats"),
     # System
     path("system/health/", SystemHealthView.as_view(), name="system-health"),
     path("system/settings/", SystemSettingsView.as_view(), name="system-settings"),

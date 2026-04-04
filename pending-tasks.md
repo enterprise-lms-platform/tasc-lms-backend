@@ -109,13 +109,13 @@ Invoice.transactions -> Transaction (related_name="transactions")
 | LOW | 23 | B2B pricing tiers | `apps/payments/` | `/for-business` |
 | ✅ | 38 | ~~System settings/health~~ | `apps/accounts/views_superadmin.py` | `SystemSettingsPage` |
 | ✅ | 45 | ~~Activity log summary~~ | `apps/audit/views.py` | `ManagerActivityPage` |
-| HIGH | 64 | Bulk export endpoints (CSV/PDF) | `apps/payments/views.py`, `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | Finance Export buttons, Superadmin Export buttons (F28) |
-| HIGH | 65 | Superadmin list endpoints for table data | `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | AllCoursesPage table, InstructorsPage table, InvoicesPage table, CertificationsPage table, AssessmentsPage table (F22) |
-| HIGH | 66 | Pesapal gateway health/stats endpoint | `apps/payments/views.py` | GatewayPesapalPage KPIs + transaction list (F24) |
-| HIGH | 67 | System settings PATCH + SMTP config + test email | `apps/accounts/views_superadmin.py` | SystemSettingsPage Save buttons (F29) |
-| HIGH | 68 | Security policy endpoints (MFA/password/session save + terminate all sessions) | `apps/accounts/views_superadmin.py` | SecurityPage Save buttons (F30) |
-| HIGH | 69 | Pesapal config save + test connection | `apps/payments/views_pesapal.py` | GatewaySettingsPage Save/Test buttons (F31) |
-| MED | 70 | User invite endpoint (email invite flow) | `apps/accounts/views.py` or `views_superadmin.py` | InstructorsPage Invite Instructor button (F32) |
+| ✅ | 64 | ~~Bulk export endpoints (CSV/PDF)~~ | `apps/payments/views.py`, `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | Done — Finance Export buttons, Superadmin Export buttons wired [4 Apr] (F28) |
+| ✅ | 65 | ~~Superadmin list endpoints for table data~~ | `apps/accounts/views_superadmin.py`, `apps/catalogue/views.py` | Done — AllCoursesPage, InstructorsPage, InvoicesPage, CertificationsPage, AssessmentsPage tables wired [30 Mar] (F22) |
+| ✅ | 66 | ~~Pesapal gateway health/stats endpoint~~ | `apps/payments/views.py` | Done — GatewayPesapalPage KPIs + transaction list wired [30 Mar] (F24) |
+| ✅ | 67 | ~~System settings PATCH + SMTP config + test email~~ | `apps/accounts/views_superadmin.py` | Done — SystemSettingsPage Save buttons wired [4 Apr] (F29) |
+| ✅ | 68 | ~~Security policy endpoints (MFA/password/session save + terminate all sessions)~~ | `apps/accounts/views_superadmin.py` | Done — SecurityPage Save buttons wired [4 Apr] (F30) |
+| HIGH | 69 | Pesapal config save + test connection | `apps/payments/views_pesapal.py` | GatewaySettingsPage Save/Test buttons (F51) — Frontend wired [4 Apr], waiting for PATCH/POST endpoints |
+| ✅ | 70 | ~~User invite endpoint (email invite flow)~~ | `apps/accounts/views.py` or `views_superadmin.py` | Done — InstructorsPage Invite Instructor button wired [4 Apr] (F32) |
 | MED | 71 | Subscription plan admin PATCH endpoint | `apps/payments/views.py` | FinancePricingPage Edit Plans / Manage Plan buttons (F34) |
 
 ---

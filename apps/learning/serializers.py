@@ -5,7 +5,7 @@ from datetime import timedelta
 from drf_spectacular.utils import extend_schema_field
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer, SavedCourse
+    QuizSubmission, QuizAnswer, SavedCourse, Workshop
 )
 from apps.catalogue.models import Quiz, QuizQuestion
 from apps.catalogue.models import Course, Session
@@ -744,3 +744,48 @@ class SavedCourseSerializer(serializers.ModelSerializer):
 
     def get_category_name(self, obj):
         return obj.course.category.name if obj.course.category else None
+
+
+class WorkshopSerializer(serializers.ModelSerializer):
+    """Read serializer for Workshop model."""
+    instructor_name = serializers.SerializerMethodField()
+    instructor_email = serializers.SerializerMethodField()
+    participants = serializers.IntegerField(source='participants_count', read_only=True)
+
+    class Meta:
+        model = Workshop
+        fields = [
+            'id', 'title', 'description', 'location',
+            'start_date', 'end_date',
+            'max_participants', 'participants', 'participants_count',
+            'status', 'grading_type', 'category',
+            'instructor', 'instructor_name', 'instructor_email',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'instructor']
+
+    def get_instructor_name(self, obj):
+        return obj.instructor.get_full_name() or obj.instructor.email
+
+    def get_instructor_email(self, obj):
+        return obj.instructor.email
+
+
+class WorkshopCreateUpdateSerializer(serializers.ModelSerializer):
+    """Write serializer for Workshop model."""
+
+    class Meta:
+        model = Workshop
+        fields = [
+            'title', 'description', 'location',
+            'start_date', 'end_date',
+            'max_participants', 'participants_count',
+            'status', 'grading_type', 'category',
+        ]
+
+    def validate(self, attrs):
+        start = attrs.get('start_date')
+        end = attrs.get('end_date')
+        if start and end and end < start:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
+        return attrs
