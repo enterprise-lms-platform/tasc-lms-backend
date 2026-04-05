@@ -26,6 +26,51 @@ PESAPAL_DEMO_BASE = "https://cybqa.pesapal.com/pesapalv3"
 PESAPAL_LIVE_BASE = "https://pay.pesapal.com/v3"
 
 
+def pesapal_get_request_query(request, *param_names):
+    """
+    Return the first non-empty query value among Pesapal parameter name variants.
+    Supports documented PascalCase (OrderTrackingId) and legacy camelCase/snake_case.
+    """
+    for name in param_names:
+        val = request.GET.get(name)
+        if val is not None and str(val).strip() != "":
+            return str(val).strip()
+    return None
+
+
+def _pesapal_billing_str(value, default=""):
+    if value is None:
+        return default
+    s = str(value).strip()
+    return s if s else default
+
+
+def _pesapal_billing_address_for_user(user) -> dict:
+    """Shared billing_address for SubmitOrderRequest; strings only, no None in JSON."""
+    email = _pesapal_billing_str(getattr(user, "email", None), "")
+    phone = getattr(user, "phone_number", None)
+    if phone is not None:
+        phone = str(phone).strip()
+    else:
+        phone = ""
+    first = user.first_name or (email.split("@")[0] if email else "Customer")
+    last = _pesapal_billing_str(getattr(user, "last_name", None), "")
+    return {
+        "email_address": email,
+        "phone_number": phone,
+        "country_code": "UG",
+        "first_name": first,
+        "middle_name": "",
+        "last_name": last,
+        "line_1": "",
+        "line_2": "",
+        "city": "Kampala",
+        "state": "",
+        "postal_code": "",
+        "zip_code": "",
+    }
+
+
 class PesapalService:
     """
     Handles all communication with the Pesapal v3 API.
@@ -38,8 +83,8 @@ class PesapalService:
     def __init__(self):
         self.consumer_key = settings.PESAPAL_CONSUMER_KEY
         self.consumer_secret = settings.PESAPAL_CONSUMER_SECRET
+        self.base_url = settings.PESAPAL_BASE_URL or PESAPAL_DEMO_BASE or PESAPAL_LIVE_BASE
         env = getattr(settings, "PESAPAL_ENV", "demo")
-        self.base_url = PESAPAL_LIVE_BASE if env == "live" else PESAPAL_DEMO_BASE
         self.ipn_url = getattr(settings, "PESAPAL_IPN_URL", "")
         self.callback_url = getattr(settings, "PESAPAL_CALLBACK_URL", "")
 
@@ -50,7 +95,6 @@ class PesapalService:
     def _get_token(self) -> str:
         """
         Returns a valid bearer token, fetching a fresh one if needed.
-        Token is cached in Django's cache backend (Redis / memcache / local).
         """
         cached = cache.get(self.TOKEN_CACHE_KEY)
         if cached:
@@ -82,6 +126,11 @@ class PesapalService:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+    @staticmethod
+    def _format_ddmmyyyy(d) -> str:
+        """Pesapal recurring expects dates in dd-MM-yyyy."""
+        return d.strftime("%d-%m-%Y")
 
     def _post(self, path: str, payload: dict) -> dict:
         resp = requests.post(
@@ -156,29 +205,17 @@ class PesapalService:
             }
         """
         user = payment.user
-        ipn_id = getattr(settings, "PESAPAL_IPN_ID", "")
+        ipn_id = getattr(settings, "PESAPAL_IPN_ID", None)
+        notification_id = str(ipn_id).strip() if ipn_id is not None else ""
 
         payload = {
             "id": str(payment.id),
             "currency": payment.currency,
             "amount": float(payment.amount),
             "description": payment.description or f"Payment {payment.id}",
-            "callback_url": self.callback_url,
-            "notification_id": ipn_id,
-            "billing_address": {
-                "email_address": user.email,
-                "phone_number": getattr(user, "phone_number", ""),
-                "country_code": "UG",
-                "first_name": user.first_name or user.email.split("@")[0],
-                "middle_name": "",
-                "last_name": user.last_name or "",
-                "line_1": "",
-                "line_2": "",
-                "city": "Kampala",
-                "state": "",
-                "postal_code": "",
-                "zip_code": "",
-            },
+            "callback_url": self.callback_url or "",
+            "notification_id": notification_id,
+            "billing_address": _pesapal_billing_address_for_user(user),
         }
 
         try:
@@ -215,45 +252,35 @@ class PesapalService:
         Returns same shape as initialize_payment().
         """
         user = payment.user
-        ipn_id = getattr(settings, "PESAPAL_IPN_ID", "")
+        ipn_id = getattr(settings, "PESAPAL_IPN_ID", None)
+        notification_id = str(ipn_id).strip() if ipn_id is not None else ""
 
         billing_cycle_map = {
             "monthly": "MONTHLY",
             "quarterly": "MONTHLY",   # Pesapal has no QUARTERLY; bill monthly x3
-            "yearly": "ANNUALLY",
+            "yearly": "YEARLY",
         }
         frequency = billing_cycle_map.get(subscription_plan.billing_cycle, "MONTHLY")
 
-        start_date = timezone.now().date().isoformat()
-        end_date = (timezone.now() + timedelta(days=365)).date().isoformat()
+        start_date = self._format_ddmmyyyy(timezone.now().date())
+        # Phase 1 target: subscription activation duration is 6 months (plan-derived).
+        duration_days = getattr(subscription_plan, "duration_days", 180)
+        end_date = self._format_ddmmyyyy((timezone.now() + timedelta(days=duration_days)).date())
 
         payload = {
             "id": str(payment.id),
             "currency": payment.currency,
             "amount": float(payment.amount),
             "description": f"{subscription_plan.name} subscription",
-            "callback_url": self.callback_url,
-            "notification_id": ipn_id,
+            "callback_url": self.callback_url or "",
+            "notification_id": notification_id,
             "account_number": str(user.id),
             "subscription_details": {
                 "start_date": start_date,
                 "end_date": end_date,
                 "frequency": frequency,
             },
-            "billing_address": {
-                "email_address": user.email,
-                "phone_number": getattr(user, "phone_number", ""),
-                "country_code": "UG",
-                "first_name": user.first_name or user.email.split("@")[0],
-                "middle_name": "",
-                "last_name": user.last_name or "",
-                "line_1": "",
-                "line_2": "",
-                "city": "Kampala",
-                "state": "",
-                "postal_code": "",
-                "zip_code": "",
-            },
+            "billing_address": _pesapal_billing_address_for_user(user),
         }
 
         try:
@@ -300,16 +327,17 @@ class PesapalService:
                 "/api/Transactions/GetTransactionStatus",
                 params={"orderTrackingId": order_tracking_id},
             )
-            status_code = data.get("payment_status_description", "").upper()
+            # Pesapal may return JSON null; dict.get("k", "") still returns None if the key exists with null.
+            status_code = (data.get("payment_status_description") or "").upper()
 
             return {
                 "success": True,
                 "status": status_code,
-                "payment_method": data.get("payment_method", ""),
+                "payment_method": data.get("payment_method") or "",
                 "amount": data.get("amount"),
-                "currency": data.get("currency"),
-                "confirmation_code": data.get("confirmation_code", ""),
-                "message": data.get("message", ""),
+                "currency": data.get("currency") or "",
+                "confirmation_code": data.get("confirmation_code") or "",
+                "message": data.get("message") or "",
                 "raw": data,
             }
         except Exception as exc:
@@ -379,12 +407,39 @@ class PesapalService:
         This method verifies the transaction and returns a result dict
         that the view uses to update the Payment record.
         """
-        order_tracking_id = request.GET.get("orderTrackingId")
-        merchant_reference = request.GET.get("orderMerchantReference")  # = payment.id
-        notification_type = request.GET.get("orderNotificationType", "")
+        order_tracking_id = pesapal_get_request_query(
+            request,
+            "OrderTrackingId",
+            "orderTrackingId",
+            "order_tracking_id",
+        )
+        merchant_reference = (
+            pesapal_get_request_query(
+                request,
+                "OrderMerchantReference",
+                "orderMerchantReference",
+                "order_merchant_reference",
+            )
+            or ""
+        )
+        notification_type = (
+            pesapal_get_request_query(
+                request,
+                "OrderNotificationType",
+                "orderNotificationType",
+                "order_notification_type",
+            )
+            or ""
+        )
 
         if not order_tracking_id:
-            return {"success": False, "message": "Missing orderTrackingId"}
+            return {
+                "success": False,
+                "message": "Missing order tracking id",
+                "order_tracking_id": "",
+                "merchant_reference": merchant_reference,
+                "notification_type": notification_type,
+            }
 
         logger.info(
             "Pesapal IPN received: tracking_id=%s ref=%s type=%s",
@@ -397,4 +452,5 @@ class PesapalService:
         result = self.verify_payment(order_tracking_id)
         result["order_tracking_id"] = order_tracking_id
         result["merchant_reference"] = merchant_reference
+        result["notification_type"] = notification_type
         return result

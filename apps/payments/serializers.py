@@ -51,7 +51,7 @@ class CreatePaymentSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     
     def validate(self, data):
-        from learning.models import Course
+        from apps.catalogue.models import Course
         
         # If course_id provided, validate it exists
         course_id = data.get('course_id')
@@ -413,7 +413,7 @@ class PesapalInitiateSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
  
     def validate(self, data):
-        from catalogue.models import Course  # adjust import path to your project
+        from apps.catalogue.models import Course
  
         course_id = data.get("course_id")
         if course_id:
@@ -445,6 +445,26 @@ class PesapalRecurringInitiateSerializer(serializers.Serializer):
     def validate_subscription_id(self, value):
         from .models import Subscription
  
+        try:
+            return Subscription.objects.get(id=value, status="active")
+        except Subscription.DoesNotExist:
+            raise serializers.ValidationError("Subscription plan not found or inactive.")
+
+
+class PesapalSubscriptionOneTimeInitiateSerializer(serializers.Serializer):
+    """
+    Request body for POST /api/v1/payments/pesapal/initiate-subscription-onetime/
+    Client sends catalog plan id only; standard Pesapal SubmitOrderRequest (not recurring).
+    """
+
+    subscription_id = serializers.IntegerField()
+    currency = serializers.ChoiceField(
+        choices=Payment.CURRENCIES, default="UGX", required=False
+    )
+
+    def validate_subscription_id(self, value):
+        from .models import Subscription
+
         try:
             return Subscription.objects.get(id=value, status="active")
         except Subscription.DoesNotExist:

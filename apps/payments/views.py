@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 import uuid
 import csv
+from django.db.models import Q
 
 from .services.flutterwave_service import FlutterwaveService
 
@@ -315,6 +316,34 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         })
 
 
+    @extend_schema(summary='Export invoices as CSV')
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/payments/invoices/export-csv/"""
+        import csv as csv_module
+        from django.http import HttpResponse
+        qs = self.get_queryset()
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="invoices.csv"'
+        writer = csv_module.writer(response)
+        writer.writerow([
+            'ID', 'Invoice Number', 'Customer', 'Amount', 'Currency',
+            'Status', 'Due Date', 'Created At',
+        ])
+        for inv in qs.select_related('user'):
+            writer.writerow([
+                inv.id,
+                inv.invoice_number,
+                inv.user.get_full_name() or inv.user.email if inv.user else '',
+                inv.total_amount,
+                getattr(inv, 'currency', 'USD'),
+                inv.status,
+                inv.due_date,
+                inv.created_at,
+            ])
+        return response
+
+
 @extend_schema(
     tags=['Payments - Transactions'],
     description='Manage payment transactions',
@@ -603,6 +632,23 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         
         # Set the user
         is_trial = serializer.validated_data.get('is_trial', False)
+
+        # Phase 1: enforce one learner subscription at a time.
+        # Block creation when an ACTIVE/PAUSED subscription already exists with an end_date in the future.
+        now = timezone.now()
+        has_other_active_or_paused = UserSubscription.objects.filter(
+            user=request.user,
+            status__in=[UserSubscription.Status.ACTIVE, UserSubscription.Status.PAUSED],
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gt=now)
+        ).exists()
+
+        if has_other_active_or_paused:
+            return Response(
+                {'error': 'An active subscription already exists for this user.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer.save(user=request.user)
         
         # Configure active access window for Phase 1 gating.
@@ -613,7 +659,7 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
             end_date = timezone.now() + timedelta(days=7)
             subscription.trial_end_date = end_date
         else:
-            end_date = timezone.now() + timedelta(days=180)  # biannual paid access
+            end_date = timezone.now() + timedelta(days=subscription_plan.duration_days)
             subscription.trial_end_date = None
 
         subscription.status = UserSubscription.Status.ACTIVE
@@ -687,8 +733,8 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
         subscription.status = 'active'
         subscription.cancelled_at = None
         
-        # Extend end date using the paid Phase 1 duration (6 months).
-        subscription.end_date = timezone.now() + timedelta(days=180)
+        # Extend end date using the paid Phase 1 duration (plan-derived; 6 months).
+        subscription.end_date = timezone.now() + timedelta(days=subscription.subscription.duration_days)
         
         subscription.save()
         
@@ -930,6 +976,37 @@ class PaymentViewSet(viewsets.ModelViewSet):
         ],
         responses={200: OpenApiResponse(description='List of banks')},
     )
+    @extend_schema(
+        summary='Revenue breakdown by organization',
+        description='Returns total revenue grouped by organization for superadmin dashboards',
+    )
+    @action(detail=False, methods=['get'], url_path='revenue-by-org')
+    def revenue_by_org(self, request):
+        """Revenue totals grouped by organization."""
+        from django.db.models import Sum
+        from rest_framework.exceptions import PermissionDenied
+
+        if not hasattr(request.user, 'role') or request.user.role not in ['tasc_admin', 'finance']:
+            raise PermissionDenied('Superadmin or finance access required.')
+
+        rows = (
+            Transaction.objects.filter(status='completed', organization__isnull=False)
+            .values('organization__id', 'organization__name')
+            .annotate(revenue=Sum('amount'))
+            .order_by('-revenue')
+        )
+
+        data = [
+            {
+                'organization_id': r['organization__id'],
+                'organization': r['organization__name'],
+                'revenue': str(r['revenue'] or 0),
+            }
+            for r in rows
+        ]
+
+        return Response({'results': data})
+
     @action(detail=False, methods=['get'], url_path='banks')
     def get_banks(self, request):
         """Get list of banks for a country"""

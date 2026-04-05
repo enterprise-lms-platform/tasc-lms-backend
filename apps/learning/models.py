@@ -529,3 +529,47 @@ class SavedCourse(models.Model):
 
     def __str__(self):
         return f"{self.user.email} saved {self.course.title}"
+
+class Workshop(models.Model):
+    """
+    Workshop represents an in-person training event.
+    """
+    class Status(models.TextChoices):
+        UPCOMING = 'upcoming', 'Upcoming'
+        ONGOING = 'ongoing', 'Ongoing'
+        COMPLETED = 'completed', 'Completed'
+
+    class GradingType(models.TextChoices):
+        ATTENDANCE = 'attendance', 'Attendance Only'
+        PASS_FAIL = 'pass_fail', 'Pass / Fail'
+        SCORE = 'score', 'Score (0-100)'
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    location = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    max_participants = models.PositiveIntegerField(default=30)
+    participants_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+    grading_type = models.CharField(max_length=20, choices=GradingType.choices, default=GradingType.ATTENDANCE)
+    category = models.CharField(max_length=100, default='General')
+    
+    instructor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='workshops_taught'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-start_date']
+
+    def __str__(self):
+        return self.title
+
+    @property
+    def participants(self):
+        return self.participants_count
+

@@ -203,3 +203,32 @@ class Membership(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} -> {self.organization} ({self.role})"
+
+
+class DemoRequest(models.Model):
+    """
+    Submitted via the /for-business CTA form. Superadmin can view and manage status.
+    """
+    STATUS_CHOICES = [
+        ('new', 'New'),
+        ('contacted', 'Contacted'),
+        ('closed', 'Closed'),
+    ]
+
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    email = models.EmailField()
+    company = models.CharField(max_length=200)
+    team_size = models.CharField(max_length=50)
+    phone = models.CharField(max_length=32, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'accounts_demorequest'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.first_name} {self.last_name} <{self.email}> — {self.company}"

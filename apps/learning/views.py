@@ -9,7 +9,7 @@ from apps.payments.permissions import HasActiveSubscription
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer, SavedCourse
+    QuizSubmission, QuizAnswer, SavedCourse, Workshop
 )
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer, BulkEnrollmentSerializer,
@@ -21,7 +21,7 @@ from .serializers import (
     SubmissionSerializer, SubmissionCreateSerializer,
     SubmissionUpdateSerializer, GradeSubmissionSerializer,
     QuizSubmissionSerializer, QuizSubmissionCreateSerializer,
-    SavedCourseSerializer,
+    SavedCourseSerializer, WorkshopSerializer, WorkshopCreateUpdateSerializer,
 )
 
 
@@ -1134,3 +1134,80 @@ class SavedCourseViewSet(
                 {'saved': True, 'id': saved.id},
                 status=status.HTTP_201_CREATED
             )
+
+
+@extend_schema(
+    tags=['Learning - Workshops'],
+    description='Manage in-person training workshops',
+)
+class WorkshopViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for Workshops (in-person training events).
+    - Instructors see only their own workshops.
+    - TASC admins / LMS managers see all workshops.
+    - No subscription required (workshops are offline events).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return WorkshopCreateUpdateSerializer
+        return WorkshopSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Workshop.objects.select_related('instructor')
+        role = getattr(user, 'role', '')
+        if role in ('tasc_admin', 'lms_manager'):
+            pass  # see all
+        else:
+            qs = qs.filter(instructor=user)
+
+        # Optional filters
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            qs = qs.filter(status=status_param)
+
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(title__icontains=search)
+                | Q(location__icontains=search)
+                | Q(category__icontains=search)
+            )
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(instructor=self.request.user)
+
+    @extend_schema(
+        summary='List workshops',
+        description='Returns workshops for the current instructor (or all for admins)',
+        parameters=[
+            OpenApiParameter(name='status', type=str, description='Filter: upcoming | ongoing | completed'),
+            OpenApiParameter(name='search', type=str, description='Search by title, location, or category'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(summary='Create workshop', request=WorkshopCreateUpdateSerializer)
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @extend_schema(summary='Get workshop detail')
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(summary='Update workshop', request=WorkshopCreateUpdateSerializer)
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    @extend_schema(summary='Partial update workshop', request=WorkshopCreateUpdateSerializer)
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    @extend_schema(summary='Delete workshop')
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)

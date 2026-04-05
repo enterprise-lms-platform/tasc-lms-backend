@@ -78,11 +78,21 @@ class Payment(models.Model):
         return f"{self.user.email} - {self.amount} {self.currency}"
     
     def mark_completed(self):
-        """Mark payment as completed and enroll user in course"""
+        """
+        Mark payment as completed.
+
+        Legacy behavior: enroll learner into `self.course` if it exists.
+        Subscription behavior: subscription activation payments are tagged with
+        `user_subscription_id` inside `metadata` and must NOT enroll learners into a course.
+        """
         self.status = 'completed'
         self.completed_at = timezone.now()
         self.save()
-        
+
+        # Subscription activations should not create course enrollments as a side effect.
+        if self.metadata and self.metadata.get('user_subscription_id'):
+            return
+
         # Enroll user in course if course exists
         if self.course:
             try:
@@ -506,6 +516,10 @@ class Subscription(models.Model):
         ],
         default='monthly'
     )
+
+    # Plan-derived access window for learner entitlements.
+    # Phase 1 target: subscription duration is 6 months (180 days).
+    duration_days = models.PositiveIntegerField(default=180)
     
     # Features and limits
     features = models.JSONField(default=list, blank=True)

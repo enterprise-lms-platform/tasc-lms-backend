@@ -13,6 +13,7 @@ from .views import (
     LearningAnalyticsViewSet,
     BadgeViewSet,
     SavedCourseViewSet,
+    WorkshopViewSet,
 )
 
 router = DefaultRouter()
@@ -27,6 +28,7 @@ router.register(r'submissions', SubmissionViewSet, basename='submission')
 router.register(r'quiz-submissions', QuizSubmissionViewSet, basename='quiz-submission')
 router.register(r'badges', BadgeViewSet, basename='badge')
 router.register(r'saved-courses', SavedCourseViewSet, basename='saved-course')
+router.register(r'workshops', WorkshopViewSet, basename='workshop')
 
 urlpatterns = [
     path('', include(router.urls)),

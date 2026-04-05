@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max, Count
+from django.db.models import Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -280,9 +280,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             if role == User.Role.INSTRUCTOR:
                 queryset = queryset.filter(instructor_id=self.request.user.id)
 
-        return queryset.annotate(
-            enrollment_count=Count('enrollments')
-        ).distinct()
+        # NOTE:
+        # Do not annotate with `enrollment_count` because Course defines a
+        # read-only @property with the same name. Annotating that name causes
+        # Django to try setting the property and crash on list/retrieve.
+        return queryset.distinct()
 
     @extend_schema(
         summary='Course statistics (superadmin)',
@@ -299,6 +301,33 @@ class CourseViewSet(viewsets.ModelViewSet):
             'archived': qs.filter(status=Course.Status.ARCHIVED).count(),
             'pending_approval': qs.filter(status=Course.Status.PENDING_APPROVAL).count(),
         })
+
+    @action(detail=False, methods=['get'], url_path='export-csv')
+    def export_csv(self, request):
+        """GET /api/v1/catalogue/courses/export-csv/"""
+        import csv as csv_module
+        from django.http import HttpResponse
+        qs = self.get_queryset().select_related('instructor', 'category')
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="courses.csv"'
+        writer = csv_module.writer(response)
+        writer.writerow([
+            'ID', 'Title', 'Status', 'Category', 'Instructor',
+            'Level', 'Price', 'Enrollment Count', 'Created At',
+        ])
+        for course in qs:
+            writer.writerow([
+                course.id,
+                course.title,
+                course.status,
+                course.category.name if course.category else '',
+                course.instructor.get_full_name() if course.instructor else '',
+                course.level,
+                course.price,
+                getattr(course, 'enrollment_count', 0),
+                course.created_at,
+            ])
+        return response
 
     @extend_schema(
         summary='List courses',
@@ -608,7 +637,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
         from apps.audit.services import log_event
         log_event(
-            action='submitted_for_approval',
+            action='updated',
             resource='course',
             resource_id=str(course.id),
             actor=request.user,
@@ -1247,7 +1276,6 @@ class SessionViewSet(viewsets.ModelViewSet):
                 ap = item.get('answer_payload')
                 if ap is None:
                     ap = {}
-                expl = (item.get('explanation') or '').strip()
 
                 if qid is not None:
                     try:
@@ -1271,7 +1299,6 @@ class SessionViewSet(viewsets.ModelViewSet):
                     qobj.question_text = qtext
                     qobj.points = _coerce_quiz_question_points(pts, existing_points=qobj.points)
                     qobj.answer_payload = ap if isinstance(ap, dict) else {}
-                    qobj.explanation = expl
                     qobj.save()
                 else:
                     QuizQuestion.objects.create(
@@ -1281,7 +1308,6 @@ class SessionViewSet(viewsets.ModelViewSet):
                         question_text=qtext,
                         points=_coerce_quiz_question_points(pts, existing_points=None),
                         answer_payload=ap if isinstance(ap, dict) else {},
-                        explanation=expl,
                     )
             to_delete = existing_ids - seen_ids
             if to_delete:
@@ -1339,7 +1365,6 @@ class SessionViewSet(viewsets.ModelViewSet):
                     question_text=bq.question_text,
                     points=bq.points,
                     answer_payload=dict(bq.answer_payload or {}),
-                    explanation=bq.explanation or '',
                     source_bank_question=bq,
                 )
                 created.append(qq)
