@@ -5,6 +5,10 @@ from rest_framework.permissions import IsAuthenticated
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
@@ -46,3 +50,43 @@ class ConversationViewSet(viewsets.ModelViewSet):
         conversation = self.get_object()
         updated = conversation.messages.exclude(sender=request.user).filter(is_read=False).update(is_read=True)
         return Response({'status': 'ok', 'messages_marked_read': updated})
+
+    @action(detail=False, methods=['get'], url_path='user-search')
+    def user_search(self, request):
+        """
+        Search for users to start a conversation with.
+        Scoped to the same organization as the requesting user.
+        Any authenticated user can call this (learner, instructor, manager, etc).
+        """
+        query = request.query_params.get('search', '').strip()
+        if len(query) < 2:
+            return Response([])
+
+        # Scope to same org via Membership
+        from apps.accounts.models import Membership
+        org_ids = Membership.objects.filter(user=request.user).values_list('organization_id', flat=True)
+        org_user_ids = Membership.objects.filter(organization_id__in=org_ids).values_list('user_id', flat=True)
+
+        users = User.objects.filter(
+            id__in=org_user_ids,
+            is_active=True,
+        ).filter(
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(email__icontains=query)
+        ).exclude(id=request.user.id).values(
+            'id', 'first_name', 'last_name', 'email', 'role'
+        )[:20]
+
+        results = [
+            {
+                'id': u['id'],
+                'name': f"{u['first_name']} {u['last_name']}".strip() or u['email'],
+                'first_name': u['first_name'],
+                'last_name': u['last_name'],
+                'email': u['email'],
+                'role': u['role'],
+            }
+            for u in users
+        ]
+        return Response(results)
