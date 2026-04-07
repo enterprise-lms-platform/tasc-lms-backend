@@ -2,9 +2,12 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from datetime import timedelta
 
 from apps.learning.models import Enrollment, Certificate, QuizSubmission, Discussion, Submission
+
+User = get_user_model()
 
 
 @receiver(post_save, sender=Enrollment)
@@ -77,3 +80,9 @@ def award_badges_on_submission_graded(sender, instance, **kwargs):
     if instance.status == 'graded' and instance.score is not None:
         user = instance.enrollment.user
         _award_badges_safe(user, ['assignment_full_marks'])
+
+
+@receiver(post_save, sender=User)
+def award_badges_on_profile_update(sender, instance, **kwargs):  # noqa: ARG001
+    """Award profile_complete badge when user saves their profile."""
+    _award_badges_safe(instance, ['profile_complete'])
