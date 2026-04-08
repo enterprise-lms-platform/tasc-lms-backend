@@ -62,13 +62,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         if len(query) < 2:
             return Response([])
 
-        # Scope to same org via Membership
-        from apps.accounts.models import Membership
-        org_ids = Membership.objects.filter(user=request.user).values_list('organization_id', flat=True)
-        org_user_ids = Membership.objects.filter(organization_id__in=org_ids).values_list('user_id', flat=True)
-
         users = User.objects.filter(
-            id__in=org_user_ids,
             is_active=True,
         ).filter(
             Q(first_name__icontains=query) |
