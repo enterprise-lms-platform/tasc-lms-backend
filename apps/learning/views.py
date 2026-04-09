@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from apps.payments.permissions import HasActiveSubscription
+from apps.accounts.rbac import get_active_membership_organization
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
@@ -656,7 +657,12 @@ class SubmissionViewSet(viewsets.ModelViewSet):
         base_qs = Submission.objects.select_related(
             'enrollment', 'enrollment__user', 'assignment', 'assignment__session', 'graded_by'
         )
-        if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
+        if user.role == 'org_admin':
+            org = get_active_membership_organization(user)
+            if not org:
+                return base_qs.none()
+            return base_qs.filter(enrollment__organization=org)
+        if user.role in ['instructor', 'lms_manager', 'tasc_admin']:
             return base_qs
         return base_qs.filter(enrollment__user=user)
     
@@ -715,6 +721,12 @@ class SubmissionViewSet(viewsets.ModelViewSet):
             status=Submission.Status.GRADED,
             grade__isnull=False
         )
+        if getattr(request.user, 'role', None) == 'org_admin':
+            org = get_active_membership_organization(request.user)
+            if org:
+                submissions = submissions.filter(enrollment__organization=org)
+            else:
+                submissions = submissions.none()
         
         total = submissions.count()
         graded = submissions.exclude(grade__isnull=True).count()
@@ -749,18 +761,29 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     def stats(self, request):
         """Admin-level assessment statistics."""
         from django.db.models import Avg
-        total_assignments = Submission.objects.count()
-        graded = Submission.objects.filter(status=Submission.Status.GRADED).count()
-        pending = Submission.objects.filter(status=Submission.Status.SUBMITTED).count()
-        avg_grade = Submission.objects.filter(
+        submissions_qs = Submission.objects.all()
+        quiz_qs = QuizSubmission.objects.all()
+        if getattr(request.user, 'role', None) == 'org_admin':
+            org = get_active_membership_organization(request.user)
+            if org:
+                submissions_qs = submissions_qs.filter(enrollment__organization=org)
+                quiz_qs = quiz_qs.filter(enrollment__organization=org)
+            else:
+                submissions_qs = submissions_qs.none()
+                quiz_qs = quiz_qs.none()
+
+        total_assignments = submissions_qs.count()
+        graded = submissions_qs.filter(status=Submission.Status.GRADED).count()
+        pending = submissions_qs.filter(status=Submission.Status.SUBMITTED).count()
+        avg_grade = submissions_qs.filter(
             status=Submission.Status.GRADED, grade__isnull=False
         ).aggregate(avg=Avg('grade'))['avg'] or 0
 
-        total_quizzes = QuizSubmission.objects.count()
-        avg_quiz_score = QuizSubmission.objects.aggregate(avg=Avg('score'))['avg'] or 0
+        total_quizzes = quiz_qs.count()
+        avg_quiz_score = quiz_qs.aggregate(avg=Avg('score'))['avg'] or 0
         quiz_pass_rate = 0
         if total_quizzes > 0:
-            passed = QuizSubmission.objects.filter(passed=True).count()
+            passed = quiz_qs.filter(passed=True).count()
             quiz_pass_rate = round((passed / total_quizzes) * 100, 1)
 
         return Response({
@@ -881,7 +904,12 @@ class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixi
             except (TypeError, ValueError):
                 pass
 
-        if user.role in ['instructor', 'org_admin', 'lms_manager', 'tasc_admin']:
+        if user.role == 'org_admin':
+            org = get_active_membership_organization(user)
+            if not org:
+                return queryset.none()
+            return queryset.filter(enrollment__organization=org)
+        if user.role in ['instructor', 'lms_manager', 'tasc_admin']:
             return queryset
 
         return queryset.filter(enrollment__user=user)

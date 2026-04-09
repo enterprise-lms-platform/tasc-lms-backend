@@ -25,3 +25,18 @@ def is_course_writer(user) -> bool:
         User.Role.LMS_MANAGER,
         User.Role.TASC_ADMIN,
     ]
+
+
+def get_active_membership_organization(user):
+    """Return user's active org for org-scoped roles, else None."""
+    from .models import Membership
+
+    membership = (
+        user.memberships.filter(
+            role__in=[Membership.Role.ORG_ADMIN, Membership.Role.ORG_MANAGER],
+            is_active=True,
+        )
+        .select_related("organization")
+        .first()
+    )
+    return membership.organization if membership else None
