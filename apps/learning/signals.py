@@ -62,7 +62,7 @@ def award_badges_on_quiz(sender, instance, created, **kwargs):
     """Award assessment badges when a quiz is submitted."""
     if created:
         _award_badges_safe(
-            instance.student,
+            instance.enrollment.user,
             ['quiz_submissions_count', 'quiz_perfect_score', 'quiz_pass_streak'],
         )
 
@@ -77,7 +77,7 @@ def award_badges_on_discussion(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Submission)
 def award_badges_on_submission_graded(sender, instance, **kwargs):
     """Award assignment badges when a submission is graded with full marks."""
-    if instance.status == 'graded' and instance.score is not None:
+    if instance.status == 'graded' and instance.grade is not None:
         user = instance.enrollment.user
         _award_badges_safe(user, ['assignment_full_marks'])
 

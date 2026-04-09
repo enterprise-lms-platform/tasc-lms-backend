@@ -10,8 +10,9 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.catalogue.models import Assignment, Category, Course, Session
-from apps.learning.models import Enrollment, SessionProgress, Submission
+from apps.accounts.models import Membership, Organization
+from apps.catalogue.models import Assignment, Category, Course, Session, Quiz
+from apps.learning.models import Enrollment, SessionProgress, Submission, QuizSubmission
 from apps.payments.models import Subscription, UserSubscription
 
 User = get_user_model()
@@ -19,6 +20,7 @@ User = get_user_model()
 ENROLLMENTS_URL = '/api/v1/learning/enrollments/'
 SESSION_PROGRESS_URL = '/api/v1/learning/session-progress/'
 SUBMISSIONS_URL = '/api/v1/learning/submissions/'
+QUIZ_SUBMISSIONS_URL = '/api/v1/learning/quiz-submissions/'
 PRESIGN_URL = '/api/v1/uploads/presign/'
 
 
@@ -556,6 +558,180 @@ class SubmissionApiTest(APITestCase):
         response = self.client.get(SUBMISSIONS_URL, **_auth(self.instructor))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(response.data['results']), 1)
+
+
+class OrgAdminSubmissionScopingTests(APITestCase):
+    """Org admin reads must be scoped to active membership organization."""
+
+    def setUp(self):
+        self.client = APIClient()
+        course, session, self.assignment, self.instructor = _make_assignment_course()
+        self.course = course
+
+        quiz_session = Session.objects.create(
+            course=self.course,
+            title='Quiz Session',
+            order=2,
+            session_type=Session.SessionType.QUIZ,
+        )
+        self.quiz = Quiz.objects.create(session=quiz_session)
+
+        self.org_a = Organization.objects.create(name="Org A")
+        self.org_b = Organization.objects.create(name="Org B")
+
+        self.org_admin = User.objects.create_user(
+            username='org_admin_user',
+            email='org_admin@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin,
+            organization=self.org_a,
+            role=Membership.Role.ORG_ADMIN,
+            is_active=True,
+        )
+
+        self.org_admin_no_membership = User.objects.create_user(
+            username='org_admin_no_membership',
+            email='org_admin_no_membership@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+        self.tasc_admin = User.objects.create_user(
+            username='tasc_admin_user',
+            email='tasc_admin@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+        self.learner_a = User.objects.create_user(
+            username='learner_a',
+            email='learner_a@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_b = User.objects.create_user(
+            username='learner_b',
+            email='learner_b@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+
+        self.enrollment_a = Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.course,
+            organization=self.org_a,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enrollment_b = Enrollment.objects.create(
+            user=self.learner_b,
+            course=self.course,
+            organization=self.org_b,
+            status=Enrollment.Status.ACTIVE,
+        )
+
+        self.submission_a = Submission.objects.create(
+            enrollment=self.enrollment_a,
+            assignment=self.assignment,
+            status=Submission.Status.GRADED,
+            submitted_text='org-a',
+            submitted_at=timezone.now(),
+            grade=88,
+        )
+        self.submission_b = Submission.objects.create(
+            enrollment=self.enrollment_b,
+            assignment=self.assignment,
+            status=Submission.Status.GRADED,
+            submitted_text='org-b',
+            submitted_at=timezone.now(),
+            grade=55,
+        )
+
+        self.quiz_submission_a = QuizSubmission.objects.create(
+            enrollment=self.enrollment_a,
+            quiz=self.quiz,
+            attempt_number=1,
+            score=80,
+            max_score=100,
+            passed=True,
+            time_spent_seconds=120,
+        )
+        self.quiz_submission_b = QuizSubmission.objects.create(
+            enrollment=self.enrollment_b,
+            quiz=self.quiz,
+            attempt_number=1,
+            score=40,
+            max_score=100,
+            passed=False,
+            time_spent_seconds=100,
+        )
+
+    def test_org_admin_sees_only_own_org_submissions(self):
+        response = self.client.get(SUBMISSIONS_URL, **_auth(self.org_admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], self.submission_a.id)
+        self.assertNotEqual(results[0]['id'], self.submission_b.id)
+
+    def test_org_admin_no_active_membership_gets_empty_submissions(self):
+        response = self.client.get(SUBMISSIONS_URL, **_auth(self.org_admin_no_membership))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data.get('results', [])), 0)
+
+    def test_org_admin_sees_only_own_org_quiz_submissions(self):
+        response = self.client.get(QUIZ_SUBMISSIONS_URL, **_auth(self.org_admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], self.quiz_submission_a.id)
+        self.assertNotEqual(results[0]['id'], self.quiz_submission_b.id)
+
+    def test_org_admin_statistics_scoped_to_own_org(self):
+        response = self.client.get(
+            f'{SUBMISSIONS_URL}statistics/',
+            {'course': self.course.id},
+            **_auth(self.org_admin),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total_submissions'], 1)
+        self.assertEqual(response.data['graded'], 1)
+        self.assertEqual(response.data['pending'], 0)
+        self.assertEqual(response.data['average_grade'], 88.0)
+
+    def test_org_admin_stats_fail_closed_without_membership(self):
+        response = self.client.get(f'{SUBMISSIONS_URL}stats/', **_auth(self.org_admin_no_membership))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total_assignments'], 0)
+        self.assertEqual(response.data['graded'], 0)
+        self.assertEqual(response.data['pending'], 0)
+        self.assertEqual(response.data['total_quizzes'], 0)
+        self.assertEqual(response.data['quiz_pass_rate'], 0)
+
+    def test_learner_still_sees_own_data_only(self):
+        response = self.client.get(SUBMISSIONS_URL, **_auth(self.learner_a))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], self.submission_a.id)
+
+    def test_tasc_admin_behavior_preserved(self):
+        response = self.client.get(SUBMISSIONS_URL, **_auth(self.tasc_admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        self.assertEqual(len(results), 2)
 
 
 class SubmissionPresignTest(APITestCase):
