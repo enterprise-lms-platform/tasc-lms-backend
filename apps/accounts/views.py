@@ -267,6 +267,18 @@ def invite_user(request):
                     if update_fields:
                         membership.save(update_fields=update_fields)
 
+            # If tasc_admin invites an org_admin, provision Membership linking user to org.
+            if requester_role == User.Role.TASC_ADMIN and role == User.Role.ORG_ADMIN:
+                org = serializer.validated_data["organization"]
+                Membership.objects.update_or_create(
+                    user=user,
+                    organization=org,
+                    defaults={
+                        "role": Membership.Role.ORG_ADMIN,
+                        "is_active": True,
+                    },
+                )
+
             # Generate token
             uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)

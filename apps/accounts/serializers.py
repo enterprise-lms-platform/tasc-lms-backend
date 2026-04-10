@@ -305,6 +305,7 @@ class InviteUserSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     role = serializers.ChoiceField(choices=User.Role.choices)
+    organization = serializers.IntegerField(required=False, allow_null=True, default=None)
 
     def validate_email(self, value):
         return value.strip().lower()
@@ -317,6 +318,26 @@ class InviteUserSerializer(serializers.Serializer):
                 "Learners should self-register, and TASC Admins require superuser privileges."
             )
         return value
+
+    def validate(self, attrs):
+        role = attrs.get("role")
+        org_id = attrs.get("organization")
+
+        if role == "org_admin":
+            if not org_id:
+                raise serializers.ValidationError(
+                    {"organization": "Organization is required when inviting an org_admin."}
+                )
+            try:
+                attrs["organization"] = Organization.objects.get(pk=org_id)
+            except Organization.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"organization": f"Organization with id {org_id} does not exist."}
+                )
+        else:
+            attrs.pop("organization", None)
+
+        return attrs
 
 
 class VerifyOTPSerializer(serializers.Serializer):

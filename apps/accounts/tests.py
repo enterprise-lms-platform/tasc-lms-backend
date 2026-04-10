@@ -622,6 +622,158 @@ class InviteUserLmsManagerPermissionTests(TestCase):
         self.assertIsNone(log.actor)
 
 
+class InviteOrgAdminProvisioningTests(TestCase):
+    """Tests for tasc_admin inviting org_admin with Membership provisioning."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.invite_url = "/api/v1/admin/users/invite/"
+        self.org = Organization.objects.create(name="Test Org for OrgAdmin")
+        self.admin_user = User.objects.create_user(
+            username="orgadmininviter",
+            email="orgadmininviter@example.com",
+            password="testpass123",
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_tasc_admin_invite_org_admin_creates_membership(self, mock_send):
+        mock_send.return_value = None
+        invite_email = "new.orgadmin@example.com"
+        res = self.client.post(
+            self.invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Org",
+                "last_name": "Admin",
+                "role": "org_admin",
+                "organization": self.org.pk,
+            },
+            format="json",
+            **self._auth_header(self.admin_user),
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        invited = User.objects.get(email__iexact=invite_email)
+        self.assertEqual(invited.role, User.Role.ORG_ADMIN)
+
+        membership = Membership.objects.get(user=invited, organization=self.org)
+        self.assertEqual(membership.role, Membership.Role.ORG_ADMIN)
+        self.assertTrue(membership.is_active)
+
+    def test_invite_org_admin_without_organization_rejected(self):
+        res = self.client.post(
+            self.invite_url,
+            {
+                "email": "no.org@example.com",
+                "first_name": "No",
+                "last_name": "Org",
+                "role": "org_admin",
+            },
+            format="json",
+            **self._auth_header(self.admin_user),
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization", res.data)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_invite_org_admin_does_not_duplicate_membership(self, mock_send):
+        mock_send.return_value = None
+        invite_email = "dupe.orgadmin@example.com"
+
+        # First invite
+        self.client.post(
+            self.invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Dupe",
+                "last_name": "Admin",
+                "role": "org_admin",
+                "organization": self.org.pk,
+            },
+            format="json",
+            **self._auth_header(self.admin_user),
+        )
+        # Second invite (re-invite)
+        res = self.client.post(
+            self.invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Dupe",
+                "last_name": "Admin",
+                "role": "org_admin",
+                "organization": self.org.pk,
+            },
+            format="json",
+            **self._auth_header(self.admin_user),
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        invited = User.objects.get(email__iexact=invite_email)
+        self.assertEqual(
+            Membership.objects.filter(user=invited, organization=self.org).count(), 1
+        )
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_lms_manager_restrictions_unchanged(self, mock_send):
+        """LMS Manager still cannot invite org_admin — only instructors."""
+        mock_send.return_value = None
+        org = Organization.objects.create(name="Manager Org")
+        manager = User.objects.create_user(
+            username="mgr_orgadmin_test",
+            email="mgr_orgadmin_test@example.com",
+            password="testpass123",
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        Membership.objects.create(
+            user=manager, organization=org,
+            role=Membership.Role.ORG_MANAGER, is_active=True,
+        )
+
+        res = self.client.post(
+            self.invite_url,
+            {
+                "email": "mgr.blocked@example.com",
+                "first_name": "Blocked",
+                "last_name": "OrgAdmin",
+                "role": "org_admin",
+                "organization": org.pk,
+            },
+            format="json",
+            **self._auth_header(manager),
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_existing_instructor_invite_still_works(self, mock_send):
+        """The existing instructor invite path is unaffected."""
+        mock_send.return_value = None
+        invite_email = "still.instructor@example.com"
+        res = self.client.post(
+            self.invite_url,
+            {
+                "email": invite_email,
+                "first_name": "Still",
+                "last_name": "Instructor",
+                "role": "instructor",
+            },
+            format="json",
+            **self._auth_header(self.admin_user),
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        invited = User.objects.get(email__iexact=invite_email)
+        self.assertEqual(invited.role, User.Role.INSTRUCTOR)
+        self.assertFalse(Membership.objects.filter(user=invited).exists())
+
+
 @override_settings(
     GOOGLE_CLIENT_ID="test-client-id",
     REST_FRAMEWORK={
