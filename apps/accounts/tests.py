@@ -1129,6 +1129,59 @@ class ManagerBulkImportMembersTests(TestCase):
         self.assertEqual(res.data["imported"], 1)
         self.assertEqual(res.data["failed"], 1)
 
+    @patch("apps.accounts.views_manager.send_tasc_email")
+    def test_import_sends_one_email_per_learner(self, mock_send):
+        csv_content = "email,first_name,last_name\na@example.com,A,One\nb@example.com,B,Two\nc@example.com,C,Three\n"
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post(
+                self.url, {"file": self._csv_file(csv_content)},
+                format="multipart", **self._auth_header(self.org_admin),
+            )
+        self.assertEqual(res.data["imported"], 3)
+        self.assertEqual(mock_send.call_count, 3)
+        sent_emails = {call.kwargs["to"][0] for call in mock_send.call_args_list}
+        self.assertEqual(sent_emails, {"a@example.com", "b@example.com", "c@example.com"})
+
+    @patch("apps.accounts.views_manager.send_tasc_email")
+    def test_import_email_context_is_correct(self, mock_send):
+        csv_content = "email,first_name,last_name\nctx@example.com,Ctx,User\n"
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                self.url, {"file": self._csv_file(csv_content)},
+                format="multipart", **self._auth_header(self.org_admin),
+            )
+        mock_send.assert_called_once()
+        ctx = mock_send.call_args.kwargs["context"]
+        self.assertEqual(ctx["role_display"], "Learner")
+        self.assertEqual(ctx["organization_name"], self.org.name)
+        self.assertIn("/set-password/", ctx["set_password_url"])
+        self.assertEqual(ctx["inviter"].pk, self.org_admin.pk)
+        self.assertEqual(ctx["user"].email, "ctx@example.com")
+
+    @patch("apps.accounts.views_manager.send_tasc_email")
+    def test_emails_not_sent_on_transaction_rollback(self, mock_send):
+        csv_content = "email,first_name,last_name\nrollback@example.com,R,B\n"
+        with patch("apps.accounts.views_manager.Membership.objects.create", side_effect=Exception("db boom")):
+            with self.captureOnCommitCallbacks(execute=True):
+                res = self.client.post(
+                    self.url, {"file": self._csv_file(csv_content)},
+                    format="multipart", **self._auth_header(self.org_admin),
+                )
+        self.assertEqual(res.data["imported"], 0)
+        mock_send.assert_not_called()
+
+    @patch("apps.accounts.views_manager.send_tasc_email", side_effect=Exception("smtp down"))
+    def test_email_failure_does_not_fail_import(self, mock_send):
+        csv_content = "email,first_name,last_name\nfail@example.com,F,L\n"
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post(
+                self.url, {"file": self._csv_file(csv_content)},
+                format="multipart", **self._auth_header(self.org_admin),
+            )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["imported"], 1)
+        self.assertTrue(User.objects.filter(email="fail@example.com").exists())
+
 
 class ManagerMembersViewTests(TestCase):
     """Tests for GET /api/v1/auth/manager/members/"""
