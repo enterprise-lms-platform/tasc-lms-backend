@@ -8,15 +8,20 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import extend_schema, OpenApiParameter
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
 from django.db.models import Q
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
 from datetime import timedelta
 from .models import Membership
 from .rbac import get_active_membership_organization
 from .serializers import ManagerOrganizationSerializer, UserListSerializer
+from apps.notifications.services import send_tasc_email
 from apps.payments.models import UserSubscription
 from apps.learning.models import Enrollment, Submission
 
@@ -453,6 +458,7 @@ class ManagerBulkImportMembersView(APIView):
         imported = 0
         if pending:
             try:
+                frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
                 with transaction.atomic():
                     for entry in pending:
                         user = User.objects.create(
@@ -473,6 +479,36 @@ class ManagerBulkImportMembersView(APIView):
                             is_active=True,
                             manager=request.user,
                         )
+
+                        uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+                        token = default_token_generator.make_token(user)
+                        set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
+
+                        def _send_email(
+                            email=user.email,
+                            url=set_password_url,
+                            u=user,
+                            inviter=request.user,
+                            org_name=org.name,
+                            role_display=user.get_role_display(),
+                        ):
+                            try:
+                                send_tasc_email(
+                                    subject="You've been invited to TASC LMS",
+                                    to=[email],
+                                    template="emails/auth/user_invitation.html",
+                                    context={
+                                        "user": u,
+                                        "inviter": inviter,
+                                        "set_password_url": url,
+                                        "organization_name": org_name,
+                                        "role_display": role_display,
+                                    },
+                                )
+                            except Exception:
+                                logger.exception("Bulk import email failed", extra={"email": email})
+
+                        transaction.on_commit(_send_email)
                         imported += 1
             except Exception:
                 logger.exception("Bulk import failed")
