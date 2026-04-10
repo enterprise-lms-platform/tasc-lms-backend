@@ -1237,10 +1237,18 @@ class ManagerMembersViewTests(TestCase):
         token = RefreshToken.for_user(user)
         return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
 
+    def test_response_is_paginated(self):
+        res = self.client.get(self.url, **self._auth_header(self.admin_a))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("count", res.data)
+        self.assertIn("results", res.data)
+        self.assertIn("next", res.data)
+        self.assertIn("previous", res.data)
+
     def test_org_admin_sees_only_own_org_members(self):
         res = self.client.get(self.url, **self._auth_header(self.admin_a))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        returned_emails = {u["email"] for u in res.data}
+        returned_emails = {u["email"] for u in res.data["results"]}
         self.assertIn(self.admin_a.email, returned_emails)
         self.assertIn(self.member_a1.email, returned_emails)
         self.assertIn(self.member_a2.email, returned_emails)
@@ -1248,7 +1256,7 @@ class ManagerMembersViewTests(TestCase):
 
     def test_cross_org_user_excluded(self):
         res = self.client.get(self.url, **self._auth_header(self.admin_a))
-        returned_ids = {u["id"] for u in res.data}
+        returned_ids = {u["id"] for u in res.data["results"]}
         self.assertNotIn(self.member_b.id, returned_ids)
 
     def test_no_membership_returns_404(self):
@@ -1266,8 +1274,8 @@ class ManagerMembersViewTests(TestCase):
             **self._auth_header(self.admin_a),
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 1)
-        self.assertEqual(res.data[0]["email"], self.member_a2.email)
+        self.assertEqual(res.data["count"], 1)
+        self.assertEqual(res.data["results"][0]["email"], self.member_a2.email)
 
     def test_search_filter_works(self):
         res = self.client.get(
@@ -1275,8 +1283,18 @@ class ManagerMembersViewTests(TestCase):
             **self._auth_header(self.admin_a),
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 1)
-        self.assertEqual(res.data[0]["email"], self.member_a1.email)
+        self.assertEqual(res.data["count"], 1)
+        self.assertEqual(res.data["results"][0]["email"], self.member_a1.email)
+
+    def test_page_size_param_respected(self):
+        res = self.client.get(
+            self.url, {"page_size": 1},
+            **self._auth_header(self.admin_a),
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data["results"]), 1)
+        self.assertEqual(res.data["count"], 3)
+        self.assertIsNotNone(res.data["next"])
 
     def test_unauthenticated_returns_401(self):
         res = self.client.get(self.url)
