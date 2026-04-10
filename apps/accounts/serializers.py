@@ -311,11 +311,11 @@ class InviteUserSerializer(serializers.Serializer):
         return value.strip().lower()
 
     def validate_role(self, value):
-        """Prevent inviting users as learner or tasc_admin."""
-        if value in ["learner", "tasc_admin"]:
+        """Prevent inviting users as tasc_admin (requires superuser privileges)."""
+        if value == "tasc_admin":
             raise serializers.ValidationError(
-                f"Cannot invite users with role '{value}'. "
-                "Learners should self-register, and TASC Admins require superuser privileges."
+                "Cannot invite users with role 'tasc_admin'. "
+                "TASC Admins require superuser privileges."
             )
         return value
 

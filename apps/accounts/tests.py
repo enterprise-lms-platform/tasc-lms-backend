@@ -793,6 +793,7 @@ class InviteOrgAdminProvisioningTests(TestCase):
         mock_send.assert_called_once()
         ctx = mock_send.call_args.kwargs["context"]
         self.assertEqual(ctx["organization_name"], self.org.name)
+        self.assertEqual(ctx["role_display"], "Org Admin")
 
     @patch("apps.accounts.views.send_tasc_email")
     def test_non_org_admin_invite_email_has_no_organization_name(self, mock_send):
@@ -813,6 +814,173 @@ class InviteOrgAdminProvisioningTests(TestCase):
         mock_send.assert_called_once()
         ctx = mock_send.call_args.kwargs["context"]
         self.assertIsNone(ctx["organization_name"])
+        self.assertEqual(ctx["role_display"], "Finance")
+
+
+class InviteOrgAdminLearnerTests(TestCase):
+    """Tests for org_admin inviting learners into their own organization."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.invite_url = "/api/v1/admin/users/invite/"
+
+        self.org = Organization.objects.create(name="OA Learner Org")
+        self.org_admin = User.objects.create_user(
+            username="oa_inviter", email="oa_inviter@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin, organization=self.org,
+            role=Membership.Role.ORG_ADMIN, is_active=True,
+        )
+
+        self.tasc_admin = User.objects.create_user(
+            username="ta_learner_block", email="ta_learner_block@example.com",
+            password="testpass123", role=User.Role.TASC_ADMIN,
+            email_verified=True, is_active=True,
+        )
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def _invite_payload(self, **overrides):
+        data = {
+            "email": "newlearner@example.com",
+            "first_name": "New",
+            "last_name": "Learner",
+            "role": "learner",
+        }
+        data.update(overrides)
+        return data
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_org_admin_can_invite_learner(self, mock_send):
+        mock_send.return_value = None
+        res = self.client.post(
+            self.invite_url, self._invite_payload(),
+            format="json", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        invited = User.objects.get(email="newlearner@example.com")
+        self.assertEqual(invited.role, User.Role.LEARNER)
+
+        membership = Membership.objects.get(user=invited, organization=self.org)
+        self.assertEqual(membership.role, Membership.Role.ORG_LEARNER)
+        self.assertTrue(membership.is_active)
+
+    def test_org_admin_cannot_invite_instructor(self):
+        res = self.client.post(
+            self.invite_url, self._invite_payload(role="instructor"),
+            format="json", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_org_admin_cannot_invite_org_admin(self):
+        res = self.client.post(
+            self.invite_url,
+            self._invite_payload(
+                email="blocked.oa@example.com", role="org_admin",
+                organization=self.org.pk,
+            ),
+            format="json", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_org_admin_without_membership_rejected(self):
+        orphan = User.objects.create_user(
+            username="orphan_oa", email="orphan_oa@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        res = self.client.post(
+            self.invite_url,
+            self._invite_payload(email="orphan.learner@example.com"),
+            format="json", **self._auth_header(orphan),
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_invited_learner_attached_to_org_admins_org(self, mock_send):
+        """Organization comes from org_admin's membership, not from the payload."""
+        mock_send.return_value = None
+        other_org = Organization.objects.create(name="Decoy Org")
+        res = self.client.post(
+            self.invite_url,
+            self._invite_payload(email="scoped.learner@example.com", organization=other_org.pk),
+            format="json", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        invited = User.objects.get(email="scoped.learner@example.com")
+        membership = Membership.objects.get(user=invited)
+        self.assertEqual(membership.organization, self.org)
+        self.assertNotEqual(membership.organization, other_org)
+
+    def test_tasc_admin_cannot_invite_learner(self):
+        res = self.client.post(
+            self.invite_url,
+            self._invite_payload(email="blocked.learner@example.com"),
+            format="json", **self._auth_header(self.tasc_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_tasc_admin_existing_paths_unchanged(self, mock_send):
+        """tasc_admin can still invite finance, instructor, org_admin."""
+        mock_send.return_value = None
+        for role_val in ("finance", "instructor"):
+            res = self.client.post(
+                self.invite_url,
+                self._invite_payload(email=f"ta.{role_val}@example.com", role=role_val),
+                format="json", **self._auth_header(self.tasc_admin),
+            )
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED, f"Failed for role={role_val}")
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_lms_manager_paths_unchanged(self, mock_send):
+        """lms_manager can still invite instructor, cannot invite learner."""
+        mock_send.return_value = None
+        mgr_org = Organization.objects.create(name="Mgr Org Regression")
+        mgr = User.objects.create_user(
+            username="mgr_regression", email="mgr_regression@example.com",
+            password="testpass123", role=User.Role.LMS_MANAGER,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=mgr, organization=mgr_org,
+            role=Membership.Role.ORG_MANAGER, is_active=True,
+        )
+        ok = self.client.post(
+            self.invite_url,
+            self._invite_payload(email="mgr.inst@example.com", role="instructor"),
+            format="json", **self._auth_header(mgr),
+        )
+        self.assertEqual(ok.status_code, status.HTTP_201_CREATED)
+
+        fail = self.client.post(
+            self.invite_url,
+            self._invite_payload(email="mgr.learner@example.com", role="learner"),
+            format="json", **self._auth_header(mgr),
+        )
+        self.assertEqual(fail.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_learner_invite_email_has_correct_role_display(self, mock_send):
+        """Invite email for learner shows 'Learner', not 'Organization Admin'."""
+        mock_send.return_value = None
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                self.invite_url,
+                self._invite_payload(email="email.ctx.learner@example.com"),
+                format="json", **self._auth_header(self.org_admin),
+            )
+        mock_send.assert_called_once()
+        ctx = mock_send.call_args.kwargs["context"]
+        self.assertEqual(ctx["role_display"], "Learner")
+        self.assertEqual(ctx["organization_name"], self.org.name)
 
 
 class ManagerMembersViewTests(TestCase):

@@ -26,7 +26,7 @@ from django.shortcuts import get_object_or_404
 from django.db import models, IntegrityError, transaction
 
 from .tokens import email_verification_token
-from .rbac import is_admin_like
+from .rbac import is_admin_like, get_active_membership_organization
 from .models import Membership
 
 from apps.notifications.services import send_tasc_email
@@ -175,9 +175,13 @@ def invite_user(request):
     requester_role = getattr(request.user, "role", None)
     manager_org = None
 
-    # TASC Admin can invite broadly (existing behavior).
+    # TASC Admin can invite broadly, except learner (policy: learners are org-scoped).
     if requester_role == User.Role.TASC_ADMIN:
-        pass
+        if role == User.Role.LEARNER:
+            return Response(
+                {"detail": "Learners must be invited by an Organization Admin."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
     # LMS Manager can invite ONLY instructors into their own organisation.
     elif requester_role == User.Role.LMS_MANAGER:
         if role != User.Role.INSTRUCTOR:
@@ -199,10 +203,24 @@ def invite_user(request):
                 status=status.HTTP_403_FORBIDDEN,
             )
         manager_org = org_membership.organization
+    # Org Admin can invite ONLY learners into their own organisation.
+    elif requester_role == User.Role.ORG_ADMIN:
+        if role != User.Role.LEARNER:
+            return Response(
+                {"detail": "Organization Admins can only invite learners."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        org = get_active_membership_organization(request.user)
+        if not org:
+            return Response(
+                {"detail": "No organization found for this Organization Admin."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        manager_org = org
     # Any other role cannot invite.
     else:
         return Response(
-            {"detail": "Only TASC Admins and LMS Managers can invite users."},
+            {"detail": "Only TASC Admins, LMS Managers, and Organization Admins can invite users."},
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -243,8 +261,8 @@ def invite_user(request):
                 user.is_active = True
                 user.save(update_fields=["first_name", "last_name", "role", "email_verified", "must_set_password", "is_active"])
 
-            # If invited by an LMS Manager, attach instructor to manager's organisation via Membership.
-            if requester_role == User.Role.LMS_MANAGER and manager_org is not None:
+            # If invited by an LMS Manager or Org Admin, attach to the requester's organisation via Membership.
+            if requester_role in (User.Role.LMS_MANAGER, User.Role.ORG_ADMIN) and manager_org is not None:
                 membership, membership_created = Membership.objects.get_or_create(
                     user=user,
                     organization=manager_org,
@@ -287,8 +305,9 @@ def invite_user(request):
             frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
             set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
 
-            invite_org = serializer.validated_data.get("organization")
+            invite_org = serializer.validated_data.get("organization") or manager_org
             invite_org_name = invite_org.name if invite_org else None
+            invite_role_display = user.get_role_display()
 
             def _send_invite_email() -> None:
                 try:
@@ -301,6 +320,7 @@ def invite_user(request):
                             "inviter": request.user,
                             "set_password_url": set_password_url,
                             "organization_name": invite_org_name,
+                            "role_display": invite_role_display,
                         },
                     )
                 except Exception:
