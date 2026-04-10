@@ -983,6 +983,153 @@ class InviteOrgAdminLearnerTests(TestCase):
         self.assertEqual(ctx["organization_name"], self.org.name)
 
 
+class ManagerBulkImportMembersTests(TestCase):
+    """Tests for POST /api/v1/auth/manager/members/import/"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = "/api/v1/auth/manager/members/import/"
+
+        self.org = Organization.objects.create(name="Bulk Org")
+        self.org_admin = User.objects.create_user(
+            username="bulk_oa", email="bulk_oa@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin, organization=self.org,
+            role=Membership.Role.ORG_ADMIN, is_active=True,
+        )
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def _csv_file(self, content, name="import.csv"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return SimpleUploadedFile(name, content.encode("utf-8"), content_type="text/csv")
+
+    def test_successful_import(self):
+        csv_content = "email,first_name,last_name\nalice@example.com,Alice,Smith\nbob@example.com,Bob,Jones\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["imported"], 2)
+        self.assertEqual(res.data["failed"], 0)
+
+        for email in ("alice@example.com", "bob@example.com"):
+            user = User.objects.get(email=email)
+            self.assertEqual(user.role, User.Role.LEARNER)
+            m = Membership.objects.get(user=user, organization=self.org)
+            self.assertEqual(m.role, Membership.Role.ORG_LEARNER)
+            self.assertTrue(m.is_active)
+
+    def test_duplicate_email_skipped(self):
+        User.objects.create_user(
+            username="existing", email="existing@example.com",
+            password="testpass123",
+        )
+        csv_content = "email,first_name,last_name\nexisting@example.com,Ex,User\nnew@example.com,New,User\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 1)
+        self.assertEqual(res.data["failed"], 1)
+        self.assertEqual(res.data["errors"][0]["email"], "existing@example.com")
+
+    def test_invalid_email_rejected(self):
+        csv_content = "email,first_name,last_name\nnot-an-email,Bad,Email\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["failed"], 1)
+
+    def test_missing_required_fields_rejected(self):
+        csv_content = "email,first_name,last_name\nmissing@example.com,,\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["failed"], 1)
+
+    def test_no_membership_returns_404(self):
+        orphan = User.objects.create_user(
+            username="orphan_bulk", email="orphan_bulk@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        csv_content = "email,first_name,last_name\na@example.com,A,B\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(orphan),
+        )
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_non_csv_rejected(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        txt_file = SimpleUploadedFile("data.txt", b"hello", content_type="text/plain")
+        res = self.client.post(
+            self.url, {"file": txt_file},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_role_forced_to_learner(self):
+        csv_content = "email,first_name,last_name,role\nforced@example.com,F,R,instructor\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 1)
+        user = User.objects.get(email="forced@example.com")
+        self.assertEqual(user.role, User.Role.LEARNER)
+
+    def test_membership_org_matches_requester(self):
+        other_org = Organization.objects.create(name="Decoy Bulk Org")
+        csv_content = "email,first_name,last_name\nscoped@example.com,S,C\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 1)
+        m = Membership.objects.get(user__email="scoped@example.com")
+        self.assertEqual(m.organization, self.org)
+        self.assertNotEqual(m.organization, other_org)
+
+    def test_unauthenticated_rejected(self):
+        csv_content = "email,first_name,last_name\na@example.com,A,B\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart",
+        )
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_empty_csv_returns_zero(self):
+        csv_content = "email,first_name,last_name\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["imported"], 0)
+        self.assertEqual(res.data["failed"], 0)
+
+    def test_duplicate_within_file_skipped(self):
+        csv_content = "email,first_name,last_name\ndup@example.com,D,U\ndup@example.com,D,U\n"
+        res = self.client.post(
+            self.url, {"file": self._csv_file(csv_content)},
+            format="multipart", **self._auth_header(self.org_admin),
+        )
+        self.assertEqual(res.data["imported"], 1)
+        self.assertEqual(res.data["failed"], 1)
+
+
 class ManagerMembersViewTests(TestCase):
     """Tests for GET /api/v1/auth/manager/members/"""
 

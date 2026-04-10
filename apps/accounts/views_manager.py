@@ -1,9 +1,16 @@
+import csv
+import io
+import logging
+import re
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
@@ -12,6 +19,10 @@ from .rbac import get_active_membership_organization
 from .serializers import ManagerOrganizationSerializer, UserListSerializer
 from apps.payments.models import UserSubscription
 from apps.learning.models import Enrollment, Submission
+
+logger = logging.getLogger(__name__)
+
+EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 User = get_user_model()
 
@@ -333,3 +344,145 @@ class ManagerMembersView(APIView):
 
         serializer = UserListSerializer(users, many=True)
         return Response(serializer.data)
+
+
+class ManagerBulkImportMembersView(APIView):
+    """
+    Bulk-import learners into the requester's organization via CSV.
+    POST /api/v1/auth/manager/members/import/
+
+    CSV columns: email, first_name, last_name
+    Role is forced to 'learner'; organization comes from the requester's
+    active membership.  Each imported user gets a Membership with
+    role=ORG_LEARNER.
+    """
+    permission_classes = [IsAuthenticated]
+
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    MAX_ROWS = 500
+
+    def post(self, request):
+        org = get_active_membership_organization(request.user)
+        if not org:
+            return Response(
+                {"detail": "No organization found or insufficient permissions."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "file" not in request.FILES:
+            return Response(
+                {"error": "No file provided."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        csv_file = request.FILES["file"]
+
+        if not csv_file.name.endswith(".csv"):
+            return Response(
+                {"error": "File must be a CSV file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if csv_file.size > self.MAX_FILE_SIZE:
+            return Response(
+                {"error": "File size exceeds 10 MB limit."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            decoded = csv_file.read().decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(decoded))
+        except Exception:
+            return Response(
+                {"error": "Failed to parse CSV file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        errors: list[dict] = []
+        pending: list[dict] = []
+        existing_emails: set[str] = set()
+
+        for row_num, row in enumerate(reader, start=2):
+            if len(pending) + len(errors) >= self.MAX_ROWS:
+                errors.append({"row": row_num, "email": "", "error": f"Max {self.MAX_ROWS} rows per file exceeded."})
+                break
+
+            email = (row.get("email") or "").strip().lower()
+            first_name = (row.get("first_name") or "").strip()
+            last_name = (row.get("last_name") or "").strip()
+
+            if not email:
+                errors.append({"row": row_num, "email": "", "error": "Email is required."})
+                continue
+
+            if not EMAIL_RE.match(email):
+                errors.append({"row": row_num, "email": email, "error": "Invalid email format."})
+                continue
+
+            if not first_name:
+                errors.append({"row": row_num, "email": email, "error": "First name is required."})
+                continue
+
+            if not last_name:
+                errors.append({"row": row_num, "email": email, "error": "Last name is required."})
+                continue
+
+            if email in existing_emails:
+                errors.append({"row": row_num, "email": email, "error": "Duplicate email in file."})
+                continue
+            existing_emails.add(email)
+
+            if User.objects.filter(email__iexact=email).exists():
+                errors.append({"row": row_num, "email": email, "error": "User already exists."})
+                continue
+
+            base_username = email.split("@")[0][:25]
+            username = base_username
+            i = 1
+            while User.objects.filter(username=username).exists():
+                i += 1
+                username = f"{base_username}{i}"
+
+            pending.append({
+                "email": email,
+                "username": username,
+                "first_name": first_name,
+                "last_name": last_name,
+            })
+
+        imported = 0
+        if pending:
+            try:
+                with transaction.atomic():
+                    for entry in pending:
+                        user = User.objects.create(
+                            email=entry["email"],
+                            username=entry["username"],
+                            first_name=entry["first_name"],
+                            last_name=entry["last_name"],
+                            role=User.Role.LEARNER,
+                            email_verified=True,
+                            must_set_password=True,
+                            is_active=True,
+                            password=make_password(None),
+                        )
+                        Membership.objects.create(
+                            user=user,
+                            organization=org,
+                            role=Membership.Role.ORG_LEARNER,
+                            is_active=True,
+                            manager=request.user,
+                        )
+                        imported += 1
+            except Exception:
+                logger.exception("Bulk import failed")
+                errors.append({"row": 0, "email": "", "error": "Database error during import."})
+                imported = 0
+
+        return Response({
+            "message": "Bulk import completed.",
+            "total_rows": len(pending) + len(errors),
+            "imported": imported,
+            "failed": len(errors),
+            "errors": errors[:100],
+        })
