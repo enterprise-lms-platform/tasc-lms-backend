@@ -4,9 +4,11 @@ import logging
 import re
 
 from rest_framework.views import APIView
+from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -302,12 +304,20 @@ class ManagerActivityView(APIView):
         return Response({'events': events, 'summary': summary})
 
 
-class ManagerMembersView(APIView):
+class MembersPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
+class ManagerMembersView(ListAPIView):
     """
     List users belonging to the requester's organization (via Membership).
-    GET /api/v1/auth/manager/members/?search=&role=
+    GET /api/v1/auth/manager/members/?search=&role=&page=&page_size=
     """
     permission_classes = [IsAuthenticated]
+    serializer_class = UserListSerializer
+    pagination_class = MembersPagination
 
     @extend_schema(
         summary="List organization members",
@@ -315,16 +325,24 @@ class ManagerMembersView(APIView):
         parameters=[
             OpenApiParameter(name="search", description="Filter by email or name", type=str),
             OpenApiParameter(name="role", description="Filter by platform role", type=str),
+            OpenApiParameter(name="page", description="Page number", type=int),
+            OpenApiParameter(name="page_size", description="Results per page (max 200)", type=int),
         ],
-        responses={200: UserListSerializer(many=True)},
     )
-    def get(self, request):
+    def list(self, request, *args, **kwargs):
         org = get_active_membership_organization(request.user)
         if not org:
             return Response(
                 {"detail": "No organization found or insufficient permissions."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        self._org = org
+        return super().list(request, *args, **kwargs)
+
+    def get_queryset(self):
+        org = getattr(self, "_org", None)
+        if not org:
+            return User.objects.none()
 
         users = (
             User.objects.filter(
@@ -335,11 +353,11 @@ class ManagerMembersView(APIView):
             .order_by("-date_joined")
         )
 
-        role = request.query_params.get("role")
+        role = self.request.query_params.get("role")
         if role:
             users = users.filter(role=role)
 
-        search = request.query_params.get("search")
+        search = self.request.query_params.get("search")
         if search:
             users = users.filter(
                 Q(email__icontains=search)
@@ -347,8 +365,7 @@ class ManagerMembersView(APIView):
                 | Q(last_name__icontains=search)
             )
 
-        serializer = UserListSerializer(users, many=True)
-        return Response(serializer.data)
+        return users
 
 
 class ManagerBulkImportMembersView(APIView):
