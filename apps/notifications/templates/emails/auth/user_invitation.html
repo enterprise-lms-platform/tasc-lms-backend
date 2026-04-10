@@ -9,9 +9,9 @@
     Hi <strong>{{ user.first_name }} {{ user.last_name }}</strong>,
     <br>
     {% if organization_name %}
-    You've been invited to join <strong>{{ organization_name }}</strong> on <strong>TASC Learning Management System</strong> as an Organization Admin by {{ inviter.first_name }} {{ inviter.last_name }}.
+    You've been invited to join <strong>{{ organization_name }}</strong> on <strong>TASC Learning Management System</strong> as {{ role_display|default:"a team member" }} by {{ inviter.first_name }} {{ inviter.last_name }}.
     {% else %}
-    You've been invited to join <strong>TASC Learning Management System</strong> by {{ inviter.first_name }} {{ inviter.last_name }}.
+    You've been invited to join <strong>TASC Learning Management System</strong> as {{ role_display|default:"a team member" }} by {{ inviter.first_name }} {{ inviter.last_name }}.
     {% endif %}
   </p>
 
