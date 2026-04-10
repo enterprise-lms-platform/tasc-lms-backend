@@ -8,7 +8,11 @@
   <p style="margin:0 0 14px;color:#333;line-height:1.7;">
     Hi <strong>{{ user.first_name }} {{ user.last_name }}</strong>,
     <br>
+    {% if organization_name %}
+    You've been invited to join <strong>{{ organization_name }}</strong> on <strong>TASC Learning Management System</strong> as an Organization Admin by {{ inviter.first_name }} {{ inviter.last_name }}.
+    {% else %}
     You've been invited to join <strong>TASC Learning Management System</strong> by {{ inviter.first_name }} {{ inviter.last_name }}.
+    {% endif %}
   </p>
 
   <p style="margin:0 0 18px;color:#333;line-height:1.7;">

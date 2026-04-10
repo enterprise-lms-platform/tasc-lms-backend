@@ -773,6 +773,47 @@ class InviteOrgAdminProvisioningTests(TestCase):
         self.assertEqual(invited.role, User.Role.INSTRUCTOR)
         self.assertFalse(Membership.objects.filter(user=invited).exists())
 
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_org_admin_invite_email_includes_organization_name(self, mock_send):
+        """Invite email for org_admin includes organization_name in context."""
+        mock_send.return_value = None
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                self.invite_url,
+                {
+                    "email": "orgadmin.emailctx@example.com",
+                    "first_name": "Ctx",
+                    "last_name": "Admin",
+                    "role": "org_admin",
+                    "organization": self.org.pk,
+                },
+                format="json",
+                **self._auth_header(self.admin_user),
+            )
+        mock_send.assert_called_once()
+        ctx = mock_send.call_args.kwargs["context"]
+        self.assertEqual(ctx["organization_name"], self.org.name)
+
+    @patch("apps.accounts.views.send_tasc_email")
+    def test_non_org_admin_invite_email_has_no_organization_name(self, mock_send):
+        """Invite email for non-org_admin roles has organization_name=None."""
+        mock_send.return_value = None
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                self.invite_url,
+                {
+                    "email": "finance.emailctx@example.com",
+                    "first_name": "Fin",
+                    "last_name": "User",
+                    "role": "finance",
+                },
+                format="json",
+                **self._auth_header(self.admin_user),
+            )
+        mock_send.assert_called_once()
+        ctx = mock_send.call_args.kwargs["context"]
+        self.assertIsNone(ctx["organization_name"])
+
 
 @override_settings(
     GOOGLE_CLIENT_ID="test-client-id",

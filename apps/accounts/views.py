@@ -287,6 +287,9 @@ def invite_user(request):
             frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
             set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
 
+            invite_org = serializer.validated_data.get("organization")
+            invite_org_name = invite_org.name if invite_org else None
+
             def _send_invite_email() -> None:
                 try:
                     send_tasc_email(
@@ -297,6 +300,7 @@ def invite_user(request):
                             "user": user,
                             "inviter": request.user,
                             "set_password_url": set_password_url,
+                            "organization_name": invite_org_name,
                         },
                     )
                 except Exception:
