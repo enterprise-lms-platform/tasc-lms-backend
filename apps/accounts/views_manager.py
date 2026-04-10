@@ -2,13 +2,18 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
 from .models import Membership
-from .serializers import ManagerOrganizationSerializer
+from .rbac import get_active_membership_organization
+from .serializers import ManagerOrganizationSerializer, UserListSerializer
 from apps.payments.models import UserSubscription
 from apps.learning.models import Enrollment, Submission
+
+User = get_user_model()
 
 class ManagerOrganizationSettingsView(APIView):
     """
@@ -279,3 +284,52 @@ class ManagerActivityView(APIView):
         }
 
         return Response({'events': events, 'summary': summary})
+
+
+class ManagerMembersView(APIView):
+    """
+    List users belonging to the requester's organization (via Membership).
+    GET /api/v1/auth/manager/members/?search=&role=
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="List organization members",
+        description="Returns users linked to the requester's active organization via Membership.",
+        parameters=[
+            OpenApiParameter(name="search", description="Filter by email or name", type=str),
+            OpenApiParameter(name="role", description="Filter by platform role", type=str),
+        ],
+        responses={200: UserListSerializer(many=True)},
+    )
+    def get(self, request):
+        org = get_active_membership_organization(request.user)
+        if not org:
+            return Response(
+                {"detail": "No organization found or insufficient permissions."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        users = (
+            User.objects.filter(
+                memberships__organization=org,
+                memberships__is_active=True,
+            )
+            .distinct()
+            .order_by("-date_joined")
+        )
+
+        role = request.query_params.get("role")
+        if role:
+            users = users.filter(role=role)
+
+        search = request.query_params.get("search")
+        if search:
+            users = users.filter(
+                Q(email__icontains=search)
+                | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+            )
+
+        serializer = UserListSerializer(users, many=True)
+        return Response(serializer.data)

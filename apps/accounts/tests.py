@@ -815,6 +815,106 @@ class InviteOrgAdminProvisioningTests(TestCase):
         self.assertIsNone(ctx["organization_name"])
 
 
+class ManagerMembersViewTests(TestCase):
+    """Tests for GET /api/v1/auth/manager/members/"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.url = "/api/v1/auth/manager/members/"
+
+        self.org_a = Organization.objects.create(name="Org A")
+        self.org_b = Organization.objects.create(name="Org B")
+
+        self.admin_a = User.objects.create_user(
+            username="orgadmin_a", email="orgadmin_a@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.admin_a, organization=self.org_a,
+            role=Membership.Role.ORG_ADMIN, is_active=True,
+        )
+
+        self.member_a1 = User.objects.create_user(
+            username="member_a1", email="member_a1@example.com",
+            password="testpass123", role=User.Role.LEARNER,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.member_a1, organization=self.org_a,
+            role=Membership.Role.ORG_LEARNER, is_active=True,
+        )
+
+        self.member_a2 = User.objects.create_user(
+            username="member_a2", email="member_a2@example.com",
+            password="testpass123", role=User.Role.INSTRUCTOR,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.member_a2, organization=self.org_a,
+            role=Membership.Role.ORG_LEARNER, is_active=True,
+        )
+
+        self.member_b = User.objects.create_user(
+            username="member_b", email="member_b@example.com",
+            password="testpass123", role=User.Role.LEARNER,
+            email_verified=True, is_active=True,
+        )
+        Membership.objects.create(
+            user=self.member_b, organization=self.org_b,
+            role=Membership.Role.ORG_LEARNER, is_active=True,
+        )
+
+    def _auth_header(self, user):
+        token = RefreshToken.for_user(user)
+        return {"HTTP_AUTHORIZATION": f"Bearer {token.access_token}"}
+
+    def test_org_admin_sees_only_own_org_members(self):
+        res = self.client.get(self.url, **self._auth_header(self.admin_a))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        returned_emails = {u["email"] for u in res.data}
+        self.assertIn(self.admin_a.email, returned_emails)
+        self.assertIn(self.member_a1.email, returned_emails)
+        self.assertIn(self.member_a2.email, returned_emails)
+        self.assertNotIn(self.member_b.email, returned_emails)
+
+    def test_cross_org_user_excluded(self):
+        res = self.client.get(self.url, **self._auth_header(self.admin_a))
+        returned_ids = {u["id"] for u in res.data}
+        self.assertNotIn(self.member_b.id, returned_ids)
+
+    def test_no_membership_returns_404(self):
+        orphan = User.objects.create_user(
+            username="orphan", email="orphan@example.com",
+            password="testpass123", role=User.Role.ORG_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        res = self.client.get(self.url, **self._auth_header(orphan))
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_role_filter_works(self):
+        res = self.client.get(
+            self.url, {"role": "instructor"},
+            **self._auth_header(self.admin_a),
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["email"], self.member_a2.email)
+
+    def test_search_filter_works(self):
+        res = self.client.get(
+            self.url, {"search": "member_a1"},
+            **self._auth_header(self.admin_a),
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["email"], self.member_a1.email)
+
+    def test_unauthenticated_returns_401(self):
+        res = self.client.get(self.url)
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 @override_settings(
     GOOGLE_CLIENT_ID="test-client-id",
     REST_FRAMEWORK={

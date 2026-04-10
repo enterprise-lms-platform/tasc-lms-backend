@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import me, verify_email, invite_user
-from .views_manager import ManagerOrganizationSettingsView, ManagerBillingPlanView, ManagerBillingUsageView, ManagerActivityView
+from .views_manager import ManagerOrganizationSettingsView, ManagerBillingPlanView, ManagerBillingUsageView, ManagerActivityView, ManagerMembersView
 from .auth_views import (
     LoginView,
     VerifyOTPView,
@@ -54,4 +54,5 @@ urlpatterns = [
     path("manager/billing/plan/", ManagerBillingPlanView.as_view(), name="manager-billing-plan"),
     path("manager/billing/usage/", ManagerBillingUsageView.as_view(), name="manager-billing-usage"),
     path("manager/activity/", ManagerActivityView.as_view(), name="manager-activity"),
+    path("manager/members/", ManagerMembersView.as_view(), name="manager-members"),
 ]
