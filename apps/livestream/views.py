@@ -414,6 +414,10 @@ class LivestreamSessionViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             session.end_session()
+            # Auto-mark anyone who never checked in as no_show
+            session.attendances.filter(
+                status__in=['registered', 'joined']
+            ).update(status='no_show')
             
         elif action_type == 'cancel':
             if session.status in ['ended', 'cancelled']:
@@ -768,14 +772,83 @@ class LivestreamAttendanceViewSet(viewsets.ModelViewSet):
     def my_attendance(self, request):
         """Get current user's attendance records"""
         attendances = LivestreamAttendance.objects.filter(learner=request.user)
-        
+
         page = self.paginate_queryset(attendances)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
-        
+
         serializer = self.get_serializer(attendances, many=True)
         return Response(serializer.data)
+
+    @extend_schema(
+        summary='Learner self-check-in',
+        description='Mark attendance as attended. Only active 10 min before to 30 min after session start.'
+    )
+    @action(detail=False, methods=['post'])
+    def check_in(self, request):
+        """Learner self-check-in — time-gated window"""
+        session_id = request.data.get('session_id')
+        if not session_id:
+            return Response(
+                {'error': 'session_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        session = get_object_or_404(LivestreamSession, id=session_id)
+        now = timezone.now()
+        window_start = session.start_time - timedelta(minutes=10)
+        window_end = session.start_time + timedelta(minutes=30)
+
+        if not (window_start <= now <= window_end):
+            return Response(
+                {
+                    'error': 'Check-in window is not open',
+                    'window_start': window_start.isoformat(),
+                    'window_end': window_end.isoformat(),
+                    'now': now.isoformat(),
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        attendance, _ = LivestreamAttendance.objects.get_or_create(
+            session=session,
+            learner=request.user
+        )
+        attendance.status = 'attended'
+        attendance.joined_at = attendance.joined_at or now
+        attendance.save(update_fields=['status', 'joined_at', 'updated_at'])
+
+        return Response(LivestreamAttendanceSerializer(attendance).data)
+
+    @extend_schema(
+        summary='Update attendance status',
+        description='Instructor manually sets a learner\'s status (attended / absent / no_show).'
+    )
+    @action(detail=True, methods=['patch'], url_path='update-status')
+    def update_status(self, request, pk=None):
+        """Instructor updates a learner's attendance status"""
+        attendance = self.get_object()
+        new_status = request.data.get('status')
+
+        allowed = {'attended', 'absent', 'no_show', 'completed'}
+        if new_status not in allowed:
+            return Response(
+                {'error': f'status must be one of: {", ".join(allowed)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Only the session instructor or an admin may do this
+        if (request.user != attendance.session.instructor
+                and not is_admin_like(request.user)):
+            return Response(
+                {'error': 'Only the instructor can update attendance status'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        attendance.status = new_status
+        attendance.save(update_fields=['status', 'updated_at'])
+        return Response(LivestreamAttendanceSerializer(attendance).data)
 
 
 @extend_schema(tags=['Livestream - Webhooks'])

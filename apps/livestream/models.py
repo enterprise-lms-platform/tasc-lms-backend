@@ -242,6 +242,8 @@ class LivestreamAttendance(models.Model):
         ('registered', 'Registered'),
         ('joined', 'Joined'),
         ('left', 'Left'),
+        ('attended', 'Attended'),
+        ('absent', 'Absent'),
         ('completed', 'Completed'),
         ('no_show', 'No Show'),
     ]

@@ -54,8 +54,8 @@ class LivestreamSessionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'instructor', 'created_at', 'updated_at', 'zoom_meeting_id',
-            'join_url', 'start_url', 'instructor_join_url', 'password',
-            'recording_url', 'total_attendees', 'peak_attendees',
+            'start_url', 'instructor_join_url', 'password',
+            'total_attendees', 'peak_attendees',
             'zoom_webhook_received'
         ]
 
@@ -145,7 +145,7 @@ class LivestreamSessionCreateSerializer(serializers.ModelSerializer):
         fields = [
             'course', 'title', 'description', 'start_time', 'end_time',
             'duration_minutes', 'timezone', 'is_recurring', 'recurrence_pattern',
-            'recurrence_end_date', 'recurrence_days', 'platform',
+            'recurrence_end_date', 'recurrence_days', 'platform', 'join_url',
             'auto_recording', 'waiting_room', 'mute_on_entry', 'allow_chat',
             'allow_questions', 'max_attendees'
         ]
@@ -194,14 +194,17 @@ class LivestreamSessionUpdateSerializer(serializers.ModelSerializer):
             'title', 'description', 'start_time', 'end_time',
             'duration_minutes', 'timezone', 'recurrence_end_date',
             'auto_recording', 'waiting_room', 'mute_on_entry',
-            'allow_chat', 'allow_questions', 'max_attendees'
+            'allow_chat', 'allow_questions', 'max_attendees',
+            'join_url', 'recording_url',
         ]
 
     def validate(self, data):
         """Validate that session can be updated"""
         instance = self.instance
 
-        if instance.status in ['live', 'ended']:
+        # Allow updating recording_url even after session ends
+        non_editable = {k: v for k, v in data.items() if k != 'recording_url'}
+        if non_editable and instance.status in ['live', 'ended']:
             raise serializers.ValidationError(
                 "Cannot update a session that is live or has ended"
             )
