@@ -811,3 +811,121 @@ class SubmissionPresignTest(APITestCase):
             **_auth(self.learner),
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LMS Manager analytics — platform-wide (no org scoping)
+# ════════════════════════════════════════════════════════════════════════════
+
+ENROLLMENT_TRENDS_URL = '/api/v1/learning/analytics/enrollment-trends/'
+LEARNING_STATS_URL = '/api/v1/learning/analytics/learning-stats/'
+
+
+class LmsManagerAnalyticsPlatformWideTest(APITestCase):
+    """
+    LMS Manager is a platform-wide role.  Analytics endpoints must return
+    unfiltered data — identical to tasc_admin — with no org scoping.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        self.manager = User.objects.create_user(
+            username='mgr_analytics',
+            email='mgr_analytics@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.admin = User.objects.create_user(
+            username='admin_analytics',
+            email='admin_analytics@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        self.instructor = User.objects.create_user(
+            username='inst_analytics',
+            email='inst_analytics@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner = User.objects.create_user(
+            username='learner_analytics',
+            email='learner_analytics@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+
+        cat = Category.objects.create(name='Analytics Cat')
+        self.course = Course.objects.create(
+            title='Analytics Course',
+            instructor=self.instructor,
+            category=cat,
+            status='published',
+        )
+        self.enrollment = Enrollment.objects.create(
+            user=self.learner,
+            course=self.course,
+            status=Enrollment.Status.ACTIVE,
+        )
+
+    # ── enrollment-trends ──────────────────────────────────────────────
+
+    def test_enrollment_trends_lms_manager_200(self):
+        response = self.client.get(ENROLLMENT_TRENDS_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn('labels', data)
+        self.assertIn('enrollments', data)
+        self.assertIn('completions', data)
+
+    def test_enrollment_trends_lms_manager_matches_tasc_admin(self):
+        """LMS Manager sees identical trend data as tasc_admin."""
+        mgr_resp = self.client.get(ENROLLMENT_TRENDS_URL, **_auth(self.manager))
+        admin_resp = self.client.get(ENROLLMENT_TRENDS_URL, **_auth(self.admin))
+        self.assertEqual(mgr_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(mgr_resp.json()['enrollments'], admin_resp.json()['enrollments'])
+
+    def test_enrollment_trends_instructor_sees_own_courses_only(self):
+        """Instructor filter is preserved (not affected by our change)."""
+        other_inst = User.objects.create_user(
+            username='other_inst', email='other_inst@example.com',
+            password='pass1234', role=User.Role.INSTRUCTOR,
+            email_verified=True, is_active=True,
+        )
+        response = self.client.get(ENROLLMENT_TRENDS_URL, **_auth(other_inst))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(sum(response.json()['enrollments']), 0)
+
+    # ── learning-stats ─────────────────────────────────────────────────
+
+    def test_learning_stats_lms_manager_200(self):
+        response = self.client.get(LEARNING_STATS_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn('total_learners', data)
+        self.assertIn('avg_completion_rate', data)
+        self.assertIn('avg_quiz_score', data)
+
+    def test_learning_stats_lms_manager_matches_tasc_admin(self):
+        mgr_resp = self.client.get(LEARNING_STATS_URL, **_auth(self.manager))
+        admin_resp = self.client.get(LEARNING_STATS_URL, **_auth(self.admin))
+        self.assertEqual(mgr_resp.json()['total_learners'], admin_resp.json()['total_learners'])
+
+    def test_learning_stats_instructor_sees_own_courses_only(self):
+        other_inst = User.objects.create_user(
+            username='other_inst2', email='other_inst2@example.com',
+            password='pass1234', role=User.Role.INSTRUCTOR,
+            email_verified=True, is_active=True,
+        )
+        response = self.client.get(LEARNING_STATS_URL, **_auth(other_inst))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()['total_learners'], 0)

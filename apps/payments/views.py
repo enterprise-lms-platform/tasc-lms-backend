@@ -1118,10 +1118,6 @@ class PaymentAnalyticsViewSet(viewsets.ViewSet):
             created_at__gte=start_date
         )
 
-        # Scope by role
-        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
-            base_qs = base_qs.filter(organization=user.organization)
-
         monthly = base_qs.annotate(
             month=TruncMonth('created_at')
         ).values('month').annotate(

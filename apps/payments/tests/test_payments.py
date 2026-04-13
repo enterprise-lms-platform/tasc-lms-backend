@@ -116,3 +116,45 @@ class PaymentTests(APITestCase):
         self.assertIn('Content-Disposition', response)
         self.assertTrue(response.content.decode('utf-8').startswith('ID,Transaction ID,Amount,Currency,Status,Payment Method,Created At,Completed At'))
         self.assertIn('99.99', response.content.decode('utf-8'))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LMS Manager revenue analytics — platform-wide (no org scoping)
+# ════════════════════════════════════════════════════════════════════════════
+
+from rest_framework_simplejwt.tokens import RefreshToken
+
+
+def _pay_auth(user):
+    return {'HTTP_AUTHORIZATION': f'Bearer {RefreshToken.for_user(user).access_token}'}
+
+
+class LmsManagerRevenueAnalyticsPlatformWideTest(APITestCase):
+    """LMS Manager sees all revenue data — same as tasc_admin."""
+
+    REVENUE_URL = '/api/v1/payments/analytics/revenue/'
+
+    def setUp(self):
+        self.manager = User.objects.create_user(
+            username='mgr_rev', email='mgr_rev@example.com',
+            password='pass1234', role='lms_manager',
+            email_verified=True, is_active=True,
+        )
+        self.admin = User.objects.create_user(
+            username='admin_rev', email='admin_rev@example.com',
+            password='pass1234', role='tasc_admin',
+            email_verified=True, is_active=True,
+        )
+
+    def test_revenue_lms_manager_200(self):
+        response = self.client.get(self.REVENUE_URL, **_pay_auth(self.manager))
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn('labels', data)
+        self.assertIn('revenue', data)
+        self.assertIn('total_revenue', data)
+
+    def test_revenue_lms_manager_matches_tasc_admin(self):
+        mgr_resp = self.client.get(self.REVENUE_URL, **_pay_auth(self.manager))
+        admin_resp = self.client.get(self.REVENUE_URL, **_pay_auth(self.admin))
+        self.assertEqual(mgr_resp.json()['revenue'], admin_resp.json()['revenue'])

@@ -637,11 +637,9 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 first_name=first_name,
                 last_name=last_name,
                 role=role,
-                department=department,
                 phone_number=phone_number,
                 password=make_password(random_password),
                 is_active=True,
-                organization=getattr(request.user, 'organization', None) if getattr(request.user, 'role', '') == 'lms_manager' else None
             )
             users_to_create.append(user)
         

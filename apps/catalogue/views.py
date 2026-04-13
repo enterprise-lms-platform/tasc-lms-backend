@@ -1590,11 +1590,8 @@ class CatalogueAnalyticsViewSet(viewsets.ViewSet):
         
         course_filter = Q(courses__status='published')
         
-        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
-            course_filter &= Q(courses__organization=user.organization)
-        elif user.role == 'instructor':
+        if user.role == 'instructor':
             course_filter &= Q(courses__instructor=user)
-            # Instructors might want to see drafts too in their analytics
             course_filter = Q(courses__instructor=user) & ~Q(courses__status='archived')
 
         categories = Category.objects.annotate(
