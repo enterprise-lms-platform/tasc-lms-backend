@@ -938,16 +938,14 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         start_date = timezone.now() - timedelta(days=months * 30)
 
         user = request.user
-        base_qs = Enrollment.objects.filter(created_at__gte=start_date)
+        base_qs = Enrollment.objects.filter(enrolled_at__gte=start_date)
 
-        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
-            base_qs = base_qs.filter(user__organization=user.organization)
-        elif user.role == 'instructor':
+        if user.role == 'instructor':
             base_qs = base_qs.filter(course__instructor=user)
 
         # Enrolls by month
         enrolls = base_qs.annotate(
-            month=TruncMonth('created_at')
+            month=TruncMonth('enrolled_at')
         ).values('month').annotate(
             count=Count('id')
         ).order_by('month')
@@ -988,15 +986,13 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         user = request.user
         base_qs = Enrollment.objects.all()
 
-        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
-            base_qs = base_qs.filter(user__organization=user.organization)
-        elif user.role == 'instructor':
+        if user.role == 'instructor':
             base_qs = base_qs.filter(course__instructor=user)
 
         total_learners = base_qs.values('user').distinct().count()
         
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        active_learners = base_qs.filter(updated_at__gte=thirty_days_ago).values('user').distinct().count()
+        active_learners = base_qs.filter(last_accessed_at__gte=thirty_days_ago).values('user').distinct().count()
         
         avg_completion = base_qs.aggregate(avg=Avg('progress_percentage'))['avg'] or 0.0
 
@@ -1004,9 +1000,7 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         completed = base_qs.filter(status='completed').count()
 
         quiz_qs = QuizSubmission.objects.all()
-        if user.role == 'lms_manager' and hasattr(user, 'organization') and user.organization:
-            quiz_qs = quiz_qs.filter(enrollment__user__organization=user.organization)
-        elif user.role == 'instructor':
+        if user.role == 'instructor':
             quiz_qs = quiz_qs.filter(enrollment__course__instructor=user)
             
         avg_quiz = quiz_qs.aggregate(avg=Avg('score'))['avg'] or 0.0

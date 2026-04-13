@@ -1948,6 +1948,79 @@ class AdminPromoteUserRoleTests(TestCase):
         self.assertEqual(self.target_user.role, User.Role.LEARNER)
 
 
+class AdminBulkImportNoOrganizationFieldTest(TestCase):
+    """
+    UserAdminViewSet.bulk_import must not pass organization= to User().
+    LMS Manager bulk import creates users without an org FK (User has no
+    organization field).  Org context is handled separately via Membership.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = User.objects.create_user(
+            username='bulkimport_mgr',
+            email='bulkimport_mgr@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.admin = User.objects.create_user(
+            username='bulkimport_admin',
+            email='bulkimport_admin@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        token = RefreshToken.for_user(self.manager)
+        self.mgr_auth = {'HTTP_AUTHORIZATION': f'Bearer {token.access_token}'}
+        token_a = RefreshToken.for_user(self.admin)
+        self.admin_auth = {'HTTP_AUTHORIZATION': f'Bearer {token_a.access_token}'}
+
+    def _csv_file(self, rows_csv):
+        import io
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return SimpleUploadedFile('import.csv', rows_csv.encode('utf-8'), content_type='text/csv')
+
+    def test_lms_manager_bulk_import_does_not_crash(self):
+        """Regression: User() constructor must not receive organization=."""
+        csv_data = "email,first_name,last_name,role,department,phone_number\nbulktest1@example.com,Bulk,Test,learner,,\n"
+        response = self.client.post(
+            '/api/v1/admin/users/bulk_import/',
+            {'file': self._csv_file(csv_data)},
+            format='multipart',
+            **self.mgr_auth,
+        )
+        self.assertIn(response.status_code, (200, 201))
+        data = response.json()
+        self.assertEqual(data['imported'], 1)
+        self.assertTrue(User.objects.filter(email='bulktest1@example.com').exists())
+
+    def test_tasc_admin_bulk_import_still_works(self):
+        csv_data = "email,first_name,last_name,role,department,phone_number\nbulktest2@example.com,Admin,Import,learner,,\n"
+        response = self.client.post(
+            '/api/v1/admin/users/bulk_import/',
+            {'file': self._csv_file(csv_data)},
+            format='multipart',
+            **self.admin_auth,
+        )
+        self.assertIn(response.status_code, (200, 201))
+        self.assertEqual(response.json()['imported'], 1)
+
+    def test_imported_user_has_no_organization_attribute(self):
+        """User model has no organization field; imported users must not have one."""
+        csv_data = "email,first_name,last_name,role,department,phone_number\nbulktest3@example.com,No,Org,learner,,\n"
+        self.client.post(
+            '/api/v1/admin/users/bulk_import/',
+            {'file': self._csv_file(csv_data)},
+            format='multipart',
+            **self.mgr_auth,
+        )
+        user = User.objects.get(email='bulktest3@example.com')
+        self.assertFalse(hasattr(user, 'organization'))
+
+
 class LivestreamPermissionAdminLikeTests(TestCase):
     def test_tasc_admin_passes_instructor_or_read_only_permission(self):
         permission = IsInstructorOrReadOnly()

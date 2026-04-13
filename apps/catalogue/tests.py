@@ -2434,3 +2434,48 @@ class CourseApprovalPhase2Test(APITestCase):
         self.course.refresh_from_db()
         self.assertEqual(self.course.rejection_reason, '')
         self.assertEqual(self.course.status, Course.Status.PENDING_APPROVAL)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LMS Manager catalogue analytics — platform-wide (no org scoping)
+# ════════════════════════════════════════════════════════════════════════════
+
+COURSES_BY_CATEGORY_URL = '/api/v1/catalogue/analytics/courses-by-category/'
+
+
+class LmsManagerCatalogueAnalyticsPlatformWideTest(APITestCase):
+    """LMS Manager sees all published courses by category — same as tasc_admin."""
+
+    def setUp(self):
+        self.manager = User.objects.create_user(
+            username='mgr_cat_analytics',
+            email='mgr_cat_analytics@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True, is_active=True,
+        )
+        self.admin = User.objects.create_user(
+            username='admin_cat_analytics',
+            email='admin_cat_analytics@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True, is_active=True,
+        )
+        instructor = _make_instructor(suffix='_cat_analytics')
+        cat = Category.objects.create(name='CatAnalyticsCat')
+        Course.objects.create(
+            title='Published Cat Course',
+            instructor=instructor,
+            category=cat,
+            status='published',
+        )
+
+    def test_courses_by_category_lms_manager_200(self):
+        response = self.client.get(COURSES_BY_CATEGORY_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(response.json(), list)
+
+    def test_courses_by_category_lms_manager_matches_tasc_admin(self):
+        mgr_resp = self.client.get(COURSES_BY_CATEGORY_URL, **_auth(self.manager))
+        admin_resp = self.client.get(COURSES_BY_CATEGORY_URL, **_auth(self.admin))
+        self.assertEqual(mgr_resp.json(), admin_resp.json())
