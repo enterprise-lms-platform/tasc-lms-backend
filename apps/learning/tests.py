@@ -819,6 +819,7 @@ class SubmissionPresignTest(APITestCase):
 
 ENROLLMENT_TRENDS_URL = '/api/v1/learning/analytics/enrollment-trends/'
 LEARNING_STATS_URL = '/api/v1/learning/analytics/learning-stats/'
+TOP_COURSE_PERFORMANCE_URL = '/api/v1/learning/analytics/top-course-performance/'
 
 
 class LmsManagerAnalyticsPlatformWideTest(APITestCase):
@@ -954,3 +955,58 @@ class LmsManagerAnalyticsPlatformWideTest(APITestCase):
         response = self.client.get(LEARNING_STATS_URL, **_auth(other_inst))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()['total_learners'], 0)
+
+    # ── top-course-performance ─────────────────────────────────────────
+
+    def test_top_course_performance_lms_manager_200_and_shape(self):
+        response = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 1)
+        row = next(r for r in data if r['course_id'] == self.course.id)
+        self.assertEqual(row['course_title'], 'Analytics Course')
+        self.assertEqual(row['enrollments'], 1)
+        self.assertIn('completed', row)
+        self.assertIn('completion_rate', row)
+        self.assertIsInstance(row['completion_rate'], int)
+
+    def test_top_course_performance_tasc_admin_matches_manager(self):
+        mgr = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.manager))
+        admin = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.admin))
+        self.assertEqual(mgr.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin.status_code, status.HTTP_200_OK)
+        key = lambda rows: sorted(rows, key=lambda r: r['course_id'])
+        self.assertEqual(key(mgr.json()), key(admin.json()))
+
+    def test_top_course_performance_instructor_own_courses_only(self):
+        other_inst = User.objects.create_user(
+            username='tcp_other_inst',
+            email='tcp_other_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        cat = Category.objects.get(name='Analytics Cat')
+        other_course = Course.objects.create(
+            title='Other Inst TCPP Course',
+            slug='other-inst-tcpp-course',
+            instructor=other_inst,
+            category=cat,
+            status='published',
+        )
+        Enrollment.objects.create(
+            user=self.learner,
+            course=other_course,
+            status=Enrollment.Status.ACTIVE,
+        )
+        response = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {r['course_id'] for r in response.json()}
+        self.assertIn(self.course.id, ids)
+        self.assertNotIn(other_course.id, ids)
+
+    def test_top_course_performance_learner_403(self):
+        response = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.learner))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

@@ -923,7 +923,7 @@ class QuizSubmissionViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, mixi
             status=status.HTTP_201_CREATED
         )
 
-from django.db.models import Count, Avg
+from django.db.models import Count, Avg, Q
 from django.db.models.functions import TruncMonth
 from datetime import timedelta
 
@@ -1017,6 +1017,52 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
             "total_completed_courses": completed,
             "avg_quiz_score": round(avg_quiz, 1)
         })
+
+    @action(detail=False, methods=['get'], url_path='top-course-performance')
+    def top_course_performance(self, request):
+        """Per-course enrollment and completion aggregates for analytics dashboards."""
+        from rest_framework.exceptions import PermissionDenied
+
+        from apps.accounts.rbac import is_admin_like, is_instructor
+
+        user = request.user
+        if is_admin_like(user):
+            base_qs = Enrollment.objects.all()
+        elif is_instructor(user):
+            base_qs = Enrollment.objects.filter(course__instructor=user)
+        else:
+            raise PermissionDenied('You do not have permission to access this resource.')
+
+        try:
+            limit = int(request.query_params.get('limit', 5))
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 50))
+
+        rows = (
+            base_qs.values('course_id', 'course__title')
+            .annotate(
+                enrollments=Count('id'),
+                completed=Count('id', filter=Q(status='completed')),
+            )
+            .order_by('-enrollments')[:limit]
+        )
+
+        data = []
+        for row in rows:
+            enr = row['enrollments']
+            comp = row['completed']
+            rate = round(100 * comp / enr) if enr else 0
+            data.append(
+                {
+                    'course_id': row['course_id'],
+                    'course_title': row['course__title'] or '',
+                    'enrollments': enr,
+                    'completed': comp,
+                    'completion_rate': rate,
+                }
+            )
+        return Response(data)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
