@@ -966,10 +966,14 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
 
         for e in enrolls:
             if e['month']:
-                labels_map[e['month'].strftime('%b %Y')]['enrollments'] = e['count']
+                key = e['month'].strftime('%b %Y')
+                if key in labels_map:
+                    labels_map[key]['enrollments'] = e['count']
         for c in comps:
             if c['month']:
-                labels_map[c['month'].strftime('%b %Y')]['completions'] = c['count']
+                key = c['month'].strftime('%b %Y')
+                if key in labels_map:
+                    labels_map[key]['completions'] = c['count']
 
         labels = list(labels_map.keys())
         enrollments = [labels_map[l]['enrollments'] for l in labels]

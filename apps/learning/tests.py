@@ -894,6 +894,31 @@ class LmsManagerAnalyticsPlatformWideTest(APITestCase):
         self.assertEqual(admin_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(mgr_resp.json()['enrollments'], admin_resp.json()['enrollments'])
 
+    def test_enrollment_trends_short_window_no_keyerror(self):
+        """months=1 must not KeyError when DB month falls outside labels_map."""
+        cat = Category.objects.get(name='Analytics Cat')
+        extra_course = Course.objects.create(
+            title='Edge Case Course',
+            slug='edge-case-course',
+            instructor=self.instructor,
+            category=cat,
+            status='published',
+        )
+        Enrollment.objects.create(
+            user=self.learner,
+            course=extra_course,
+            status=Enrollment.Status.ACTIVE,
+        )
+        for m in (1, 2, 3):
+            response = self.client.get(
+                f'{ENROLLMENT_TRENDS_URL}?months={m}', **_auth(self.manager),
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            data = response.json()
+            self.assertEqual(len(data['labels']), m)
+            self.assertEqual(len(data['enrollments']), m)
+            self.assertEqual(len(data['completions']), m)
+
     def test_enrollment_trends_instructor_sees_own_courses_only(self):
         """Instructor filter is preserved (not affected by our change)."""
         other_inst = User.objects.create_user(
