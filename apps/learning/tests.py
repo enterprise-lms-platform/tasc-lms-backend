@@ -12,7 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import Membership, Organization
 from apps.catalogue.models import Assignment, Category, Course, Session, Quiz
-from apps.learning.models import Enrollment, SessionProgress, Submission, QuizSubmission
+from apps.learning.models import Certificate, Enrollment, SessionProgress, Submission, QuizSubmission
 from apps.payments.models import Subscription, UserSubscription
 
 User = get_user_model()
@@ -1210,3 +1210,260 @@ class EnrollmentListScopeAndFiltersTest(APITestCase):
         self.assertIn('count', response.data)
         self.assertEqual(response.data['count'], 4)
         self.assertEqual(len(response.data['results']), 2)
+
+
+CERTIFICATES_URL = '/api/v1/learning/certificates/'
+CERTIFICATES_STATS_URL = '/api/v1/learning/certificates/stats/'
+
+
+class CertificateViewSetScopeTest(APITestCase):
+    """GET certificates list/retrieve/latest/stats: role scope, search, course filter, pagination."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.org = Organization.objects.create(name='Cert Scope Org', slug='cert-scope-org')
+        self.other_org = Organization.objects.create(name='Cert Other Org', slug='cert-other-org')
+
+        self.instructor = User.objects.create_user(
+            username='cert_inst',
+            email='cert_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_a = User.objects.create_user(
+            username='cert_learner_a',
+            email='learner_a_cert@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_b = User.objects.create_user(
+            username='cert_learner_b',
+            email='learner_b_cert@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        cat = Category.objects.create(name='Cert Cat', slug='cert-cat')
+        self.course = Course.objects.create(
+            title='Cert Course Alpha',
+            description='d',
+            slug='cert-course-alpha',
+            status='published',
+            instructor=self.instructor,
+            category=cat,
+            created_by=None,
+        )
+        other_inst = User.objects.create_user(
+            username='cert_other_inst',
+            email='cert_other_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.other_course = Course.objects.create(
+            title='Cert Course Beta',
+            description='d',
+            slug='cert-course-beta',
+            status='published',
+            instructor=other_inst,
+            category=cat,
+            created_by=None,
+        )
+        self.enroll_inst_own = Enrollment.objects.create(
+            user=self.instructor,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enroll_a = Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enroll_b = Enrollment.objects.create(
+            user=self.learner_b,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enroll_other = Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.other_course,
+            organization=self.other_org,
+            status=Enrollment.Status.ACTIVE,
+        )
+
+        # Manual certificates avoid enrollment COMPLETED signal (needs FRONTEND_URL in tests).
+        self.cert_a = Certificate.objects.create(enrollment=self.enroll_a)
+        self.cert_b = Certificate.objects.create(enrollment=self.enroll_b)
+        self.cert_other = Certificate.objects.create(enrollment=self.enroll_other)
+
+        self.org_admin = User.objects.create_user(
+            username='cert_org_admin',
+            email='org_admin_cert@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin,
+            organization=self.org,
+            role=Membership.Role.ORG_ADMIN,
+            is_active=True,
+        )
+        self.org_admin_no_membership = User.objects.create_user(
+            username='cert_org_admin_nom',
+            email='org_admin_nom_cert@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+        self.lms_manager = User.objects.create_user(
+            username='cert_lms_mgr',
+            email='lms_mgr_cert@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.tasc_admin = User.objects.create_user(
+            username='cert_tasc',
+            email='tasc_cert@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+    def _cert_ids(self, response):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        rows = data if isinstance(data, list) else data.get('results', [])
+        return {row['id'] for row in rows}
+
+    def test_learner_list_only_own_certificates(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.learner_a))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_a.id, self.cert_other.id})
+
+    def test_learner_b_list_only_own(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.learner_b))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_b.id})
+
+    def test_instructor_list_only_own_enrollment_certificates(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.instructor))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, set())
+
+    def test_org_admin_list_org_scoped_only(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.org_admin))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_a.id, self.cert_b.id})
+        self.assertNotIn(self.cert_other.id, ids)
+
+    def test_org_admin_no_membership_empty_list(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.org_admin_no_membership))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, set())
+
+    def test_lms_manager_platform_wide(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.lms_manager))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_a.id, self.cert_b.id, self.cert_other.id})
+
+    def test_tasc_admin_platform_wide(self):
+        response = self.client.get(CERTIFICATES_URL, **_auth(self.tasc_admin))
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_a.id, self.cert_b.id, self.cert_other.id})
+
+    def test_org_admin_retrieve_out_of_scope_404(self):
+        response = self.client.get(
+            f'{CERTIFICATES_URL}{self.cert_other.id}/',
+            **_auth(self.org_admin),
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_org_admin_retrieve_in_scope_200(self):
+        response = self.client.get(
+            f'{CERTIFICATES_URL}{self.cert_a.id}/',
+            **_auth(self.org_admin),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], self.cert_a.id)
+
+    def test_latest_respects_scope_for_org_admin(self):
+        response = self.client.get(f'{CERTIFICATES_URL}latest/', **_auth(self.org_admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(response.data['id'], {self.cert_a.id, self.cert_b.id})
+
+    def test_latest_404_when_no_certificates_in_scope(self):
+        response = self.client.get(f'{CERTIFICATES_URL}latest/', **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_search_certificate_number(self):
+        # Full number avoids matching other rows via shared prefix (e.g. TASC-YYYYMMDD-…).
+        response = self.client.get(
+            f'{CERTIFICATES_URL}?search={self.cert_b.certificate_number}',
+            **_auth(self.lms_manager),
+        )
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_b.id})
+
+    def test_search_learner_email(self):
+        response = self.client.get(
+            f'{CERTIFICATES_URL}?search=learner_b_cert',
+            **_auth(self.lms_manager),
+        )
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_b.id})
+
+    def test_course_filter(self):
+        response = self.client.get(
+            f'{CERTIFICATES_URL}?course={self.course.id}',
+            **_auth(self.lms_manager),
+        )
+        ids = self._cert_ids(response)
+        self.assertEqual(ids, {self.cert_a.id, self.cert_b.id})
+
+    def test_pagination_count(self):
+        response = self.client.get(
+            f'{CERTIFICATES_URL}?page_size=2',
+            **_auth(self.lms_manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 3)
+        self.assertEqual(len(response.data['results']), 2)
+
+    def test_stats_learner_forbidden(self):
+        response = self.client.get(CERTIFICATES_STATS_URL, **_auth(self.learner_a))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_stats_instructor_forbidden(self):
+        response = self.client.get(CERTIFICATES_STATS_URL, **_auth(self.instructor))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_stats_org_admin_scoped(self):
+        response = self.client.get(CERTIFICATES_STATS_URL, **_auth(self.org_admin))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total'], 2)
+
+    def test_stats_lms_manager_platform_total(self):
+        response = self.client.get(CERTIFICATES_STATS_URL, **_auth(self.lms_manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total'], 3)
+
+    def test_stats_org_admin_no_membership_zero(self):
+        response = self.client.get(CERTIFICATES_STATS_URL, **_auth(self.org_admin_no_membership))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total'], 0)

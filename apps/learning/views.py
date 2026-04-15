@@ -29,6 +29,11 @@ class EnrollmentPageNumberPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
+
+class CertificatePageNumberPagination(PageNumberPagination):
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
     QuizSubmission, QuizAnswer, SavedCourse, Workshop
@@ -337,18 +342,73 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Certificate.objects.all()
     serializer_class = CertificateSerializer
     permission_classes = [IsAuthenticated]
-    
+    pagination_class = CertificatePageNumberPagination
+
+    _CERT_STATS_ROLES = frozenset(
+        (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN, User.Role.ORG_ADMIN),
+    )
+
     def get_permissions(self):
         if self.action == 'verify':
             return [AllowAny()]
         return super().get_permissions()
-    
+
+    def _certificate_scope_queryset(self, user):
+        """Role-scoped base queryset (no list search/course filters). Used for list/retrieve/latest/stats."""
+        role = getattr(user, 'role', '') or ''
+        related = (
+            'enrollment',
+            'enrollment__user',
+            'enrollment__course',
+            'enrollment__organization',
+        )
+        if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            return Certificate.objects.all().select_related(*related)
+        if role == User.Role.ORG_ADMIN:
+            org = get_active_membership_organization(user)
+            if org is None:
+                return Certificate.objects.none()
+            return Certificate.objects.filter(enrollment__organization=org).select_related(*related)
+        # learner, instructor, finance, and other roles: own enrollments only
+        return Certificate.objects.filter(enrollment__user=user).select_related(*related)
+
     def get_queryset(self):
-        return Certificate.objects.filter(enrollment__user=self.request.user)
-    
+        qs = self._certificate_scope_queryset(self.request.user)
+        if getattr(self, 'action', None) != 'list':
+            return qs.order_by('-issued_at')
+
+        course_id = self.request.query_params.get('course')
+        if course_id:
+            try:
+                qs = qs.filter(enrollment__course_id=int(course_id))
+            except (TypeError, ValueError):
+                pass
+
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(
+                Q(enrollment__user__first_name__icontains=search)
+                | Q(enrollment__user__last_name__icontains=search)
+                | Q(enrollment__user__email__icontains=search)
+                | Q(enrollment__course__title__icontains=search)
+                | Q(certificate_number__icontains=search)
+            )
+
+        return qs.order_by('-issued_at')
+
     @extend_schema(
-        summary='List my certificates',
-        description='Returns all certificates earned by the authenticated user',
+        summary='List certificates',
+        description=(
+            'Returns certificates visible to the authenticated user: learners see their own; '
+            'org admins see certificates for enrollments in their active organization; '
+            'LMS managers and TASC admins see all certificates platform-wide.'
+        ),
+        parameters=[
+            OpenApiParameter(name='course', type=int, description='Filter by course id (enrollment course)'),
+            OpenApiParameter(name='search', type=str, description='Search learner name, email, course title, or certificate number'),
+            OpenApiParameter(name='page', type=int),
+            OpenApiParameter(name='page_size', type=int, description='Max 100'),
+        ],
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
@@ -409,13 +469,27 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 
     @extend_schema(
         summary='Certificate statistics',
-        description='Returns aggregate certificate stats for admin dashboards',
+        description=(
+            'Returns aggregate certificate stats over the same role scope as list '
+            '(org admins: their organization only; LMS manager / TASC admin: platform-wide). '
+            'Learners and other roles receive 403.'
+        ),
+        responses={
+            200: OpenApiResponse(description='Scoped totals'),
+            403: OpenApiResponse(description='Not permitted for this role'),
+        },
     )
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Admin-level certificate statistics."""
-        from django.db.models.functions import TruncMonth
-        all_certs = Certificate.objects.all()
+        """Certificate statistics over the same role scope as list (no search/course filters)."""
+        role = getattr(request.user, 'role', '') or ''
+        if role not in self._CERT_STATS_ROLES:
+            return Response(
+                {'detail': 'You do not have permission to access certificate statistics.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        all_certs = self._certificate_scope_queryset(request.user)
         now = timezone.now()
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
