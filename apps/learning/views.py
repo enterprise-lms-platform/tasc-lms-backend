@@ -1,12 +1,33 @@
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, OpenApiExample
 from rest_framework import viewsets, status, mixins, serializers
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from apps.payments.permissions import HasActiveSubscription
 from apps.accounts.rbac import get_active_membership_organization
+
+User = get_user_model()
+
+_ENROLLMENT_ORDERING_WHITELIST = frozenset(
+    (
+        'enrolled_at',
+        '-enrolled_at',
+        'last_accessed_at',
+        '-last_accessed_at',
+        'progress_percentage',
+        '-progress_percentage',
+    )
+)
+
+
+class EnrollmentPageNumberPagination(PageNumberPagination):
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
@@ -39,6 +60,7 @@ class EnrollmentViewSet(
     """ViewSet for managing user enrollments. Supports list, create, retrieve, and generate_certificate only."""
     queryset = Enrollment.objects.all()
     permission_classes = [IsAuthenticated]
+    pagination_class = EnrollmentPageNumberPagination
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -47,28 +69,32 @@ class EnrollmentViewSet(
 
     def get_queryset(self):
         user = self.request.user
+        role = getattr(user, 'role', '') or ''
         role_param = self.request.query_params.get('role', '').strip()
 
-        # ?role=instructor → show enrollments in courses I teach (my students)
-        if role_param == 'instructor' and user.role in ('instructor', 'tasc_admin'):
-            qs = Enrollment.objects.filter(
-                course__instructor=user
-            ).select_related('course', 'course__category')
-        else:
-            # Default: show my own enrollments as a learner
-            qs = Enrollment.objects.filter(user=user).select_related(
-                'course', 'course__category', 'course__instructor', 'user'
-            )
+        related = ('course', 'course__category', 'course__instructor', 'user', 'organization')
 
-        # Optional course filter
+        # ?role=instructor → enrollments in courses this user teaches (never widens scope by client alone)
+        if role_param == 'instructor' and role in (User.Role.INSTRUCTOR, User.Role.TASC_ADMIN):
+            qs = Enrollment.objects.filter(course__instructor=user).select_related(*related)
+        elif role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+            qs = Enrollment.objects.all().select_related(*related)
+        elif role == User.Role.ORG_ADMIN:
+            org = get_active_membership_organization(user)
+            if org is None:
+                qs = Enrollment.objects.none()
+            else:
+                qs = Enrollment.objects.filter(organization=org).select_related(*related)
+        else:
+            # learner, finance, instructor (without instructor list mode), unknown → own enrollments only
+            qs = Enrollment.objects.filter(user=user).select_related(*related)
+
         course_id = self.request.query_params.get('course')
         if course_id:
             qs = qs.filter(course_id=course_id)
 
-        # Search by learner name or email, or course title
         search = self.request.query_params.get('search', '').strip()
         if search:
-            from django.db.models import Q
             qs = qs.filter(
                 Q(user__first_name__icontains=search)
                 | Q(user__last_name__icontains=search)
@@ -76,11 +102,48 @@ class EnrollmentViewSet(
                 | Q(course__title__icontains=search)
             )
 
+        status_val = self.request.query_params.get('status', '').strip()
+        valid_statuses = {c[0] for c in Enrollment.Status.choices}
+        if status_val and status_val in valid_statuses:
+            qs = qs.filter(status=status_val)
+
+        ordering_raw = self.request.query_params.get('ordering', '').strip()
+        if ordering_raw in _ENROLLMENT_ORDERING_WHITELIST:
+            qs = qs.order_by(ordering_raw)
+        else:
+            qs = qs.order_by('-enrolled_at')
+
         return qs
 
     @extend_schema(
-        summary='List my enrollments',
-        description='Returns list of courses the authenticated user is enrolled in (instructors see their students)',
+        summary='List enrollments',
+        description=(
+            'Scope is determined by the authenticated user role only. '
+            'Learners see their enrollments; instructors see theirs by default, or their students with ?role=instructor; '
+            'org admins see enrollments for their active membership organization; '
+            'LMS managers and TASC admins see all enrollments platform-wide.'
+        ),
+        parameters=[
+            OpenApiParameter(name='course', type=int, description='Filter by course id'),
+            OpenApiParameter(name='search', type=str, description='Search learner name/email or course title'),
+            OpenApiParameter(
+                name='status',
+                type=str,
+                description='Filter by enrollment status (active, completed, dropped, expired)',
+            ),
+            OpenApiParameter(
+                name='ordering',
+                type=str,
+                description='Whitelist: enrolled_at, -enrolled_at, last_accessed_at, -last_accessed_at, progress_percentage, -progress_percentage',
+            ),
+            OpenApiParameter(name='page', type=int),
+            OpenApiParameter(name='page_size', type=int, description='Max 100'),
+            OpenApiParameter(
+                name='role',
+                type=str,
+                description='Use role=instructor (with instructor or tasc_admin account) to list students in courses you teach',
+            ),
+        ],
         responses={200: EnrollmentSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):

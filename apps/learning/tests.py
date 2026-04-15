@@ -1010,3 +1010,197 @@ class LmsManagerAnalyticsPlatformWideTest(APITestCase):
     def test_top_course_performance_learner_403(self):
         response = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.learner))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class EnrollmentListScopeAndFiltersTest(APITestCase):
+    """GET /api/v1/learning/enrollments/ role-scoped queryset, status filter, pagination."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.org = Organization.objects.create(name='List Scope Org', slug='list-scope-org')
+        self.other_org = Organization.objects.create(name='Other Org', slug='other-org-scope')
+
+        self.instructor = User.objects.create_user(
+            username='elst_inst',
+            email='elst_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_a = User.objects.create_user(
+            username='elst_learner_a',
+            email='learner_a@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_b = User.objects.create_user(
+            username='elst_learner_b',
+            email='learner_b@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        cat = Category.objects.create(name='ELST Cat', slug='elst-cat')
+        self.course = Course.objects.create(
+            title='ELST Course',
+            description='d',
+            slug='elst-course',
+            status='published',
+            instructor=self.instructor,
+            category=cat,
+            created_by=None,
+        )
+        self.enroll_inst_own = Enrollment.objects.create(
+            user=self.instructor,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enroll_a = Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.ACTIVE,
+        )
+        self.enroll_b_completed = Enrollment.objects.create(
+            user=self.learner_b,
+            course=self.course,
+            organization=self.org,
+            status=Enrollment.Status.COMPLETED,
+        )
+
+        other_inst = User.objects.create_user(
+            username='elst_other_inst',
+            email='elst_other_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.other_course = Course.objects.create(
+            title='Other Inst Course',
+            description='d',
+            slug='other-inst-elst',
+            status='published',
+            instructor=other_inst,
+            category=cat,
+            created_by=None,
+        )
+        self.enroll_other = Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.other_course,
+            organization=self.other_org,
+            status=Enrollment.Status.ACTIVE,
+        )
+
+        self.org_admin = User.objects.create_user(
+            username='elst_org_admin',
+            email='org_admin_elst@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin,
+            organization=self.org,
+            role=Membership.Role.ORG_ADMIN,
+            is_active=True,
+        )
+
+        self.lms_manager = User.objects.create_user(
+            username='elst_lms_mgr',
+            email='lms_mgr_elst@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.tasc_admin = User.objects.create_user(
+            username='elst_tasc',
+            email='tasc_elst@example.com',
+            password='pass1234',
+            role=User.Role.TASC_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+
+    def _ids(self, response):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+        if isinstance(data, list):
+            return {row['id'] for row in data}
+        return {row['id'] for row in data.get('results', [])}
+
+    def test_learner_list_only_self(self):
+        response = self.client.get(ENROLLMENTS_URL, **_auth(self.learner_a))
+        ids = self._ids(response)
+        self.assertEqual(ids, {self.enroll_a.id})
+
+    def test_instructor_default_list_only_self(self):
+        response = self.client.get(ENROLLMENTS_URL, **_auth(self.instructor))
+        ids = self._ids(response)
+        self.assertEqual(ids, {self.enroll_inst_own.id})
+
+    def test_instructor_role_instructor_param_lists_students_in_taught_courses(self):
+        response = self.client.get(
+            f'{ENROLLMENTS_URL}?role=instructor',
+            **_auth(self.instructor),
+        )
+        ids = self._ids(response)
+        self.assertEqual(ids, {self.enroll_inst_own.id, self.enroll_a.id, self.enroll_b_completed.id})
+        self.assertNotIn(self.enroll_other.id, ids)
+
+    def test_org_admin_list_organization_enrollments_only(self):
+        response = self.client.get(ENROLLMENTS_URL, **_auth(self.org_admin))
+        ids = self._ids(response)
+        self.assertEqual(ids, {self.enroll_inst_own.id, self.enroll_a.id, self.enroll_b_completed.id})
+        self.assertNotIn(self.enroll_other.id, ids)
+
+    def test_lms_manager_platform_wide(self):
+        response = self.client.get(ENROLLMENTS_URL, **_auth(self.lms_manager))
+        ids = self._ids(response)
+        self.assertEqual(
+            ids,
+            {
+                self.enroll_inst_own.id,
+                self.enroll_a.id,
+                self.enroll_b_completed.id,
+                self.enroll_other.id,
+            },
+        )
+
+    def test_tasc_admin_platform_wide(self):
+        response = self.client.get(ENROLLMENTS_URL, **_auth(self.tasc_admin))
+        ids = self._ids(response)
+        self.assertEqual(
+            ids,
+            {
+                self.enroll_inst_own.id,
+                self.enroll_a.id,
+                self.enroll_b_completed.id,
+                self.enroll_other.id,
+            },
+        )
+
+    def test_status_filter(self):
+        response = self.client.get(
+            f'{ENROLLMENTS_URL}?status={Enrollment.Status.COMPLETED}',
+            **_auth(self.lms_manager),
+        )
+        ids = self._ids(response)
+        self.assertEqual(ids, {self.enroll_b_completed.id})
+
+    def test_pagination_returns_count_and_respects_page_size(self):
+        response = self.client.get(
+            f'{ENROLLMENTS_URL}?page_size=2',
+            **_auth(self.lms_manager),
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('count', response.data)
+        self.assertEqual(response.data['count'], 4)
+        self.assertEqual(len(response.data['results']), 2)
