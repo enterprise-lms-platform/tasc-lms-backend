@@ -1063,7 +1063,7 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         
         avg_completion = base_qs.aggregate(avg=Avg('progress_percentage'))['avg'] or 0.0
 
-        in_progress = base_qs.filter(status='in_progress').count()
+        in_progress = base_qs.filter(status=Enrollment.Status.ACTIVE).count()
         completed = base_qs.filter(status='completed').count()
 
         quiz_qs = QuizSubmission.objects.all()

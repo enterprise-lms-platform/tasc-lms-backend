@@ -956,6 +956,12 @@ class LmsManagerAnalyticsPlatformWideTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()['total_learners'], 0)
 
+    def test_learning_stats_total_courses_in_progress_counts_active_enrollments(self):
+        """total_courses_in_progress must use Enrollment.Status.ACTIVE, not a non-existent status."""
+        response = self.client.get(LEARNING_STATS_URL, **_auth(self.manager))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()['total_courses_in_progress'], 1)
+
     # ── top-course-performance ─────────────────────────────────────────
 
     def test_top_course_performance_lms_manager_200_and_shape(self):
