@@ -66,6 +66,7 @@ class Payment(models.Model):
 
     # Webhook tracking
     webhook_received = models.BooleanField(default=False)
+    success_email_sent = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-created_at"]
@@ -86,12 +87,28 @@ class Payment(models.Model):
         Subscription behavior: subscription activation payments are tagged with
         `user_subscription_id` inside `metadata` and must NOT enroll learners into a course.
         """
+        was_completed = self.status == "completed"
         self.status = "completed"
         self.completed_at = timezone.now()
         self.save()
 
         # Subscription activations should not create course enrollments as a side effect.
         if self.metadata and self.metadata.get("user_subscription_id"):
+            # Send learner confirmation at most once, even when multiple completion
+            # paths race (IPN, status verification, stale checkout reconciliation).
+            if (
+                (not was_completed)
+                and (not self.success_email_sent)
+                and self.user_id
+                and getattr(self.user, "email", "")
+            ):
+                from apps.notifications.services import (
+                    send_subscription_payment_success_email,
+                )
+                sent = send_subscription_payment_success_email(self)
+                if sent:
+                    self.success_email_sent = True
+                    self.save(update_fields=["success_email_sent"])
             return
 
         # Enroll user in course if course exists
