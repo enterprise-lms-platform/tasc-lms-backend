@@ -265,3 +265,59 @@ def check_and_notify_expiring_subscriptions():
             days_remaining = (sub.end_date - now).days
             if days_remaining == 7:
                 send_subscription_expiry_warning(sub.organization, 7)
+
+
+def send_subscription_payment_success_email(payment) -> bool:
+    """
+    Send learner-facing confirmation after a successful subscription payment.
+    Returns True only when send_tasc_email completes without raising.
+    """
+    user = getattr(payment, "user", None)
+    email = getattr(user, "email", "") if user else ""
+    if not email:
+        return False
+
+    subscription_name = "your subscription"
+    subscription_id = (getattr(payment, "metadata", {}) or {}).get("user_subscription_id")
+    if subscription_id:
+        try:
+            from apps.payments.models import UserSubscription
+
+            user_subscription = (
+                UserSubscription.objects.select_related("subscription")
+                .filter(id=subscription_id)
+                .first()
+            )
+            if user_subscription and user_subscription.subscription:
+                subscription_name = user_subscription.subscription.name
+        except Exception:
+            logger.exception(
+                "Failed to resolve subscription details for payment success email",
+                extra={"payment_id": str(getattr(payment, "id", ""))},
+            )
+
+    amount = getattr(payment, "amount", None)
+    amount_display = str(amount) if amount is not None else ""
+    currency = getattr(payment, "currency", "") or ""
+
+    try:
+        send_tasc_email(
+            subject="Your subscription payment was successful",
+            to=[email],
+            template="emails/payments/subscription_payment_success.html",
+            context={
+                "user": user,
+                "payment": payment,
+                "subscription_name": subscription_name,
+                "amount": amount_display,
+                "currency": currency,
+            },
+            raise_on_error=True,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to send subscription payment success email",
+            extra={"payment_id": str(getattr(payment, "id", "")), "email": email},
+        )
+        return False

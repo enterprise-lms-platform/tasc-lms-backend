@@ -607,6 +607,236 @@ class PesapalFlowWave1Test(APITestCase):
         actual_seconds = (user_subscription.end_date - before).total_seconds()
         self.assertLess(abs(actual_seconds - expected_seconds), 120)
 
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    @patch("apps.payments.views_pesapal.PesapalService.handle_webhook")
+    def test_ipn_completion_sends_subscription_success_email_once(
+        self, mock_handle_webhook, mock_send_email
+    ):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-IPN-EMAIL-1",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring plan charge",
+        )
+        mock_send_email.return_value = True
+        mock_handle_webhook.return_value = {
+            "success": True,
+            "merchant_reference": str(payment.id),
+            "order_tracking_id": "TRACK-IPN-EMAIL-1",
+            "status": "COMPLETED",
+            "confirmation_code": "CONF-IPN-EMAIL-1",
+        }
+
+        self.client.force_authenticate(user=None)
+        response = self.client.get(
+            "/api/v1/payments/pesapal/webhook/ipn/",
+            {
+                "orderTrackingId": "TRACK-IPN-EMAIL-1",
+                "orderMerchantReference": str(payment.id),
+                "orderNotificationType": "IPNCHANGE",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertTrue(payment.success_email_sent)
+        mock_send_email.assert_called_once_with(payment)
+
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_status_completion_sends_subscription_success_email_once(
+        self, mock_verify, mock_send_email
+    ):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-STATUS-EMAIL-1",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        mock_send_email.return_value = True
+        mock_verify.return_value = {
+            "success": True,
+            "status": "COMPLETED",
+            "payment_method": "MOBILE",
+            "amount": float(self.plan.price),
+            "currency": "UGX",
+            "confirmation_code": "CONF-STATUS-EMAIL-1",
+            "message": "OK",
+            "raw": {},
+        }
+
+        response = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertTrue(payment.success_email_sent)
+        mock_send_email.assert_called_once_with(payment)
+
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_repeated_status_after_completion_does_not_resend_email(
+        self, mock_verify, mock_send_email
+    ):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-STATUS-EMAIL-2",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        mock_send_email.return_value = True
+        mock_verify.return_value = {
+            "success": True,
+            "status": "COMPLETED",
+            "payment_method": "MOBILE",
+            "amount": float(self.plan.price),
+            "currency": "UGX",
+            "confirmation_code": "CONF-STATUS-EMAIL-2",
+            "message": "OK",
+            "raw": {},
+        }
+
+        first = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        second = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertEqual(mock_send_email.call_count, 1)
+
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    @patch("apps.payments.views_pesapal.PesapalService.handle_webhook")
+    def test_repeated_ipn_after_completion_does_not_resend_email(
+        self, mock_handle_webhook, mock_send_email
+    ):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-IPN-EMAIL-2",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring plan charge",
+        )
+        mock_send_email.return_value = True
+        mock_handle_webhook.return_value = {
+            "success": True,
+            "merchant_reference": str(payment.id),
+            "order_tracking_id": "TRACK-IPN-EMAIL-2",
+            "status": "COMPLETED",
+            "confirmation_code": "CONF-IPN-EMAIL-2",
+        }
+
+        self.client.force_authenticate(user=None)
+        first = self.client.get(
+            "/api/v1/payments/pesapal/webhook/ipn/",
+            {
+                "orderTrackingId": "TRACK-IPN-EMAIL-2",
+                "orderMerchantReference": str(payment.id),
+                "orderNotificationType": "IPNCHANGE",
+            },
+        )
+        second = self.client.get(
+            "/api/v1/payments/pesapal/webhook/ipn/",
+            {
+                "orderTrackingId": "TRACK-IPN-EMAIL-2",
+                "orderMerchantReference": str(payment.id),
+                "orderNotificationType": "IPNCHANGE",
+            },
+        )
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertEqual(mock_send_email.call_count, 1)
+
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    def test_non_subscription_payment_does_not_send_subscription_success_email(
+        self, mock_send_email
+    ):
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=Decimal("10.00"),
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            description="One-time course payment",
+        )
+
+        payment.mark_completed()
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        mock_send_email.assert_not_called()
+
+    @patch("apps.notifications.services.send_subscription_payment_success_email")
+    def test_missing_user_email_does_not_break_completion_flow(self, mock_send_email):
+        self.user.email = ""
+        self.user.save(update_fields=["email"])
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring plan charge",
+        )
+
+        payment.mark_completed()
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "completed")
+        self.assertFalse(payment.success_email_sent)
+        mock_send_email.assert_not_called()
+
     def _stuck_subscription_checkout(self):
         """Paused sub + pending linked Pesapal payment (simulates abandoned hosted checkout)."""
         user_subscription = UserSubscription.objects.create(
