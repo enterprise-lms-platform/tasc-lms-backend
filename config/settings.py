@@ -143,7 +143,7 @@ ACCOUNT_LOCK_MINUTES = env.int("ACCOUNT_LOCK_MINUTES", default=15)
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # admin login
-    "allauth.account.auth_backends.AuthenticationBackend",  # allauth
+    #"allauth.account.auth_backends.AuthenticationBackend",  # allauth
 ]
 
 SITE_ID = 1
@@ -355,7 +355,41 @@ EMAIL_BACKEND = env(
     "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
 )
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@tasc-lms.local")
-FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:5173")
+
+# ----------------------------------------
+# Frontend base URL (browser redirects, e.g. Pesapal callback → SPA /payments/*)
+# ----------------------------------------
+# Canonical env var: FRONTEND_BASE_URL (scheme + host, no trailing path).
+# If unset, FRONTEND_URL is read as a backward-compatible fallback (legacy .env).
+_frontend_raw = env("FRONTEND_BASE_URL", default="").strip()
+if not _frontend_raw:
+    _frontend_raw = os.environ.get("FRONTEND_URL", "http://localhost:5173").strip()
+FRONTEND_BASE_URL = (_frontend_raw.rstrip("/") or "http://localhost:5173")
+# Legacy alias — same string as FRONTEND_BASE_URL (learning signals, Flutterwave callback, etc.).
+FRONTEND_URL = FRONTEND_BASE_URL
+
+# ----------------------------------------
+# Pesapal v3 (merchant credentials + public callback URLs)
+# ----------------------------------------
+# PESAPAL_CONSUMER_KEY / PESAPAL_CONSUMER_SECRET — from your Pesapal app (never commit values).
+# PESAPAL_BASE_URL — Pesapal API host; demo default below; production: https://pay.pesapal.com/v3
+# PESAPAL_ENV — label only (e.g. demo/live); switching environments is done via PESAPAL_BASE_URL + credentials.
+#
+# Pesapal must call your backend on URLs reachable from the internet:
+#   PESAPAL_CALLBACK_URL — user browser return after checkout (GET), must be exactly:
+#       {PUBLIC_API_ORIGIN}/api/v1/payments/pesapal/callback/
+#   PESAPAL_IPN_URL — server-to-server IPN (GET), must be exactly:
+#       {PUBLIC_API_ORIGIN}/api/v1/payments/pesapal/webhook/ipn/
+# After registering the IPN once (superadmin Gateway settings), set PESAPAL_IPN_ID to the returned id.
+PESAPAL_CONSUMER_KEY = os.environ.get("PESAPAL_CONSUMER_KEY", "")
+PESAPAL_CONSUMER_SECRET = os.environ.get("PESAPAL_CONSUMER_SECRET", "")
+PESAPAL_ENV = os.environ.get("PESAPAL_ENV", "demo")
+PESAPAL_IPN_URL = os.environ.get("PESAPAL_IPN_URL", "")
+PESAPAL_CALLBACK_URL = os.environ.get("PESAPAL_CALLBACK_URL", "")
+PESAPAL_IPN_ID = os.environ.get("PESAPAL_IPN_ID", "")
+PESAPAL_BASE_URL = os.environ.get(
+    "PESAPAL_BASE_URL", "https://cybqa.pesapal.com/pesapalv3"
+)
 
 # DigitalOcean Spaces (presigned uploads)
 DO_SPACES_REGION = env("DO_SPACES_REGION", default="")
@@ -382,13 +416,3 @@ CELERY_CACHE_BACKEND = "default"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-
-# PESA PAL SETTINGS
-PESAPAL_CONSUMER_KEY    = os.environ.get("PESAPAL_CONSUMER_KEY", "")
-PESAPAL_CONSUMER_SECRET = os.environ.get("PESAPAL_CONSUMER_SECRET", "")
-PESAPAL_ENV             = os.environ.get("PESAPAL_ENV", "demo")
-PESAPAL_IPN_URL         = os.environ.get("PESAPAL_IPN_URL", "")
-PESAPAL_CALLBACK_URL    = os.environ.get("PESAPAL_CALLBACK_URL", "")
-PESAPAL_IPN_ID          = os.environ.get("PESAPAL_IPN_ID", "")
-PESAPAL_BASE_URL        = os.environ.get("PESAPAL_BASE_URL", "https://cybqa.pesapal.com/pesapalv3") #CHANGE IT OUT TO LIVE LATER

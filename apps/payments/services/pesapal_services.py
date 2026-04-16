@@ -3,16 +3,16 @@ Pesapal v3 Service
 Mirrors the FlutterwaveService pattern in services/flutterwave_service.py.
 All Pesapal API calls are made here — credentials never leave the backend.
 
-Env vars required (add to .env):
-    PESAPAL_CONSUMER_KEY=your_key
-    PESAPAL_CONSUMER_SECRET=your_secret
-    PESAPAL_ENV=demo          # or 'live'
-    PESAPAL_IPN_URL=https://yourdomain.com/api/v1/payments/pesapal/webhook/ipn/
-    PESAPAL_CALLBACK_URL=https://yourdomain.com/payments/callback/
+Env vars (see config/settings.py for full contract). Important public URLs — these must hit
+this Django API (not the SPA):
+
+    PESAPAL_IPN_URL=https://<api-host>/api/v1/payments/pesapal/webhook/ipn/
+    PESAPAL_CALLBACK_URL=https://<api-host>/api/v1/payments/pesapal/callback/
+
+Also: PESAPAL_CONSUMER_KEY, PESAPAL_CONSUMER_SECRET, PESAPAL_BASE_URL, PESAPAL_IPN_ID, PESAPAL_ENV.
 """
 
 import logging
-import uuid
 from datetime import timedelta
 
 import requests

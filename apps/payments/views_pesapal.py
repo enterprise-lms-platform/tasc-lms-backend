@@ -9,7 +9,7 @@ Architecture recap:
         ← { redirect_url }        (React redirects user here)
   User pays on Pesapal hosted page
   Pesapal → GET  /api/v1/payments/pesapal/webhook/ipn/  (IPN — server-to-server)
-  Pesapal → GET  /api/v1/payments/pesapal/callback/     (browser redirect back)
+  Pesapal → GET  /api/v1/payments/pesapal/callback/     (browser hits API first; view redirects to SPA)
   React   → GET  /api/v1/payments/pesapal/{id}/status/  (poll or verify)
 """
 
@@ -39,6 +39,18 @@ from .serializers import (
 from .services.pesapal_services import PesapalService, pesapal_get_request_query
 
 logger = logging.getLogger(__name__)
+
+
+def _pesapal_frontend_redirect_base():
+    """SPA origin for post-checkout redirects (canonical: settings.FRONTEND_BASE_URL)."""
+    from django.conf import settings as django_settings
+
+    base = getattr(django_settings, "FRONTEND_BASE_URL", None) or getattr(
+        django_settings, "FRONTEND_URL", None
+    )
+    if not base:
+        return "http://localhost:5173"
+    return str(base).rstrip("/")
 
 
 def _user_has_blocking_active_or_paused_subscription(user):
@@ -807,8 +819,6 @@ class PesapalCallbackView(APIView):
     def get(self, request):
         from django.shortcuts import redirect
 
-        from django.conf import settings as django_settings
-
         order_tracking_id = (
             pesapal_get_request_query(
                 request,
@@ -828,7 +838,7 @@ class PesapalCallbackView(APIView):
             or ""
         )
 
-        frontend_base = getattr(django_settings, "FRONTEND_URL", "http://localhost:5173")
+        frontend_base = _pesapal_frontend_redirect_base()
 
         service = PesapalService()
         result = service.verify_payment(order_tracking_id)

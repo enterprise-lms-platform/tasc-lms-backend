@@ -37,6 +37,12 @@ router.register(r'pesapal/ipn-admin', PesapalIPNViewSet, basename='pesapal-ipn')
 
 urlpatterns = [
     path('subscription/me/', SubscriptionMeView.as_view(), name='subscription-me'),
+    # Backward-compatible alias (older clients used this path; router uses ipn-admin/).
+    path(
+        'pesapal/ipn/register/',
+        PesapalIPNViewSet.as_view({'post': 'register'}),
+        name='pesapal-ipn-register-legacy',
+    ),
     path('', include(router.urls)),
     # Keep existing webhook routes reachable while Pesapal rollout is in progress.
     path(

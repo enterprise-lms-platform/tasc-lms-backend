@@ -39,6 +39,14 @@ class PaymentsRouteReachabilityTest(APITestCase):
             reverse("pesapal-payment-initiate-subscription-onetime"),
         )
         self.assertIn("pesapal/recurring/initiate", reverse("pesapal-recurring-initiate"))
+        self.assertIn(
+            "pesapal/ipn-admin/register",
+            reverse("pesapal-ipn-register"),
+        )
+        self.assertEqual(
+            resolve("/api/v1/payments/pesapal/ipn/register/").url_name,
+            "pesapal-ipn-register-legacy",
+        )
 
 
 class PesapalFlowWave1Test(APITestCase):
