@@ -11,25 +11,24 @@ class Enrollment(models.Model):
     """
     Enrollment represents a user's enrollment in a course.
     """
+
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        COMPLETED = 'completed', 'Completed'
-        DROPPED = 'dropped', 'Dropped'
-        EXPIRED = 'expired', 'Expired'
+        ACTIVE = "active", "Active"
+        COMPLETED = "completed", "Completed"
+        DROPPED = "dropped", "Dropped"
+        EXPIRED = "expired", "Expired"
 
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='enrollments'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="enrollments"
     )
     course = models.ForeignKey(
-        'catalogue.Course',
-        on_delete=models.CASCADE,
-        related_name='enrollments'
+        "catalogue.Course", on_delete=models.CASCADE, related_name="enrollments"
     )
 
     # Enrollment details
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE
+    )
     enrolled_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -39,26 +38,26 @@ class Enrollment(models.Model):
         max_digits=5,
         decimal_places=2,
         default=0,
-        validators=[MinValueValidator(0), MaxValueValidator(100)]
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
     last_accessed_at = models.DateTimeField(auto_now=True)
     last_accessed_session = models.ForeignKey(
-        'catalogue.Session',
+        "catalogue.Session",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='last_accessed_by'
+        related_name="last_accessed_by",
     )
 
     # Payment and pricing snapshot
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    currency = models.CharField(max_length=3, default='USD')
+    currency = models.CharField(max_length=3, default="USD")
     payment_transaction = models.ForeignKey(
-        'payments.Transaction',
+        "payments.Transaction",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='enrollments'
+        related_name="enrollments",
     )
 
     # Certificate
@@ -67,20 +66,20 @@ class Enrollment(models.Model):
 
     # Organization context
     organization = models.ForeignKey(
-        'accounts.Organization',
+        "accounts.Organization",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='enrollments'
+        related_name="enrollments",
     )
 
     class Meta:
-        unique_together = ('user', 'course')
-        ordering = ['-enrolled_at']
+        unique_together = ("user", "course")
+        ordering = ["-enrolled_at"]
         indexes = [
-            models.Index(fields=['user', 'status']),
-            models.Index(fields=['course', 'status']),
-            models.Index(fields=['-enrolled_at']),
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["course", "status"]),
+            models.Index(fields=["-enrolled_at"]),
         ]
 
     def __str__(self):
@@ -88,11 +87,16 @@ class Enrollment(models.Model):
 
     def update_progress(self):
         """Update progress based on completed sessions"""
-        completed_sessions = SessionProgress.objects.filter(
-            enrollment=self,
-            is_completed=True,
-            session__course=self.course,
-        ).values('session_id').distinct().count()
+        completed_sessions = (
+            SessionProgress.objects.filter(
+                enrollment=self,
+                is_completed=True,
+                session__course=self.course,
+            )
+            .values("session_id")
+            .distinct()
+            .count()
+        )
         total_sessions = self.course.sessions.count()
 
         if total_sessions <= 0:
@@ -100,12 +104,12 @@ class Enrollment(models.Model):
         else:
             progress = (completed_sessions / total_sessions) * 100
             self.progress_percentage = min(progress, 100)
-        
+
         # Check if course is completed
         if self.progress_percentage >= 100 and self.status != self.Status.COMPLETED:
             self.status = self.Status.COMPLETED
             self.completed_at = timezone.now()
-        
+
         self.save()
         return self.progress_percentage
 
@@ -114,8 +118,13 @@ class SessionProgress(models.Model):
     """
     SessionProgress tracks a user's progress through individual sessions.
     """
-    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name='session_progress')
-    session = models.ForeignKey('catalogue.Session', on_delete=models.CASCADE, related_name='progress')
+
+    enrollment = models.ForeignKey(
+        Enrollment, on_delete=models.CASCADE, related_name="session_progress"
+    )
+    session = models.ForeignKey(
+        "catalogue.Session", on_delete=models.CASCADE, related_name="progress"
+    )
 
     # Completion tracking
     is_started = models.BooleanField(default=False)
@@ -131,15 +140,19 @@ class SessionProgress(models.Model):
     notes = models.TextField(blank=True)
 
     class Meta:
-        unique_together = ('enrollment', 'session')
-        ordering = ['-last_accessed_at']
+        unique_together = ("enrollment", "session")
+        ordering = ["-last_accessed_at"]
 
     def __str__(self):
         return f"{self.enrollment.user.email} - {self.session.title}"
 
     @property
     def duration_minutes(self):
-        return self.session.video_duration_seconds // 60 if self.session.video_duration_seconds else 0
+        return (
+            self.session.video_duration_seconds // 60
+            if self.session.video_duration_seconds
+            else 0
+        )
 
     @property
     def time_spent_minutes(self):
@@ -150,22 +163,25 @@ class Certificate(models.Model):
     """
     Certificate represents completion certificates for courses.
     """
-    enrollment = models.OneToOneField(Enrollment, on_delete=models.CASCADE, related_name='certificate')
-    
+
+    enrollment = models.OneToOneField(
+        Enrollment, on_delete=models.CASCADE, related_name="certificate"
+    )
+
     # Certificate details
     certificate_number = models.CharField(max_length=100, unique=True)
     issued_at = models.DateTimeField(auto_now_add=True)
     expiry_date = models.DateTimeField(null=True, blank=True)
     is_valid = models.BooleanField(default=True)
-    
+
     # PDF
     pdf_url = models.URLField(blank=True, null=True)
-    
+
     # Verification
     verification_url = models.URLField(blank=True, null=True)
-    
+
     class Meta:
-        ordering = ['-issued_at']
+        ordering = ["-issued_at"]
 
     def __str__(self):
         return f"{self.enrollment.user.email} - {self.enrollment.course.title}"
@@ -177,9 +193,11 @@ class Certificate(models.Model):
 
     def generate_certificate_number(self):
         """Generate a unique certificate number"""
-        prefix = 'TASC'
-        date_str = timezone.now().strftime('%Y%m%d')
-        random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        prefix = "TASC"
+        date_str = timezone.now().strftime("%Y%m%d")
+        random_str = "".join(
+            random.choices(string.ascii_uppercase + string.digits, k=6)
+        )
         return f"{prefix}-{date_str}-{random_str}"
 
     @property
@@ -194,20 +212,21 @@ class Submission(models.Model):
     Submission represents a learner's submission for an assignment.
     V1: one submission per (enrollment, assignment).
     """
+
     class Status(models.TextChoices):
-        DRAFT = 'draft', 'Draft'
-        SUBMITTED = 'submitted', 'Submitted'
-        GRADED = 'graded', 'Graded'
+        DRAFT = "draft", "Draft"
+        SUBMITTED = "submitted", "Submitted"
+        GRADED = "graded", "Graded"
 
     enrollment = models.ForeignKey(
         Enrollment,
         on_delete=models.CASCADE,
-        related_name='submissions',
+        related_name="submissions",
     )
     assignment = models.ForeignKey(
-        'catalogue.Assignment',
+        "catalogue.Assignment",
         on_delete=models.CASCADE,
-        related_name='submissions',
+        related_name="submissions",
     )
 
     status = models.CharField(
@@ -217,34 +236,34 @@ class Submission(models.Model):
     )
     submitted_at = models.DateTimeField(null=True, blank=True)
 
-    submitted_text = models.TextField(blank=True, default='')
+    submitted_text = models.TextField(blank=True, default="")
     submitted_file_url = models.URLField(max_length=2048, blank=True, null=True)
     submitted_file_name = models.CharField(max_length=255, blank=True, null=True)
 
     grade = models.PositiveIntegerField(null=True, blank=True)
-    feedback = models.TextField(blank=True, default='')
-    internal_notes = models.TextField(blank=True, default='')
+    feedback = models.TextField(blank=True, default="")
+    internal_notes = models.TextField(blank=True, default="")
     graded_at = models.DateTimeField(null=True, blank=True)
     graded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='graded_submissions',
+        related_name="graded_submissions",
     )
 
     attempt_number = models.PositiveIntegerField(default=1)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('enrollment', 'assignment', 'attempt_number')
-        ordering = ['-created_at']
+        unique_together = ("enrollment", "assignment", "attempt_number")
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['enrollment', 'assignment']),
-            models.Index(fields=['assignment', 'status']),
-            models.Index(fields=['status']),
+            models.Index(fields=["enrollment", "assignment"]),
+            models.Index(fields=["assignment", "status"]),
+            models.Index(fields=["status"]),
         ]
 
     def __str__(self):
@@ -255,15 +274,16 @@ class QuizSubmission(models.Model):
     """
     QuizSubmission stores a learner's attempt at a quiz.
     """
+
     enrollment = models.ForeignKey(
         Enrollment,
         on_delete=models.CASCADE,
-        related_name='quiz_submissions',
+        related_name="quiz_submissions",
     )
     quiz = models.ForeignKey(
-        'catalogue.Quiz',
+        "catalogue.Quiz",
         on_delete=models.CASCADE,
-        related_name='submissions',
+        related_name="submissions",
     )
     attempt_number = models.PositiveIntegerField(default=1)
     score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -273,10 +293,10 @@ class QuizSubmission(models.Model):
     submitted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['-submitted_at']
+        ordering = ["-submitted_at"]
         indexes = [
-            models.Index(fields=['enrollment', 'quiz']),
-            models.Index(fields=['quiz', 'submitted_at']),
+            models.Index(fields=["enrollment", "quiz"]),
+            models.Index(fields=["quiz", "submitted_at"]),
         ]
 
     def __str__(self):
@@ -287,13 +307,14 @@ class QuizAnswer(models.Model):
     """
     QuizAnswer stores the learner's answer for a single question in a quiz submission.
     """
+
     submission = models.ForeignKey(
         QuizSubmission,
         on_delete=models.CASCADE,
-        related_name='answers',
+        related_name="answers",
     )
     question = models.ForeignKey(
-        'catalogue.QuizQuestion',
+        "catalogue.QuizQuestion",
         on_delete=models.CASCADE,
     )
     selected_answer = models.JSONField()
@@ -302,7 +323,7 @@ class QuizAnswer(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['submission', 'question']),
+            models.Index(fields=["submission", "question"]),
         ]
 
     def __str__(self):
@@ -313,44 +334,43 @@ class Discussion(models.Model):
     """
     Discussion represents discussion threads for courses/sessions.
     """
+
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='discussions'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="discussions"
     )
     course = models.ForeignKey(
-        'catalogue.Course',
+        "catalogue.Course",
         on_delete=models.CASCADE,
-        related_name='discussions',
+        related_name="discussions",
         null=True,
-        blank=True
+        blank=True,
     )
     session = models.ForeignKey(
-        'catalogue.Session',
+        "catalogue.Session",
         on_delete=models.CASCADE,
-        related_name='discussions',
+        related_name="discussions",
         null=True,
-        blank=True
+        blank=True,
     )
-    
+
     # Content
     title = models.CharField(max_length=255)
     content = models.TextField()
-    
+
     # Moderation
     is_pinned = models.BooleanField(default=False)
     is_locked = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-is_pinned', '-created_at']
+        ordering = ["-is_pinned", "-created_at"]
         indexes = [
-            models.Index(fields=['course']),
-            models.Index(fields=['session']),
+            models.Index(fields=["course"]),
+            models.Index(fields=["session"]),
         ]
 
     def __str__(self):
@@ -365,32 +385,31 @@ class DiscussionReply(models.Model):
     """
     DiscussionReply represents replies to discussions.
     """
-    discussion = models.ForeignKey(Discussion, on_delete=models.CASCADE, related_name='replies')
+
+    discussion = models.ForeignKey(
+        Discussion, on_delete=models.CASCADE, related_name="replies"
+    )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='discussion_replies'
+        related_name="discussion_replies",
     )
     parent = models.ForeignKey(
-        'self',
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name='replies'
+        "self", on_delete=models.CASCADE, null=True, blank=True, related_name="replies"
     )
-    
+
     # Content
     content = models.TextField()
-    
+
     # Moderation
     is_deleted = models.BooleanField(default=False)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['created_at']
+        ordering = ["created_at"]
 
     def __str__(self):
         return f"{self.user.email} - {self.discussion.title}"
@@ -402,47 +421,45 @@ class Report(models.Model):
     """
 
     class Type(models.TextChoices):
-        USER_ACTIVITY = 'user_activity', 'User Activity'
-        COURSE_PERFORMANCE = 'course_performance', 'Course Performance'
-        ENROLLMENT = 'enrollment', 'Enrollment'
-        COMPLETION = 'completion', 'Completion'
-        ASSESSMENT = 'assessment', 'Assessment'
-        REVENUE = 'revenue', 'Revenue'
+        USER_ACTIVITY = "user_activity", "User Activity"
+        COURSE_PERFORMANCE = "course_performance", "Course Performance"
+        ENROLLMENT = "enrollment", "Enrollment"
+        COMPLETION = "completion", "Completion"
+        ASSESSMENT = "assessment", "Assessment"
+        REVENUE = "revenue", "Revenue"
 
     class Status(models.TextChoices):
-        PROCESSING = 'processing', 'Processing'
-        READY = 'ready', 'Ready'
-        FAILED = 'failed', 'Failed'
+        PROCESSING = "processing", "Processing"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
 
     # Report details
     report_type = models.CharField(max_length=30, choices=Type.choices)
     name = models.CharField(max_length=255)
-    
+
     # Generation info
     generated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
-        related_name='generated_reports'
+        related_name="generated_reports",
     )
     generated_at = models.DateTimeField(auto_now_add=True)
-    
+
     # Status
     status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.PROCESSING
+        max_length=20, choices=Status.choices, default=Status.PROCESSING
     )
-    
+
     # File
-    file = models.FileField(upload_to='reports/', blank=True, null=True)
+    file = models.FileField(upload_to="reports/", blank=True, null=True)
     file_size = models.CharField(max_length=50, blank=True, null=True)
-    
+
     # Filter parameters (stored as JSON)
     parameters = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ['-generated_at']
+        ordering = ["-generated_at"]
 
     def __str__(self):
         return f"{self.name} - {self.status}"
@@ -455,17 +472,17 @@ class Badge(models.Model):
     """
 
     class Category(models.TextChoices):
-        COURSE_COMPLETION = 'course_completion', 'Course Completion'
-        ENROLLMENT = 'enrollment', 'Enrollment Milestones'
-        SUBSCRIPTION = 'subscription', 'Subscription Loyalty'
-        ASSESSMENT = 'assessment', 'Assessment Excellence'
-        ENGAGEMENT = 'engagement', 'Engagement'
-        MILESTONE = 'milestone', 'Milestones'
+        COURSE_COMPLETION = "course_completion", "Course Completion"
+        ENROLLMENT = "enrollment", "Enrollment Milestones"
+        SUBSCRIPTION = "subscription", "Subscription Loyalty"
+        ASSESSMENT = "assessment", "Assessment Excellence"
+        ENGAGEMENT = "engagement", "Engagement"
+        MILESTONE = "milestone", "Milestones"
 
     name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True)
     description = models.TextField()
-    icon_url = models.URLField(blank=True, default='')
+    icon_url = models.URLField(blank=True, default="")
     category = models.CharField(max_length=50, choices=Category.choices)
     criteria_type = models.CharField(max_length=50)
     criteria_value = models.IntegerField(default=1)
@@ -473,7 +490,7 @@ class Badge(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['category', 'order']
+        ordering = ["category", "order"]
 
     def __str__(self):
         return f"{self.name} ({self.slug})"
@@ -483,22 +500,23 @@ class UserBadge(models.Model):
     """
     UserBadge tracks which user has earned which badge.
     """
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='earned_badges',
+        related_name="earned_badges",
     )
     badge = models.ForeignKey(
         Badge,
         on_delete=models.CASCADE,
-        related_name='earners',
+        related_name="earners",
     )
     earned_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ['user', 'badge']
-        indexes = [models.Index(fields=['user', '-earned_at'])]
-        ordering = ['-earned_at']
+        unique_together = ["user", "badge"]
+        indexes = [models.Index(fields=["user", "-earned_at"])]
+        ordering = ["-earned_at"]
 
     def __str__(self):
         return f"{self.user} → {self.badge.name}"
@@ -508,63 +526,66 @@ class SavedCourse(models.Model):
     """
     SavedCourse represents a user's bookmarked/favorited course.
     """
+
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='saved_courses'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="saved_courses"
     )
     course = models.ForeignKey(
-        'catalogue.Course',
-        on_delete=models.CASCADE,
-        related_name='saved_by'
+        "catalogue.Course", on_delete=models.CASCADE, related_name="saved_by"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('user', 'course')
-        ordering = ['-created_at']
+        unique_together = ("user", "course")
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=["user", "-created_at"]),
         ]
 
     def __str__(self):
         return f"{self.user.email} saved {self.course.title}"
 
+
 class Workshop(models.Model):
     """
     Workshop represents an in-person training event.
     """
+
     class Status(models.TextChoices):
-        UPCOMING = 'upcoming', 'Upcoming'
-        ONGOING = 'ongoing', 'Ongoing'
-        COMPLETED = 'completed', 'Completed'
+        UPCOMING = "upcoming", "Upcoming"
+        ONGOING = "ongoing", "Ongoing"
+        COMPLETED = "completed", "Completed"
 
     class GradingType(models.TextChoices):
-        ATTENDANCE = 'attendance', 'Attendance Only'
-        PASS_FAIL = 'pass_fail', 'Pass / Fail'
-        SCORE = 'score', 'Score (0-100)'
+        ATTENDANCE = "attendance", "Attendance Only"
+        PASS_FAIL = "pass_fail", "Pass / Fail"
+        SCORE = "score", "Score (0-100)"
 
     title = models.CharField(max_length=255)
-    description = models.TextField(blank=True, default='')
+    description = models.TextField(blank=True, default="")
     location = models.CharField(max_length=255)
     start_date = models.DateField()
     end_date = models.DateField()
     max_participants = models.PositiveIntegerField(default=30)
     participants_count = models.PositiveIntegerField(default=0)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
-    grading_type = models.CharField(max_length=20, choices=GradingType.choices, default=GradingType.ATTENDANCE)
-    category = models.CharField(max_length=100, default='General')
-    
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.UPCOMING
+    )
+    grading_type = models.CharField(
+        max_length=20, choices=GradingType.choices, default=GradingType.ATTENDANCE
+    )
+    category = models.CharField(max_length=100, default="General")
+
     instructor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='workshops_taught'
+        related_name="workshops_taught",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-start_date']
+        ordering = ["-start_date"]
 
     def __str__(self):
         return self.title
@@ -573,3 +594,36 @@ class Workshop(models.Model):
     def participants(self):
         return self.participants_count
 
+
+class WorkshopAttendance(models.Model):
+    """
+    Tracks learner attendance for workshops.
+    """
+
+    class Status(models.TextChoices):
+        PRESENT = "present", "Present"
+        ABSENT = "absent", "Absent"
+        LATE = "late", "Late"
+
+    workshop = models.ForeignKey(
+        Workshop, on_delete=models.CASCADE, related_name="attendances"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="workshop_attendances",
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PRESENT
+    )
+    grade = models.PositiveIntegerField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
+    marked_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ["workshop", "user"]
+        ordering = ["-marked_at"]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.workshop.title} ({self.status})"

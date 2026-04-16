@@ -30,8 +30,6 @@ class User(AbstractUser):
         TASC_ADMIN = "tasc_admin", "TASC Admin"
         LMS_MANAGER = "lms_manager", "LMS Manager"
 
-
-
     email = models.EmailField(unique=True)
     # signup profile
     phone_number = models.CharField(max_length=32, blank=True, null=True)
@@ -78,7 +76,6 @@ class User(AbstractUser):
 
         super().save(*args, **kwargs)
 
-
     def __str__(self) -> str:
         return self.email or self.username
 
@@ -122,35 +119,37 @@ class Organization(models.Model):
     logo = models.URLField(blank=True, null=True)
     website = models.URLField(blank=True, null=True)
     industry = models.CharField(max_length=100, blank=True)
-    
+
     # Contact
     contact_email = models.EmailField(blank=True, null=True)
     contact_phone = models.CharField(max_length=32, blank=True, null=True)
     address = models.TextField(blank=True)
     city = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
-    
+
     # Settings
     is_active = models.BooleanField(default=True)
-    max_seats = models.PositiveIntegerField(null=True, blank=True, help_text="Maximum number of seats")
-    
+    max_seats = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Maximum number of seats"
+    )
+
     # Billing
     billing_email = models.EmailField(blank=True, null=True)
     billing_address = models.TextField(blank=True)
     tax_id = models.CharField(max_length=100, blank=True, null=True)
-    
+
     # Settings JSON blob
     settings = models.JSONField(default=dict, blank=True)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['name']
+        ordering = ["name"]
         indexes = [
-            models.Index(fields=['slug']),
-            models.Index(fields=['is_active']),
+            models.Index(fields=["slug"]),
+            models.Index(fields=["is_active"]),
         ]
 
     def __str__(self) -> str:
@@ -183,7 +182,7 @@ class Membership(models.Model):
     )
     is_active = models.BooleanField(default=True)
     joined_at = models.DateTimeField(auto_now_add=True)
-    
+
     # Job details
     job_title = models.CharField(max_length=100, blank=True)
     department = models.CharField(max_length=100, blank=True)
@@ -192,13 +191,13 @@ class Membership(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='managed_memberships'
+        related_name="managed_memberships",
     )
 
     class Meta:
         unique_together = ("user", "organization")
         indexes = [
-            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=["organization", "is_active"]),
         ]
 
     def __str__(self) -> str:
@@ -209,10 +208,11 @@ class DemoRequest(models.Model):
     """
     Submitted via the /for-business CTA form. Superadmin can view and manage status.
     """
+
     STATUS_CHOICES = [
-        ('new', 'New'),
-        ('contacted', 'Contacted'),
-        ('closed', 'Closed'),
+        ("new", "New"),
+        ("contacted", "Contacted"),
+        ("closed", "Closed"),
     ]
 
     first_name = models.CharField(max_length=100)
@@ -220,15 +220,71 @@ class DemoRequest(models.Model):
     email = models.EmailField()
     company = models.CharField(max_length=200)
     team_size = models.CharField(max_length=50)
-    phone = models.CharField(max_length=32, blank=True, default='')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
-    notes = models.TextField(blank=True, default='')
+    phone = models.CharField(max_length=32, blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="new")
+    notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'accounts_demorequest'
-        ordering = ['-created_at']
+        db_table = "accounts_demorequest"
+        ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} <{self.email}> — {self.company}"
+
+
+class BusinessTestimonial(models.Model):
+    """
+    Testimonials from Org Admins about the TASC LMS platform.
+    Shown on the /for-business page.
+    """
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("featured", "Featured"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="business_testimonials",
+    )
+    company_name = models.CharField(max_length=200)
+    content = models.TextField()
+    rating = models.PositiveIntegerField(choices=[(i, str(i)) for i in range(1, 6)])
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_businesstestimonial"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.company_name} - {self.rating} stars ({self.status})"
+
+
+class UserSession(models.Model):
+    """
+    Tracks user sessions for security monitoring.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sessions"
+    )
+    session_key = models.CharField(max_length=40)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+    device_info = models.JSONField(default=dict, blank=True)
+    last_activity = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "accounts_usersession"
+        ordering = ["-last_activity"]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.session_key[:8]}... ({self.ip_address})"

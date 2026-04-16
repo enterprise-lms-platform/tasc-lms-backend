@@ -466,11 +466,36 @@ class ManagerBulkImportMembersView(APIView):
                 username = f"{base_username}{i}"
 
             pending.append({
-                "email": email,
-                "username": username,
-                "first_name": first_name,
-                "last_name": last_name,
-            })
+            "email": email,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+        })
+
+        # Check seat capacity before import
+        max_seats = org.max_seats
+        if max_seats is not None:
+            current_members = Membership.objects.filter(
+                organization=org,
+                is_active=True
+            ).exclude(user__email__in=[p['email'] for p in pending]).count()
+            
+            available_seats = max_seats - current_members
+            if available_seats <= 0:
+                return Response(
+                    {
+                        "error": "seat_limit_reached",
+                        "message": f"Cannot import {len(pending)} users. You have reached your seat limit of {max_seats}. Please upgrade your subscription.",
+                        "seats": {"max": max_seats, "used": current_members, "remaining": 0}
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Trim pending to available seats
+            if len(pending) > available_seats:
+                excess = len(pending) - available_seats
+                pending = pending[:available_seats]
+                errors.append({"row": 0, "email": "", "error": f"{excess} users not imported - seat limit reached. Upgrade to import more."})
 
         imported = 0
         if pending:

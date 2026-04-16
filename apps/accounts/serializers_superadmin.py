@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from .models import Organization, DemoRequest
+from .models import Organization, DemoRequest, UserSession
 
 User = get_user_model()
 
@@ -38,7 +38,14 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "users_count", "courses_count"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "users_count",
+            "courses_count",
+        ]
+
 
 class UserSuperadminSerializer(serializers.ModelSerializer):
     """
@@ -91,10 +98,19 @@ class DemoRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = DemoRequest
         fields = [
-            'id', 'first_name', 'last_name', 'email', 'company',
-            'team_size', 'phone', 'status', 'notes', 'created_at', 'updated_at',
+            "id",
+            "first_name",
+            "last_name",
+            "email",
+            "company",
+            "team_size",
+            "phone",
+            "status",
+            "notes",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class DemoRequestCreateSerializer(serializers.ModelSerializer):
@@ -102,4 +118,32 @@ class DemoRequestCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DemoRequest
-        fields = ['first_name', 'last_name', 'email', 'company', 'team_size', 'phone']
+        fields = ["first_name", "last_name", "email", "company", "team_size", "phone"]
+
+
+class UserSessionSerializer(serializers.ModelSerializer):
+    """Serializer for UserSession model."""
+
+    user_email = serializers.CharField(source="user.email", read_only=True)
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserSession
+        fields = [
+            "id",
+            "user",
+            "user_email",
+            "user_name",
+            "session_key",
+            "ip_address",
+            "user_agent",
+            "device_info",
+            "last_activity",
+            "created_at",
+            "is_active",
+        ]
+        depth = 0
+        read_only_fields = ["id", "session_key", "created_at", "last_activity"]
+
+    def get_user_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email

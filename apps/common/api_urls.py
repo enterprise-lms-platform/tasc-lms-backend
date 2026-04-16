@@ -1,11 +1,24 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from apps.accounts.views import invite_user, promote_user_role, UserAdminViewSet
+from apps.accounts.views import (
+    invite_user,
+    promote_user_role,
+    UserAdminViewSet,
+    BusinessTestimonialViewSet,
+    OrganizationSeatUsageView,
+    OrganizationMemberViewSet,
+)
 from apps.common.views import PresignUploadView, StorageQuotaView
 
 # Admin router for user management
 admin_router = DefaultRouter()
-admin_router.register(r'users', UserAdminViewSet, basename='admin-user')
+admin_router.register(r"users", UserAdminViewSet, basename="admin-user")
+admin_router.register(
+    r"testimonials", BusinessTestimonialViewSet, basename="business-testimonial"
+)
+admin_router.register(
+    r"members", OrganizationMemberViewSet, basename="organization-members"
+)
 
 urlpatterns = [
     path("uploads/presign/", PresignUploadView.as_view(), name="uploads-presign"),
@@ -13,8 +26,15 @@ urlpatterns = [
     path("", include("apps.common.urls")),
     path("auth/", include("apps.accounts.urls")),
     path("admin/users/invite/", invite_user, name="admin-invite-user"),
-    path("admin/users/<int:user_id>/promote/", promote_user_role, name="admin-user-promote"),
+    path(
+        "admin/users/<int:user_id>/promote/",
+        promote_user_role,
+        name="admin-user-promote",
+    ),
     path("admin/", include(admin_router.urls)),  # /api/v1/admin/users/
+    path(
+        "admin/seats/", OrganizationSeatUsageView.as_view(), name="organization-seats"
+    ),
     path("notifications/", include("apps.notifications.urls")),
     path("superadmin/", include("apps.audit.urls")),
     path("superadmin/", include("apps.accounts.urls_superadmin")),

@@ -14,7 +14,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
 
-from .models import Organization, Membership
+from .models import Organization, Membership, BusinessTestimonial
 
 
 def raise_password_validation_error(password: str, *, user=None, field_name: str):
@@ -305,7 +305,9 @@ class InviteUserSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     role = serializers.ChoiceField(choices=User.Role.choices)
-    organization = serializers.IntegerField(required=False, allow_null=True, default=None)
+    organization = serializers.IntegerField(
+        required=False, allow_null=True, default=None
+    )
 
     def validate_email(self, value):
         return value.strip().lower()
@@ -326,7 +328,9 @@ class InviteUserSerializer(serializers.Serializer):
         if role == "org_admin":
             if not org_id:
                 raise serializers.ValidationError(
-                    {"organization": "Organization is required when inviting an org_admin."}
+                    {
+                        "organization": "Organization is required when inviting an org_admin."
+                    }
                 )
             try:
                 attrs["organization"] = Organization.objects.get(pk=org_id)
@@ -392,8 +396,10 @@ class SetPasswordFromInviteSerializer(serializers.Serializer):
 # Admin/Manager User Management Serializers
 # ============================================
 
+
 class UserListSerializer(serializers.ModelSerializer):
     """Serializer for admin/manager user listing with key fields."""
+
     name = serializers.SerializerMethodField()
 
     class Meta:
@@ -419,6 +425,7 @@ class UserListSerializer(serializers.ModelSerializer):
 
 class UserDetailSerializer(serializers.ModelSerializer):
     """Serializer for admin/manager user detail view."""
+
     name = serializers.SerializerMethodField()
 
     class Meta:
@@ -478,6 +485,7 @@ class ManagerOrganizationSerializer(serializers.ModelSerializer):
     """
     Serializer for Managers to update their own organization settings.
     """
+
     class Meta:
         model = Organization
         fields = [
@@ -498,3 +506,49 @@ class ManagerOrganizationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "slug", "created_at", "updated_at"]
+
+
+# Business Testimonial Serializers
+class BusinessTestimonialSerializer(serializers.ModelSerializer):
+    """Serializer for Business Testimonial model."""
+
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BusinessTestimonial
+        fields = [
+            "id",
+            "user",
+            "user_name",
+            "company_name",
+            "content",
+            "rating",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "user", "status", "created_at", "updated_at"]
+
+    def get_user_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+
+
+class BusinessTestimonialCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating Business Testimonials."""
+
+    class Meta:
+        model = BusinessTestimonial
+        fields = ["company_name", "content", "rating"]
+
+    def validate_rating(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
+
+
+class BusinessTestimonialUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating Business Testimonials (Super Admin only)."""
+
+    class Meta:
+        model = BusinessTestimonial
+        fields = ["status"]

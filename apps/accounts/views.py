@@ -1,11 +1,18 @@
 import logging
 
-from drf_spectacular.utils import extend_schema, OpenApiExample, extend_schema_view, OpenApiParameter, inline_serializer
+from drf_spectacular.utils import (
+    extend_schema,
+    OpenApiExample,
+    extend_schema_view,
+    OpenApiParameter,
+    inline_serializer,
+)
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.views import APIView
 from rest_framework.response import Response as RestResponse
 from rest_framework import serializers
 
@@ -27,7 +34,7 @@ from django.db import models, IntegrityError, transaction
 
 from .tokens import email_verification_token
 from .rbac import is_admin_like, get_active_membership_organization
-from .models import Membership
+from .models import Membership, BusinessTestimonial
 
 from apps.notifications.services import send_tasc_email
 
@@ -78,6 +85,7 @@ def me(request):
     )
     serializer.is_valid(raise_exception=True)
     from apps.audit.services import log_event
+
     serializer.save()
     log_event(
         action="updated",
@@ -91,21 +99,21 @@ def me(request):
 
 
 @extend_schema(
-tags=["Accounts"],
-summary="Verify email",
-description="Verify a user's email using the uid and token from the verification link.",
-examples=[
-    OpenApiExample(
-        "Verified OK",
-        value={"message": "Email verified successfully."},
-        response_only=True,
-    ),
-    OpenApiExample(
-        "Invalid/Expired",
-        value={"detail": "Verification link expired or invalid."},
-        response_only=True,
-    ),
-],
+    tags=["Accounts"],
+    summary="Verify email",
+    description="Verify a user's email using the uid and token from the verification link.",
+    examples=[
+        OpenApiExample(
+            "Verified OK",
+            value={"message": "Email verified successfully."},
+            response_only=True,
+        ),
+        OpenApiExample(
+            "Invalid/Expired",
+            value={"detail": "Verification link expired or invalid."},
+            response_only=True,
+        ),
+    ],
 )
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -148,14 +156,20 @@ def verify_email(request, uidb64, token):
     description="Super Admin invites a user by email. Creates or updates user account and sends invitation email.",
     request=InviteUserSerializer,
     responses={
-        201: {"type": "object", "properties": {"detail": {"type": "string"}, "email": {"type": "string"}}},
+        201: {
+            "type": "object",
+            "properties": {"detail": {"type": "string"}, "email": {"type": "string"}},
+        },
         400: {"type": "object", "properties": {"detail": {"type": "string"}}},
         403: {"type": "object", "properties": {"detail": {"type": "string"}}},
     },
     examples=[
         OpenApiExample(
             "Success",
-            value={"detail": "Invitation sent successfully", "email": "user@example.com"},
+            value={
+                "detail": "Invitation sent successfully",
+                "email": "user@example.com",
+            },
             response_only=True,
         ),
     ],
@@ -220,7 +234,9 @@ def invite_user(request):
     # Any other role cannot invite.
     else:
         return Response(
-            {"detail": "Only TASC Admins, LMS Managers, and Organization Admins can invite users."},
+            {
+                "detail": "Only TASC Admins, LMS Managers, and Organization Admins can invite users."
+            },
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -259,10 +275,44 @@ def invite_user(request):
                 user.email_verified = True
                 user.must_set_password = True
                 user.is_active = True
-                user.save(update_fields=["first_name", "last_name", "role", "email_verified", "must_set_password", "is_active"])
+                user.save(
+                    update_fields=[
+                        "first_name",
+                        "last_name",
+                        "role",
+                        "email_verified",
+                        "must_set_password",
+                        "is_active",
+                    ]
+                )
 
             # If invited by an LMS Manager or Org Admin, attach to the requester's organisation via Membership.
-            if requester_role in (User.Role.LMS_MANAGER, User.Role.ORG_ADMIN) and manager_org is not None:
+            if (
+                requester_role in (User.Role.LMS_MANAGER, User.Role.ORG_ADMIN)
+                and manager_org is not None
+            ):
+                # Check seat availability
+                max_seats = manager_org.max_seats
+                if max_seats is not None:
+                    current_members = Membership.objects.filter(
+                        organization=manager_org,
+                        is_active=True
+                    ).exclude(user=user).count()
+
+                    if current_members >= max_seats:
+                        return Response(
+                            {
+                                "error": "seat_limit_reached",
+                                "message": f"You have reached your seat limit of {max_seats}. Please upgrade your subscription to add more learners.",
+                                "seats": {
+                                    "max": max_seats,
+                                    "used": current_members,
+                                    "remaining": 0
+                                }
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                 membership, membership_created = Membership.objects.get_or_create(
                     user=user,
                     organization=manager_org,
@@ -302,7 +352,9 @@ def invite_user(request):
             token = default_token_generator.make_token(user)
 
             # Build frontend set-password URL
-            frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+            frontend_base = getattr(
+                settings, "FRONTEND_BASE_URL", "http://localhost:5173"
+            )
             set_password_url = f"{frontend_base}/set-password/{uidb64}/{token}"
 
             invite_org = serializer.validated_data.get("organization") or manager_org
@@ -324,7 +376,9 @@ def invite_user(request):
                         },
                     )
                 except Exception:
-                    logger.exception("Failed to send invite email", extra={"email": user.email})
+                    logger.exception(
+                        "Failed to send invite email", extra={"email": user.email}
+                    )
 
             transaction.on_commit(_send_invite_email)
 
@@ -362,26 +416,23 @@ def invite_user(request):
     tags=["Admin"],
     summary="Promote user to instructor",
     description="Promote a target user to instructor. Allowed for TASC Admin and LMS Manager.",
-    request=inline_serializer(
-        name='PromoteUserRoleSerializer',
-        fields={}
-    ),
+    request=inline_serializer(name="PromoteUserRoleSerializer", fields={}),
     responses={
         200: inline_serializer(
-            name='PromoteUserRoleResponseSerializer',
+            name="PromoteUserRoleResponseSerializer",
             fields={
-                'message': serializers.CharField(),
-                'user_id': serializers.IntegerField(),
-                'new_role': serializers.CharField(),
-            }
+                "message": serializers.CharField(),
+                "user_id": serializers.IntegerField(),
+                "new_role": serializers.CharField(),
+            },
         ),
         403: inline_serializer(
-            name='PromoteUserRole403Serializer',
-            fields={'detail': serializers.CharField()}
+            name="PromoteUserRole403Serializer",
+            fields={"detail": serializers.CharField()},
         ),
         404: inline_serializer(
-            name='PromoteUserRole404Serializer',
-            fields={'detail': serializers.CharField()}
+            name="PromoteUserRole404Serializer",
+            fields={"detail": serializers.CharField()},
         ),
     },
 )
@@ -435,6 +486,7 @@ def promote_user_role(request, user_id: int):
 # Admin/Manager User Management Views
 # ============================================
 
+
 @extend_schema_view(
     list=extend_schema(
         tags=["Accounts - Admin Users"],
@@ -473,70 +525,75 @@ def promote_user_role(request, user_id: int):
 class UserAdminViewSet(viewsets.ModelViewSet):
     """
     ViewSet for admin/manager user management.
-    
+
     Supports:
     - Listing users with filtering (role, is_active, search)
     - Retrieving user details
     - Partial updating user fields
-    
+
     Requires TASC_ADMIN or LMS_MANAGER role.
     """
+
     queryset = User.objects.all().order_by("-date_joined")
     permission_classes = [IsAuthenticated]
-    
+
     def check_admin_permission(self, request):
         """Check if user has admin-like role."""
         if not is_admin_like(request.user):
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Only TASC Admins and LMS Managers can access this endpoint.")
+
+            raise PermissionDenied(
+                "Only TASC Admins and LMS Managers can access this endpoint."
+            )
         return True
-    
+
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
             return [IsAuthenticated()]
         # For update actions, check admin role
         return super().get_permissions()
-    
+
     def get_serializer_class(self):
         if self.action == "list":
             return UserListSerializer
         elif self.action in ["retrieve"]:
             return UserDetailSerializer
         return UserUpdateSerializer
-    
+
     def get_queryset(self):
         # Check admin permission for list action
         self.check_admin_permission(self.request)
-        
+
         queryset = User.objects.all().order_by("-date_joined")
-        
+
         # Filter by role
         role = self.request.query_params.get("role", None)
         if role:
             queryset = queryset.filter(role=role)
-        
+
         # Filter by is_active
         is_active = self.request.query_params.get("is_active", None)
         if is_active is not None:
             is_active_bool = is_active.lower() in ("true", "1", "yes")
             queryset = queryset.filter(is_active=is_active_bool)
-        
+
         # Search by email or name
         search = self.request.query_params.get("search", None)
         if search:
             queryset = queryset.filter(
-                models.Q(email__icontains=search) |
-                models.Q(first_name__icontains=search) |
-                models.Q(last_name__icontains=search) |
-                models.Q(username__icontains=search)
+                models.Q(email__icontains=search)
+                | models.Q(first_name__icontains=search)
+                | models.Q(last_name__icontains=search)
+                | models.Q(username__icontains=search)
             )
-        
+
         return queryset
-    
+
     def perform_update(self, serializer):
         user = serializer.save()
         # Log the update
         from apps.audit.services import log_event
+
         log_event(
             action="updated",
             resource="user",
@@ -557,83 +614,117 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         import string
         from django.db import transaction
         from django.contrib.auth.hashers import make_password
-        
+
         self.check_admin_permission(request)
 
-        if 'file' not in request.FILES:
-            return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        csv_file = request.FILES['file']
-        
-        if not csv_file.name.endswith('.csv'):
-            return Response({"error": "File must be a CSV file"}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if "file" not in request.FILES:
+            return Response(
+                {"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        csv_file = request.FILES["file"]
+
+        if not csv_file.name.endswith(".csv"):
+            return Response(
+                {"error": "File must be a CSV file"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
         if csv_file.size > 10 * 1024 * 1024:
-            return Response({"error": "File size exceeds 10 MB limit"}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"error": "File size exceeds 10 MB limit"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            decoded_file = csv_file.read().decode('utf-8')
+            decoded_file = csv_file.read().decode("utf-8")
             reader = csv.DictReader(decoded_file.splitlines())
         except Exception as e:
-            return Response({"error": f"Failed to parse CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"error": f"Failed to parse CSV file: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Managers can import learners and instructors. Superadmins can also import managers.
-        if getattr(request.user, 'role', '') == 'lms_manager':
-            valid_roles = ['learner', 'instructor']
+        if getattr(request.user, "role", "") == "lms_manager":
+            valid_roles = ["learner", "instructor"]
         else:
-            valid_roles = ['learner', 'instructor', 'manager', 'lms_manager']
-        
+            valid_roles = ["learner", "instructor", "manager", "lms_manager"]
+
         total_rows = 0
         imported = 0
         errors = []
         users_to_create = []
-        
+
         for row_num, row in enumerate(reader, start=2):
             total_rows += 1
-            
+
             # Map frontend export columns to backend expected columns
-            email = (row.get('email') or row.get('email_address') or '').strip()
-            role = (row.get('role') or row.get('user_role') or 'learner').strip().lower()
-            department = row.get('department', '').strip()
-            phone_number = row.get('phone_number', '').strip()
-            
+            email = (row.get("email") or row.get("email_address") or "").strip()
+            role = (
+                (row.get("role") or row.get("user_role") or "learner").strip().lower()
+            )
+            department = row.get("department", "").strip()
+            phone_number = row.get("phone_number", "").strip()
+
             # Handle full_name splitting if first_name/last_name are missing
-            first_name = row.get('first_name', '').strip()
-            last_name = row.get('last_name', '').strip()
-            full_name = row.get('full_name', '').strip()
-            
+            first_name = row.get("first_name", "").strip()
+            last_name = row.get("last_name", "").strip()
+            full_name = row.get("full_name", "").strip()
+
             if not first_name and not last_name and full_name:
-                parts = full_name.split(' ', 1)
+                parts = full_name.split(" ", 1)
                 first_name = parts[0]
                 if len(parts) > 1:
                     last_name = parts[1]
-            
+
             if not email:
-                errors.append({"row": row_num, "email": "", "error": "Email is required"})
+                errors.append(
+                    {"row": row_num, "email": "", "error": "Email is required"}
+                )
                 continue
-            
+
             import re
-            if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
-                errors.append({"row": row_num, "email": email, "error": "Invalid email format"})
+
+            if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", email):
+                errors.append(
+                    {"row": row_num, "email": email, "error": "Invalid email format"}
+                )
                 continue
-            
+
             if User.objects.filter(email=email).exists():
-                errors.append({"row": row_num, "email": email, "error": "User already exists"})
+                errors.append(
+                    {"row": row_num, "email": email, "error": "User already exists"}
+                )
                 continue
-            
+
             if role not in valid_roles:
-                errors.append({"row": row_num, "email": email, "error": f"Invalid role: '{role}'. Must be one of: {', '.join(valid_roles)}"})
+                errors.append(
+                    {
+                        "row": row_num,
+                        "email": email,
+                        "error": f"Invalid role: '{role}'. Must be one of: {', '.join(valid_roles)}",
+                    }
+                )
                 continue
-            
+
             if total_rows > 5000:
-                errors.append({"row": row_num, "email": email, "error": "Max 5000 records per file exceeded"})
+                errors.append(
+                    {
+                        "row": row_num,
+                        "email": email,
+                        "error": "Max 5000 records per file exceeded",
+                    }
+                )
                 break
-            
-            random_password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-            
+
+            random_password = "".join(
+                random.choices(string.ascii_letters + string.digits, k=12)
+            )
+
             user = User(
                 email=email,
-                username=email.split("@")[0] + ''.join(random.choices(string.digits, k=4)),
+                username=email.split("@")[0]
+                + "".join(random.choices(string.digits, k=4)),
                 first_name=first_name,
                 last_name=last_name,
                 role=role,
@@ -642,23 +733,57 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 is_active=True,
             )
             users_to_create.append(user)
-        
+
         if users_to_create:
             try:
                 with transaction.atomic():
                     User.objects.bulk_create(users_to_create)
                     imported = len(users_to_create)
+
+                    # Send invitation emails to imported users
+                    from django.core.mail import send_mail
+                    from django.conf import settings
+
+                    for user in users_to_create:
+                        try:
+                            # Generate password reset token for user to set their password
+                            from django.contrib.auth.tokens import default_token_generator
+                            from django.utils.http import urlsafe_base64_encode
+                            from django.utils.encoding import force_bytes
+
+                            uid = urlsafe_base64_encode(force_bytes(user.pk))
+                            token = default_token_generator.make_token(user)
+                            set_password_url = f"{settings.FRONTEND_BASE_URL}/set-password/{uid}/{token}/"
+
+                            send_mail(
+                                subject=f"Welcome to TASC LMS - Set Your Password",
+                                message=f"""
+Hello {user.first_name or user.username},
+
+You have been added to the TASC Learning Management System by your organization.
+
+To get started, please set your password using the link below:
+{set_password_url}
+
+If you have any questions, please contact your organization administrator.
+
+Best regards,
+TASC Team
+                            """.strip(),
+                                from_email=settings.DEFAULT_FROM_EMAIL,
+                                recipient_list=[user.email],
+                                fail_silently=False,
+                            )
+                        except Exception as email_err:
+                            # Log but don't fail the entire import for one email error
+                            import logging
+                            logging.warning(f"Failed to send invitation email to {user.email}: {email_err}")
+
             except Exception as e:
-                errors.append({"row": 0, "email": "", "error": f"Database error: {str(e)}"})
+                errors.append(
+                    {"row": 0, "email": "", "error": f"Database error: {str(e)}"}
+                )
                 imported = 0
-        
-        return Response({
-            "message": "Bulk import completed.",
-            "total_rows": total_rows,
-            "imported": imported,
-            "failed": len(errors),
-            "errors": errors[:100]
-        })
 
     @action(detail=False, methods=["get"])
     def csv_template(self, request):
@@ -670,11 +795,176 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 
         self.check_admin_permission(request)
 
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="users_import_template.csv"'
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = (
+            'attachment; filename="users_import_template.csv"'
+        )
 
         writer = csv.writer(response)
         writer.writerow(['email', 'first_name', 'last_name', 'role', 'department', 'phone_number'])
         writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', 'Engineering', '+1234567890'])
 
         return response
+
+
+# Business Testimonial Views
+from .serializers import BusinessTestimonialSerializer, BusinessTestimonialCreateSerializer, BusinessTestimonialUpdateSerializer
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+
+
+class BusinessTestimonialViewSet(viewsets.ModelViewSet):
+    """ViewSet for Business Testimonials."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = BusinessTestimonialSerializer
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return BusinessTestimonialCreateSerializer
+        if self.action in ['update', 'partial_update']:
+            return BusinessTestimonialUpdateSerializer
+        return BusinessTestimonialSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'role') and user.role == 'tasc_admin':
+            return BusinessTestimonial.objects.all()
+        return BusinessTestimonial.objects.filter(user=user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class OrganizationSeatUsageView(APIView):
+    """API endpoint for Org Admin to view seat usage."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        if user.role not in [User.Role.ORG_ADMIN, User.Role.LMS_MANAGER]:
+            return Response(
+                {"error": "Unauthorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get user's organization
+        membership = Membership.objects.filter(
+            user=user,
+            is_active=True
+        ).first()
+        
+        if not membership:
+            return Response(
+                {"error": "No organization found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        org = membership.organization
+        max_seats = org.max_seats
+        
+        # Count active members (excluding other org admins/managers for seat count)
+        active_members = Membership.objects.filter(
+            organization=org,
+            is_active=True
+        ).exclude(role__in=[Membership.Role.ORG_ADMIN, Membership.Role.ORG_MANAGER])
+        
+        # If user is LMS Manager, only count learners
+        if user.role == User.Role.LMS_MANAGER:
+            active_members = active_members.filter(role=Membership.Role.ORG_LEARNER)
+        
+        used_seats = active_members.count()
+        remaining = max(0, max_seats - used_seats) if max_seats else None
+        percent_used = (used_seats / max_seats * 100) if max_seats and max_seats > 0 else 0
+        
+        return Response({
+            "organization": {
+                "id": org.id,
+                "name": org.name,
+            },
+            "seats": {
+                "max": max_seats,
+                "used": used_seats,
+                "remaining": remaining,
+                "percent_used": round(percent_used, 1),
+                "at_warning": percent_used >= 80 if max_seats else False,
+                "at_capacity": used_seats >= max_seats if max_seats else False,
+            }
+        })
+
+
+class OrganizationMemberViewSet(viewsets.ViewSet):
+    """ViewSet for managing organization members (seat unassignment)."""
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ['list', 'destroy']:
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def list(self, request):
+        """List organization members with seat info."""
+        user = request.user
+        
+        if user.role not in [User.Role.ORG_ADMIN, User.Role.LMS_MANAGER]:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get organization
+        membership = Membership.objects.filter(user=user, is_active=True).first()
+        if not membership:
+            return Response({"error": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        org = membership.organization
+        members = Membership.objects.filter(organization=org, is_active=True).select_related('user')
+        
+        # Filter based on role
+        if user.role == User.Role.LMS_MANAGER:
+            members = members.filter(role=Membership.Role.ORG_LEARNER)
+        
+        results = []
+        for m in members:
+            results.append({
+                "id": m.id,
+                "user_id": m.user.id,
+                "name": f"{m.user.first_name} {m.user.last_name}".strip() or m.user.email,
+                "email": m.user.email,
+                "role": m.role,
+                "joined_at": m.created_at,
+            })
+        
+        return Response({"results": results})
+
+    def destroy(self, request, pk=None):
+        """Unassign (deactivate) a member to free up their seat."""
+        user = request.user
+        
+        if user.role not in [User.Role.ORG_ADMIN, User.Role.LMS_MANAGER]:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get organization
+        membership = Membership.objects.filter(user=user, is_active=True).first()
+        if not membership:
+            return Response({"error": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Find the member to unassign
+        try:
+            target_membership = Membership.objects.get(
+                id=pk,
+                organization=membership.organization,
+                is_active=True
+            )
+        except Membership.DoesNotExist:
+            return Response({"error": "Member not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Can't unassign other org admins
+        if target_membership.role == Membership.Role.ORG_ADMIN and user.role != User.Role.TASC_ADMIN:
+            return Response({"error": "Cannot unassign an Org Admin"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Can't unassign yourself
+        if target_membership.user == user:
+            return Response({"error": "Cannot unassign yourself"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        target_membership.is_active = False
+        target_membership.save(update_fields=['is_active'])
+        
+        return Response({"message": "Member unassigned successfully", "freed_seat": True})
