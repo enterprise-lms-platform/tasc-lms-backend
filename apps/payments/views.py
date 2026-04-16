@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.utils import timezone
 from django.http import HttpResponse
 import uuid
@@ -22,12 +23,25 @@ from .serializers import (
     InvoiceSerializer, InvoiceCreateSerializer,
     InvoiceItemSerializer, TransactionSerializer,
     PaymentMethodSerializer, PaymentMethodCreateSerializer,
-    SubscriptionSerializer, UserSubscriptionSerializer, UserSubscriptionCreateSerializer,
+    SubscriptionSerializer, SubscriptionCreateUpdateSerializer,
+    UserSubscriptionSerializer, UserSubscriptionCreateSerializer,
     SubscriptionStatusSerializer,
     PaymentSerializer, CreatePaymentSerializer, PaymentConfirmationSerializer,
     PaymentWebhookSerializer, PaymentStatusSerializer
 )
 from .permissions import user_has_active_subscription, get_best_active_subscription
+
+
+def _can_manage_subscription_plans(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, 'is_superuser', False)
+            or getattr(user, 'is_staff', False)
+            or getattr(user, 'role', None) == 'tasc_admin'
+        )
+    )
 
 
 @extend_schema(
@@ -551,25 +565,89 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     tags=['Payments - Subscriptions'],
     description='Manage subscription plans',
 )
-class SubscriptionViewSet(viewsets.ReadOnlyModelViewSet):
+class SubscriptionViewSet(viewsets.ModelViewSet):
     """ViewSet for managing subscription plans."""
-    queryset = Subscription.objects.filter(status='active')
-    serializer_class = SubscriptionSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Subscription.objects.all().order_by('price', 'name')
+        if _can_manage_subscription_plans(self.request.user):
+            return queryset
+        return queryset.filter(status=Subscription.Status.ACTIVE)
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return SubscriptionCreateUpdateSerializer
+        return SubscriptionSerializer
+
+    def _require_plan_admin(self, request):
+        if not _can_manage_subscription_plans(request.user):
+            raise PermissionDenied('Only TASC admins can manage subscription plans.')
     
     @extend_schema(
         summary='List subscription plans',
-        description='Returns all active subscription plans',
+        description='Returns all plans for TASC admins and active plans for other authenticated users',
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
     
     @extend_schema(
         summary='Get subscription plan details',
-        description='Returns detailed information about a subscription plan',
+        description='Returns detailed information about a subscription plan visible to the requester',
     )
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Create subscription plan',
+        description='Create a subscription plan (TASC admin only)',
+        request=SubscriptionCreateUpdateSerializer,
+        responses={201: SubscriptionSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        self._require_plan_admin(request)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(SubscriptionSerializer(instance).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        summary='Update subscription plan',
+        description='Update a subscription plan (TASC admin only)',
+        request=SubscriptionCreateUpdateSerializer,
+        responses={200: SubscriptionSerializer},
+    )
+    def update(self, request, *args, **kwargs):
+        self._require_plan_admin(request)
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(SubscriptionSerializer(instance).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    @extend_schema(
+        summary='Delete subscription plan',
+        description='Deletes a subscription plan only when it has never been assigned to a user subscription.',
+    )
+    def destroy(self, request, *args, **kwargs):
+        self._require_plan_admin(request)
+        instance = self.get_object()
+        if instance.user_subscriptions.exists():
+            raise ValidationError(
+                {
+                    'detail': (
+                        'This subscription plan is already referenced by user subscriptions. '
+                        'Set its status to inactive or archived instead.'
+                    )
+                }
+            )
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema(
