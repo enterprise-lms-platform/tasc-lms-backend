@@ -140,3 +140,128 @@ def send_tasc_email(
         if raise_on_error:
             raise
         return
+
+
+def send_subscription_expiry_warning(organization, days_remaining):
+    """Send 30/7 day warning to Org Admin before subscription expires."""
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    renewal_url = f"{frontend_base}/org-admin/billing"
+    
+    # Get org admins
+    from apps.accounts.models import Membership
+    admins = Membership.objects.filter(
+        organization=organization,
+        role=Membership.Role.ORG_ADMIN,
+        is_active=True
+    ).select_related('user')
+    
+    for admin in admins:
+        send_tasc_email(
+            subject=f"Your TASC LMS subscription expires in {days_remaining} days",
+            to=[admin.user.email],
+            template="emails/payments/subscription_expiry_warning.html",
+            context={
+                "organization": organization,
+                "admin": admin.user,
+                "days_remaining": days_remaining,
+                "renewal_url": renewal_url,
+            },
+        )
+        
+        # Also create in-app notification
+        from apps.notifications.models import Notification
+        Notification.objects.create(
+            user=admin.user,
+            type=Notification.Type.SYSTEM,
+            title=f"Subscription expires in {days_remaining} days",
+            description=f"Your organization's TASC LMS subscription will expire in {days_remaining} days. Renew now to avoid interruption.",
+            link=renewal_url,
+        )
+
+
+def send_subscription_expired_notification(organization):
+    """Notify Org Admin when subscription has expired."""
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    renewal_url = f"{frontend_base}/org-admin/billing"
+    
+    from apps.accounts.models import Membership
+    admins = Membership.objects.filter(
+        organization=organization,
+        role=Membership.Role.ORG_ADMIN,
+        is_active=True
+    ).select_related('user')
+    
+    for admin in admins:
+        send_tasc_email(
+            subject="Your TASC LMS subscription has expired",
+            to=[admin.user.email],
+            template="emails/payments/subscription_expired.html",
+            context={
+                "organization": organization,
+                "admin": admin.user,
+                "renewal_url": renewal_url,
+            },
+        )
+        
+        from apps.notifications.models import Notification
+        Notification.objects.create(
+            user=admin.user,
+            type=Notification.Type.SYSTEM,
+            title="Subscription expired",
+            description=f"Your organization's TASC LMS subscription has expired. Renew now to restore learner access.",
+            link=renewal_url,
+        )
+
+
+def check_and_notify_expiring_subscriptions():
+    """Daily task to check for expiring subscriptions and send notifications."""
+    from django.utils import timezone
+    from datetime import timedelta
+    from apps.payments.models import UserSubscription
+    
+    now = timezone.now()
+    
+    # Check subscriptions expiring in 30 days
+    thirty_days = now + timedelta(days=30)
+    subs_30_days = UserSubscription.objects.filter(
+        status=UserSubscription.Status.ACTIVE,
+        end_date__lte=thirty_days,
+        end_date__gt=now,
+        organization__isnull=False,
+    ).select_related('organization')
+    
+    for sub in subs_30_days:
+        # Check if we already sent 30-day warning (use Notification model to track)
+        from apps.notifications.models import Notification
+        already_notified = Notification.objects.filter(
+            type=Notification.Type.SYSTEM,
+            title__icontains="30 days",
+            user__memberships__organization=sub.organization,
+        ).exists()
+        
+        if not already_notified and sub.end_date:
+            days_remaining = (sub.end_date - now).days
+            if days_remaining == 30:
+                send_subscription_expiry_warning(sub.organization, 30)
+    
+    # Check subscriptions expiring in 7 days
+    seven_days = now + timedelta(days=7)
+    subs_7_days = UserSubscription.objects.filter(
+        status=UserSubscription.Status.ACTIVE,
+        end_date__lte=seven_days,
+        end_date__gt=now,
+        organization__isnull=False,
+    ).select_related('organization')
+    
+    for sub in subs_7_days:
+        from apps.notifications.models import Notification
+        already_notified = Notification.objects.filter(
+            type=Notification.Type.SYSTEM,
+            title__icontains="7 days",
+            user__memberships__organization=sub.organization,
+        ).exists()
+        
+        if not already_notified and sub.end_date:
+            days_remaining = (sub.end_date - now).days
+            if days_remaining == 7:
+                send_subscription_expiry_warning(sub.organization, 7)

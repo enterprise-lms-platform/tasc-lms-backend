@@ -14,22 +14,36 @@ from .views import (
     BadgeViewSet,
     SavedCourseViewSet,
     WorkshopViewSet,
+    WorkshopAttendanceViewSet,
+    WorkshopParticipantSearchView,
 )
 
 router = DefaultRouter()
-router.register(r'analytics', LearningAnalyticsViewSet, basename='learning-analytics')
-router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
-router.register(r'session-progress', SessionProgressViewSet, basename='session-progress')
-router.register(r'certificates', CertificateViewSet, basename='certificate')
-router.register(r'discussions', DiscussionViewSet, basename='discussion')
-router.register(r'discussion-replies', DiscussionReplyViewSet, basename='discussion-reply')
-router.register(r'reports', ReportViewSet, basename='report')
-router.register(r'submissions', SubmissionViewSet, basename='submission')
-router.register(r'quiz-submissions', QuizSubmissionViewSet, basename='quiz-submission')
-router.register(r'badges', BadgeViewSet, basename='badge')
-router.register(r'saved-courses', SavedCourseViewSet, basename='saved-course')
-router.register(r'workshops', WorkshopViewSet, basename='workshop')
+router.register(r"analytics", LearningAnalyticsViewSet, basename="learning-analytics")
+router.register(r"enrollments", EnrollmentViewSet, basename="enrollment")
+router.register(
+    r"session-progress", SessionProgressViewSet, basename="session-progress"
+)
+router.register(r"certificates", CertificateViewSet, basename="certificate")
+router.register(r"discussions", DiscussionViewSet, basename="discussion")
+router.register(
+    r"discussion-replies", DiscussionReplyViewSet, basename="discussion-reply"
+)
+router.register(r"reports", ReportViewSet, basename="report")
+router.register(r"submissions", SubmissionViewSet, basename="submission")
+router.register(r"quiz-submissions", QuizSubmissionViewSet, basename="quiz-submission")
+router.register(r"badges", BadgeViewSet, basename="badge")
+router.register(r"saved-courses", SavedCourseViewSet, basename="saved-course")
+router.register(r"workshops", WorkshopViewSet, basename="workshop")
+router.register(
+    r"workshop-attendance", WorkshopAttendanceViewSet, basename="workshop-attendance"
+)
 
 urlpatterns = [
-    path('', include(router.urls)),
+    path("", include(router.urls)),
+    path(
+        "workshops/search-participants/",
+        WorkshopParticipantSearchView.as_view(),
+        name="workshop-search-participants",
+    ),
 ]

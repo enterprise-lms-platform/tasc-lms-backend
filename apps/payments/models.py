@@ -11,72 +11,73 @@ User = get_user_model()
 class Payment(models.Model):
     # Use lists [] instead of tuples () for choices
     PAYMENT_STATUS = [
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-        ('cancelled', 'Cancelled'),
+        ("pending", "Pending"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+        ("cancelled", "Cancelled"),
     ]
-    
-    PAYMENT_METHODS = [
-         ('pesapal', 'Pesapal'), 
-    ]
-    
-    CURRENCIES = [
-        ('USD', 'US Dollar'),
-        ('UGX', 'Ugandan Shilling'),
-        ('KES', 'Kenyan Shilling'),
-        ('TZS', 'Tanzanian Shilling'),
 
+    PAYMENT_METHODS = [
+        ("pesapal", "Pesapal"),
     ]
-    
+
+    CURRENCIES = [
+        ("USD", "US Dollar"),
+        ("UGX", "Ugandan Shilling"),
+        ("KES", "Kenyan Shilling"),
+        ("TZS", "Tanzanian Shilling"),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
-    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="payments")
+
     course = models.ForeignKey(
-        'catalogue.Course',  # Course is in catalogue app, not learning
+        "catalogue.Course",  # Course is in catalogue app, not learning
         on_delete=models.CASCADE,
-        related_name='payments',
+        related_name="payments",
         null=True,
-        blank=True
+        blank=True,
     )
-    
-    amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
-    currency = models.CharField(max_length=3, choices=CURRENCIES, default='USD')
-    
+
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)]
+    )
+    currency = models.CharField(max_length=3, choices=CURRENCIES, default="USD")
+
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHODS)
-    status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default='pending')
-    
+    status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default="pending")
+
     # Payment provider references
     provider_payment_id = models.CharField(max_length=255, blank=True, null=True)
     provider_order_id = models.CharField(max_length=255, blank=True, null=True)
-    
+
     # Metadata
     metadata = models.JSONField(default=dict, blank=True)
     description = models.TextField(blank=True)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Card details
     card_last4 = models.CharField(max_length=4, blank=True)
     card_brand = models.CharField(max_length=50, blank=True)
-    
+
     # Webhook tracking
     webhook_received = models.BooleanField(default=False)
-    
+
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['status', 'created_at']),
-            models.Index(fields=['user', 'course']),
-            models.Index(fields=['provider_payment_id']),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["user", "course"]),
+            models.Index(fields=["provider_payment_id"]),
         ]
-    
+
     def __str__(self):
         return f"{self.user.email} - {self.amount} {self.currency}"
-    
+
     def mark_completed(self):
         """
         Mark payment as completed.
@@ -85,30 +86,33 @@ class Payment(models.Model):
         Subscription behavior: subscription activation payments are tagged with
         `user_subscription_id` inside `metadata` and must NOT enroll learners into a course.
         """
-        self.status = 'completed'
+        self.status = "completed"
         self.completed_at = timezone.now()
         self.save()
 
         # Subscription activations should not create course enrollments as a side effect.
-        if self.metadata and self.metadata.get('user_subscription_id'):
+        if self.metadata and self.metadata.get("user_subscription_id"):
             return
 
         # Enroll user in course if course exists
         if self.course:
             try:
                 from learning.models import Enrollment
+
                 enrollment, created = Enrollment.objects.get_or_create(
                     user=self.user,
                     course=self.course,
                     defaults={
-                        'status': 'active',
-                        'organization': self.user.organization if hasattr(self.user, 'organization') else None
-                    }
+                        "status": "active",
+                        "organization": self.user.organization
+                        if hasattr(self.user, "organization")
+                        else None,
+                    },
                 )
-                
+
                 # If enrollment already existed but was inactive, activate it
-                if not created and enrollment.status != 'active':
-                    enrollment.status = 'active'
+                if not created and enrollment.status != "active":
+                    enrollment.status = "active"
                     enrollment.save()
             except ImportError:
                 # If Enrollment doesn't exist, skip (for development)
@@ -119,22 +123,25 @@ class Invoice(models.Model):
     """
     Invoice represents a billing document for payments.
     """
+
     class Status(models.TextChoices):
-        DRAFT = 'draft', 'Draft'
-        PENDING = 'pending', 'Pending'
-        PAID = 'paid', 'Paid'
-        OVERDUE = 'overdue', 'Overdue'
-        CANCELLED = 'cancelled', 'Cancelled'
+        DRAFT = "draft", "Draft"
+        PENDING = "pending", "Pending"
+        PAID = "paid", "Paid"
+        OVERDUE = "overdue", "Overdue"
+        CANCELLED = "cancelled", "Cancelled"
 
     class InvoiceType(models.TextChoices):
-        INDIVIDUAL = 'individual', 'Individual Purchase'
-        ORGANIZATION = 'organization', 'Organization Purchase'
-        SUBSCRIPTION = 'subscription', 'Subscription'
-        COURSE = 'course', 'Course Enrollment'  # Added course type
+        INDIVIDUAL = "individual", "Individual Purchase"
+        ORGANIZATION = "organization", "Organization Purchase"
+        SUBSCRIPTION = "subscription", "Subscription"
+        COURSE = "course", "Course Enrollment"  # Added course type
 
     # Basic Information
     invoice_number = models.CharField(max_length=50, unique=True)
-    invoice_type = models.CharField(max_length=20, choices=InvoiceType.choices, default=InvoiceType.INDIVIDUAL)
+    invoice_type = models.CharField(
+        max_length=20, choices=InvoiceType.choices, default=InvoiceType.INDIVIDUAL
+    )
 
     # Customer
     user = models.ForeignKey(
@@ -142,31 +149,31 @@ class Invoice(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoices'
+        related_name="invoices",
     )
     organization = models.ForeignKey(
-        'accounts.Organization',
+        "accounts.Organization",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoices'
+        related_name="invoices",
     )
-    
+
     course = models.ForeignKey(
-        'catalogue.Course',  # FIXED
+        "catalogue.Course",  # FIXED
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoices'
+        related_name="invoices",
     )
-    
+
     # Payment reference
     payment = models.OneToOneField(
         Payment,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoice'
+        related_name="invoice",
     )
 
     # Customer Details Snapshot
@@ -179,7 +186,9 @@ class Invoice(models.Model):
     # Invoice Details
     issue_date = models.DateField(default=timezone.now)
     due_date = models.DateField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.DRAFT
+    )
 
     # Financials
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -188,7 +197,7 @@ class Invoice(models.Model):
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     # Currency
-    currency = models.CharField(max_length=3, default='USD')
+    currency = models.CharField(max_length=3, default="USD")
 
     # Notes
     notes = models.TextField(blank=True)
@@ -203,15 +212,15 @@ class Invoice(models.Model):
     paid_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ['-issue_date']
+        ordering = ["-issue_date"]
         indexes = [
-            models.Index(fields=['invoice_number']),
-            models.Index(fields=['user']),
-            models.Index(fields=['organization']),
-            models.Index(fields=['status']),
-            models.Index(fields=['-issue_date']),
-            models.Index(fields=['course']),
-            models.Index(fields=['payment']),
+            models.Index(fields=["invoice_number"]),
+            models.Index(fields=["user"]),
+            models.Index(fields=["organization"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["-issue_date"]),
+            models.Index(fields=["course"]),
+            models.Index(fields=["payment"]),
         ]
 
     def __str__(self):
@@ -219,7 +228,7 @@ class Invoice(models.Model):
 
     def generate_invoice_number(self):
         """Generate a unique invoice number"""
-        timestamp = timezone.now().strftime('%Y%m%d')
+        timestamp = timezone.now().strftime("%Y%m%d")
         unique_id = uuid.uuid4().hex[:8].upper()
         return f"INV-{timestamp}-{unique_id}"
 
@@ -241,47 +250,48 @@ class InvoiceItem(models.Model):
     """
     InvoiceItem represents individual line items in an invoice.
     """
-    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
-    
+
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="items")
+
     # Item details
     item_type = models.CharField(
         max_length=50,
         choices=[
-            ('course', 'Course'),
-            ('subscription', 'Subscription'),
-            ('other', 'Other'),
+            ("course", "Course"),
+            ("subscription", "Subscription"),
+            ("other", "Other"),
         ],
-        default='course'
+        default="course",
     )
     item_id = models.PositiveIntegerField(null=True, blank=True)
     description = models.CharField(max_length=255)
-    
+
     course = models.ForeignKey(
-        'catalogue.Course',  # FIXED
+        "catalogue.Course",  # FIXED
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoice_items'
+        related_name="invoice_items",
     )
-    
+
     # Quantity and pricing
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    
+
     enrollment = models.ForeignKey(
-        'learning.Enrollment',  
+        "learning.Enrollment",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='invoice_items'
+        related_name="invoice_items",
     )
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['created_at']
+        ordering = ["created_at"]
 
     def __str__(self):
         return f"{self.description} - {self.invoice.invoice_number}"
@@ -303,21 +313,22 @@ class Transaction(models.Model):
     """
     Transaction represents payment transactions.
     """
+
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        COMPLETED = 'completed', 'Completed'
-        FAILED = 'failed', 'Failed'
-        CANCELLED = 'cancelled', 'Cancelled'
+        PENDING = "pending", "Pending"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
 
     class PaymentMethod(models.TextChoices):
-        CREDIT_CARD = 'credit_card', 'Credit Card'
-        DEBIT_CARD = 'debit_card', 'Debit Card'
-        PAYPAL = 'paypal', 'PayPal'
-        BANK_TRANSFER = 'bank_transfer', 'Bank Transfer'
-        MOBILE_MONEY = 'mobile_money', 'Mobile Money'
-        GOOGLE_PAY = 'google_pay', 'Google Pay'
-        APPLE_PAY = 'apple_pay', 'Apple Pay'
-        OTHER = 'other', 'Other'
+        CREDIT_CARD = "credit_card", "Credit Card"
+        DEBIT_CARD = "debit_card", "Debit Card"
+        PAYPAL = "paypal", "PayPal"
+        BANK_TRANSFER = "bank_transfer", "Bank Transfer"
+        MOBILE_MONEY = "mobile_money", "Mobile Money"
+        GOOGLE_PAY = "google_pay", "Google Pay"
+        APPLE_PAY = "apple_pay", "Apple Pay"
+        OTHER = "other", "Other"
 
     # Invoice
     invoice = models.ForeignKey(
@@ -325,75 +336,82 @@ class Transaction(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='transactions'
+        related_name="transactions",
     )
-    
+
     # User
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='transactions'
+        related_name="transactions",
     )
     organization = models.ForeignKey(
-        'accounts.Organization',
+        "accounts.Organization",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='transactions'
+        related_name="transactions",
     )
-    
+
     course = models.ForeignKey(
-        'catalogue.Course',  # FIXED
+        "catalogue.Course",  # FIXED
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='transactions'
+        related_name="transactions",
     )
-    
+
     # Transaction details
     transaction_id = models.CharField(max_length=255, unique=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=3, default='USD')
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
-    
+    currency = models.CharField(max_length=3, default="USD")
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+
     # Payment method
-    payment_method = models.CharField(max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CREDIT_CARD)
+    payment_method = models.CharField(
+        max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CREDIT_CARD
+    )
     payment_provider = models.CharField(max_length=50, blank=True)  # PayPal, etc.
-    
+
     # Gateway details
     gateway_transaction_id = models.CharField(max_length=255, blank=True, null=True)
     gateway_response = models.JSONField(default=dict, blank=True)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Card/Account details (encrypted)
     card_last4 = models.CharField(max_length=4, blank=True)
     card_brand = models.CharField(max_length=50, blank=True)
-    
+
     # Webhook tracking
     webhook_received = models.BooleanField(default=False)
 
+    # Error tracking for failed payments
+    error_message = models.TextField(blank=True)
+
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['status', 'created_at']),
-            models.Index(fields=['transaction_id']),
-            models.Index(fields=['user']),
-            models.Index(fields=['invoice']),
-            models.Index(fields=['course']),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["transaction_id"]),
+            models.Index(fields=["user"]),
+            models.Index(fields=["invoice"]),
+            models.Index(fields=["course"]),
         ]
-    
+
     def __str__(self):
         return f"{self.transaction_id} - {self.amount} {self.currency}"
 
     def generate_transaction_id(self):
         """Generate a unique transaction ID"""
-        timestamp = timezone.now().strftime('%Y%m%d')
+        timestamp = timezone.now().strftime("%Y%m%d")
         unique_id = uuid.uuid4().hex[:8].upper()
         return f"TXN-{timestamp}-{unique_id}"
 
@@ -405,6 +423,7 @@ class Transaction(models.Model):
 
 class PaymentWebhook(models.Model):
     """Store webhook events for debugging"""
+
     provider = models.CharField(max_length=20)
     event_type = models.CharField(max_length=100)
     event_id = models.CharField(max_length=255, unique=True)
@@ -412,79 +431,81 @@ class PaymentWebhook(models.Model):
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     def __str__(self):
         return f"{self.provider} - {self.event_type}"
-    
+
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
 
 
 class PaymentMethod(models.Model):
     """
     PaymentMethod represents saved payment methods for users.
     """
+
     class MethodType(models.TextChoices):
-        CREDIT_CARD = 'credit_card', 'Credit Card'
-        DEBIT_CARD = 'debit_card', 'Debit Card'
+        CREDIT_CARD = "credit_card", "Credit Card"
+        DEBIT_CARD = "debit_card", "Debit Card"
         # PAYPAL = 'paypal', 'PayPal'
-        BANK_ACCOUNT = 'bank_account', 'Bank Account'
+        BANK_ACCOUNT = "bank_account", "Bank Account"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='payment_methods'
+        related_name="payment_methods",
     )
     organization = models.ForeignKey(
-        'accounts.Organization',
+        "accounts.Organization",
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name='payment_methods'
+        related_name="payment_methods",
     )
-    
+
     # Method details
     method_type = models.CharField(max_length=20, choices=MethodType.choices)
     is_default = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
-    
+
     # Card details (encrypted)
     card_last_four = models.CharField(max_length=4, blank=True)
     card_brand = models.CharField(max_length=20, blank=True)
     card_expiry_month = models.PositiveIntegerField(null=True, blank=True)
     card_expiry_year = models.PositiveIntegerField(null=True, blank=True)
-    
+
     # PayPal
     paypal_email = models.EmailField(blank=True, null=True)
-    
+
     # Bank account
     bank_name = models.CharField(max_length=100, blank=True)
     bank_account_last_four = models.CharField(max_length=4, blank=True)
-    
+
     # Gateway token
     gateway_token = models.CharField(max_length=255, blank=True)
     payment_provider = models.CharField(max_length=50, blank=True)
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-is_default', '-created_at']
+        ordering = ["-is_default", "-created_at"]
 
     def __str__(self):
-        if self.method_type == 'credit_card' or self.method_type == 'debit_card':
+        if self.method_type == "credit_card" or self.method_type == "debit_card":
             return f"{self.card_brand} **** {self.card_last_four}"
-        elif self.method_type == 'paypal':
+        elif self.method_type == "paypal":
             return f"PayPal - {self.paypal_email}"
         return f"{self.method_type}"
 
     @property
     def is_expired(self):
         """Check if card is expired"""
-        if self.method_type in ['credit_card', 'debit_card']:
+        if self.method_type in ["credit_card", "debit_card"]:
             if self.card_expiry_month and self.card_expiry_year:
                 from datetime import date
+
                 today = date.today()
                 expiry_date = date(self.card_expiry_year, self.card_expiry_month, 1)
                 return today > expiry_date
@@ -495,49 +516,52 @@ class Subscription(models.Model):
     """
     Subscription represents subscription plans.
     """
+
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        INACTIVE = 'inactive', 'Inactive'
-        ARCHIVED = 'archived', 'Archived'
+        ACTIVE = "active", "Active"
+        INACTIVE = "inactive", "Inactive"
+        ARCHIVED = "archived", "Archived"
 
     # Basic Information
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    
+
     # Pricing
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=3, default='USD')
+    currency = models.CharField(max_length=3, default="USD")
     billing_cycle = models.CharField(
         max_length=20,
         choices=[
-            ('monthly', 'Monthly'),
-            ('quarterly', 'Quarterly'),
-            ('yearly', 'Yearly'),
+            ("monthly", "Monthly"),
+            ("quarterly", "Quarterly"),
+            ("yearly", "Yearly"),
         ],
-        default='monthly'
+        default="monthly",
     )
 
     # Plan-derived access window for learner entitlements.
     # Phase 1 target: subscription duration is 6 months (180 days).
     duration_days = models.PositiveIntegerField(default=180)
-    
+
     # Features and limits
     features = models.JSONField(default=list, blank=True)
     max_courses = models.PositiveIntegerField(null=True, blank=True)
     max_users = models.PositiveIntegerField(null=True, blank=True)
-    
+
     # Trial
     trial_days = models.PositiveIntegerField(default=0)
-    
+
     # Status
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
-    
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['price', 'name']
+        ordering = ["price", "name"]
 
     def __str__(self):
         return f"{self.name} - {self.price} {self.currency}/{self.billing_cycle}"
@@ -547,50 +571,53 @@ class UserSubscription(models.Model):
     """
     UserSubscription represents user's active subscriptions.
     """
+
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        PAUSED = 'paused', 'Paused'
-        CANCELLED = 'cancelled', 'Cancelled'
-        EXPIRED = 'expired', 'Expired'
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
 
     # User and subscription
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='subscriptions'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="subscriptions"
     )
     organization = models.ForeignKey(
-        'accounts.Organization',
+        "accounts.Organization",
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name='subscriptions'
+        related_name="subscriptions",
     )
-    subscription = models.ForeignKey(Subscription, on_delete=models.PROTECT, related_name='user_subscriptions')
-    
+    subscription = models.ForeignKey(
+        Subscription, on_delete=models.PROTECT, related_name="user_subscriptions"
+    )
+
     # Status and dates
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE
+    )
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField(null=True, blank=True)
     trial_end_date = models.DateTimeField(null=True, blank=True)
-    
+
     # Auto-renewal
     auto_renew = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Pricing snapshot
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=3, default='USD')
-    
+    currency = models.CharField(max_length=3, default="USD")
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['user', 'status']),
-            models.Index(fields=['organization']),
+            models.Index(fields=["user", "status"]),
+            models.Index(fields=["organization"]),
         ]
 
     def __str__(self):
@@ -610,21 +637,22 @@ class UserSubscription(models.Model):
         if self.end_date and timezone.now() > self.end_date:
             return False
         return True
-    
 
     # PESA PAL IPN Model
+
+
 class PesapalIPN(models.Model):
     """
     Stores registered Pesapal IPN URLs and their assigned IPN IDs.
- 
+
     You only need to register an IPN URL once per environment (demo/live).
     After registering via the management command or admin action, copy the
     returned ipn_id into PESAPAL_IPN_ID in your .env file.
- 
+
     This model keeps an audit trail in case you register multiple URLs
     (e.g. during a domain change).
     """
- 
+
     ipn_id = models.CharField(max_length=255, unique=True)
     url = models.URLField()
     notification_type = models.CharField(max_length=10, default="GET")
@@ -636,12 +664,11 @@ class PesapalIPN(models.Model):
     )
     registered_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
- 
+
     class Meta:
         verbose_name = "Pesapal IPN"
         verbose_name_plural = "Pesapal IPNs"
         ordering = ["-registered_at"]
- 
+
     def __str__(self):
         return f"{self.environment.upper()} IPN: {self.ipn_id} → {self.url}"
- 

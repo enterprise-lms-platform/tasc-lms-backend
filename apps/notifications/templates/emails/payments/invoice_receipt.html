@@ -1,0 +1,44 @@
+{% extends "emails/base.html" %}
+
+{% block content %}
+<div style="padding: 20px;">
+    <h2 style="color: #333;">Invoice Receipt</h2>
+    
+    <p>Dear {{ organization.name }},</p>
+    
+    <p>Thank you for your payment. Please find your invoice details below:</p>
+    
+    <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+        <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;"><strong>Invoice Number</strong></td>
+            <td style="padding: 8px; border: 1px solid #ddd;">{{ invoice.invoice_number }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;"><strong>Date Issued</strong></td>
+            <td style="padding: 8px; border: 1px solid #ddd;">{{ invoice.created_at|date:"F d, Y" }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;"><strong>Due Date</strong></td>
+            <td style="padding: 8px; border: 1px solid #ddd;">{{ invoice.due_date|date:"F d, Y" }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;"><strong>Status</strong></td>
+            <td style="padding: 8px; border: 1px solid #ddd;">{{ invoice.get_status_display }}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #ddd;"><strong>Total Amount</strong></td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${{ invoice.total_amount|floatformat:2 }}</td>
+        </tr>
+    </table>
+    
+    <p>
+        <a href="{{ invoice_url }}" style="display: inline-block; background-color: #ffa424; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
+            View Invoice
+        </a>
+    </p>
+    
+    <p>If you have any questions about this invoice, please contact our billing team.</p>
+    
+    <p>Best regards,<br>The TASC LMS Team</p>
+</div>
+{% endblock %}

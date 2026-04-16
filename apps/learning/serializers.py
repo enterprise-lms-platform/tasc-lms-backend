@@ -4,8 +4,18 @@ from django.utils import timezone
 from datetime import timedelta
 from drf_spectacular.utils import extend_schema_field
 from .models import (
-    Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
-    QuizSubmission, QuizAnswer, SavedCourse, Workshop
+    Enrollment,
+    SessionProgress,
+    Certificate,
+    Discussion,
+    DiscussionReply,
+    Report,
+    Submission,
+    QuizSubmission,
+    QuizAnswer,
+    SavedCourse,
+    Workshop,
+    WorkshopAttendance,
 )
 from apps.catalogue.models import Quiz, QuizQuestion
 from apps.catalogue.models import Course, Session
@@ -15,47 +25,66 @@ from apps.payments.permissions import user_has_active_subscription
 
 class EnrollmentSerializer(serializers.ModelSerializer):
     """Serializer for Enrollment model."""
+
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
     course_thumbnail = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     time_remaining_days = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Enrollment
         fields = [
-            'id', 'user', 'user_name', 'user_email',
-            'course', 'course_title', 'course_thumbnail',
-            'organization', 'organization_name',
-            'status', 'enrolled_at', 'completed_at', 'expires_at',
-            'progress_percentage', 'last_accessed_at', 'last_accessed_session',
-            'paid_amount', 'currency',
-            'certificate_issued', 'certificate_issued_at',
-            'time_remaining_days'
+            "id",
+            "user",
+            "user_name",
+            "user_email",
+            "course",
+            "course_title",
+            "course_thumbnail",
+            "organization",
+            "organization_name",
+            "status",
+            "enrolled_at",
+            "completed_at",
+            "expires_at",
+            "progress_percentage",
+            "last_accessed_at",
+            "last_accessed_session",
+            "paid_amount",
+            "currency",
+            "certificate_issued",
+            "certificate_issued_at",
+            "time_remaining_days",
         ]
-        read_only_fields = ['id', 'enrolled_at', 'progress_percentage', 'last_accessed_at']
-    
+        read_only_fields = [
+            "id",
+            "enrolled_at",
+            "progress_percentage",
+            "last_accessed_at",
+        ]
+
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
-    
+
     @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
-    
+
     @extend_schema_field(serializers.CharField)
     def get_course_title(self, obj):
         return obj.course.title
-    
+
     @extend_schema_field(serializers.URLField(allow_null=True))
     def get_course_thumbnail(self, obj):
         return obj.course.thumbnail
-    
+
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
-    
+
     @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_time_remaining_days(self, obj):
         if obj.expires_at:
@@ -69,27 +98,27 @@ class EnrollmentCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Enrollment
-        fields = [
-            'course', 'organization', 'paid_amount', 'currency'
-        ]
+        fields = ["course", "organization", "paid_amount", "currency"]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        user = self.context['request'].user
+        user = self.context["request"].user
         # Bypass for admin-like and instructors
         if is_admin_like(user) or is_instructor(user):
             return attrs
         if not user_has_active_subscription(user):
-            raise PermissionDenied('An active subscription is required to enroll in courses.')
+            raise PermissionDenied(
+                "An active subscription is required to enroll in courses."
+            )
         return attrs
 
     def create(self, validated_data):
-        user = self.context['request'].user
-        course = validated_data['course']
+        user = self.context["request"].user
+        course = validated_data["course"]
         defaults = {
-            'organization': validated_data.get('organization'),
-            'paid_amount': validated_data.get('paid_amount', 0),
-            'currency': validated_data.get('currency', 'USD'),
+            "organization": validated_data.get("organization"),
+            "paid_amount": validated_data.get("paid_amount", 0),
+            "currency": validated_data.get("currency", "USD"),
         }
         enrollment, created = Enrollment.objects.get_or_create(
             user=user,
@@ -102,42 +131,57 @@ class EnrollmentCreateSerializer(serializers.ModelSerializer):
 
 class BulkEnrollmentSerializer(serializers.Serializer):
     """Serializer for bulk enrolling users."""
+
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all())
     user_ids = serializers.ListField(
-        child=serializers.IntegerField(),
-        allow_empty=False
+        child=serializers.IntegerField(), allow_empty=False
     )
 
 
 class SessionProgressSerializer(serializers.ModelSerializer):
     """Serializer for SessionProgress model."""
+
     session_title = serializers.SerializerMethodField()
     session_type = serializers.SerializerMethodField()
     duration_minutes = serializers.SerializerMethodField()
     time_spent_minutes = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = SessionProgress
         fields = [
-            'id', 'enrollment', 'session', 'session_title', 'session_type',
-            'is_started', 'started_at', 'is_completed', 'completed_at',
-            'time_spent_seconds', 'time_spent_minutes', 'last_accessed_at',
-            'notes', 'duration_minutes'
+            "id",
+            "enrollment",
+            "session",
+            "session_title",
+            "session_type",
+            "is_started",
+            "started_at",
+            "is_completed",
+            "completed_at",
+            "time_spent_seconds",
+            "time_spent_minutes",
+            "last_accessed_at",
+            "notes",
+            "duration_minutes",
         ]
-        read_only_fields = ['id', 'started_at', 'completed_at', 'last_accessed_at']
-    
+        read_only_fields = ["id", "started_at", "completed_at", "last_accessed_at"]
+
     @extend_schema_field(serializers.CharField)
     def get_session_title(self, obj):
         return obj.session.title
-    
+
     @extend_schema_field(serializers.CharField)
     def get_session_type(self, obj):
         return obj.session.session_type
-    
+
     @extend_schema_field(serializers.IntegerField)
     def get_duration_minutes(self, obj):
-        return obj.session.video_duration_seconds // 60 if obj.session.video_duration_seconds else 0
-    
+        return (
+            obj.session.video_duration_seconds // 60
+            if obj.session.video_duration_seconds
+            else 0
+        )
+
     @extend_schema_field(serializers.IntegerField)
     def get_time_spent_minutes(self, obj):
         return obj.time_spent_seconds // 60
@@ -145,45 +189,56 @@ class SessionProgressSerializer(serializers.ModelSerializer):
 
 class SessionProgressCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating session progress."""
-    
+
     class Meta:
         model = SessionProgress
         fields = [
-            'session', 'is_started', 'is_completed',
-            'time_spent_seconds', 'notes'
+            "session",
+            "is_started",
+            "is_completed",
+            "time_spent_seconds",
+            "notes",
         ]
 
 
 class CertificateSerializer(serializers.ModelSerializer):
     """Serializer for Certificate model."""
+
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Certificate
         fields = [
-            'id', 'enrollment',
-            'user_name', 'user_email', 'course_title',
-            'certificate_number', 'issued_at', 'expiry_date',
-            'is_valid', 'is_expired',
-            'pdf_url', 'verification_url'
+            "id",
+            "enrollment",
+            "user_name",
+            "user_email",
+            "course_title",
+            "certificate_number",
+            "issued_at",
+            "expiry_date",
+            "is_valid",
+            "is_expired",
+            "pdf_url",
+            "verification_url",
         ]
-        read_only_fields = ['id', 'certificate_number', 'issued_at']
-    
+        read_only_fields = ["id", "certificate_number", "issued_at"]
+
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.enrollment.user.get_full_name() or obj.enrollment.user.email
-    
+
     @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.enrollment.user.email
-    
+
     @extend_schema_field(serializers.CharField)
     def get_course_title(self, obj):
         return obj.enrollment.course.title
-    
+
     @extend_schema_field(serializers.BooleanField)
     def get_is_expired(self, obj):
         return obj.is_expired
@@ -191,53 +246,65 @@ class CertificateSerializer(serializers.ModelSerializer):
 
 class CertificateCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating certificates."""
-    
+
     class Meta:
         model = Certificate
-        fields = ['expiry_date']
+        fields = ["expiry_date"]
 
 
 class DiscussionSerializer(serializers.ModelSerializer):
     """Serializer for Discussion model."""
+
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
     user_avatar = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
     session_title = serializers.SerializerMethodField()
     reply_count = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Discussion
         fields = [
-            'id', 'user', 'user_name', 'user_email', 'user_avatar',
-            'course', 'course_title', 'session', 'session_title',
-            'title', 'content',
-            'is_pinned', 'is_locked', 'is_deleted',
-            'reply_count',
-            'created_at', 'updated_at'
+            "id",
+            "user",
+            "user_name",
+            "user_email",
+            "user_avatar",
+            "course",
+            "course_title",
+            "session",
+            "session_title",
+            "title",
+            "content",
+            "is_pinned",
+            "is_locked",
+            "is_deleted",
+            "reply_count",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
+        read_only_fields = ["id", "created_at", "updated_at"]
+
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
-    
+
     @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
-    
+
     @extend_schema_field(serializers.URLField(allow_null=True))
     def get_user_avatar(self, obj):
         return obj.user.avatar
-    
+
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
-    
+
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_session_title(self, obj):
         return obj.session.title if obj.session else None
-    
+
     @extend_schema_field(serializers.IntegerField)
     def get_reply_count(self, obj):
         return obj.reply_count
@@ -245,37 +312,44 @@ class DiscussionSerializer(serializers.ModelSerializer):
 
 class DiscussionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating discussions."""
-    
+
     class Meta:
         model = Discussion
-        fields = [
-            'course', 'session', 'title', 'content'
-        ]
+        fields = ["course", "session", "title", "content"]
 
 
 class DiscussionReplySerializer(serializers.ModelSerializer):
     """Serializer for DiscussionReply model."""
+
     user_name = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
     user_avatar = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = DiscussionReply
         fields = [
-            'id', 'discussion', 'user', 'user_name', 'user_email', 'user_avatar',
-            'parent', 'content', 'is_deleted',
-            'created_at', 'updated_at'
+            "id",
+            "discussion",
+            "user",
+            "user_name",
+            "user_email",
+            "user_avatar",
+            "parent",
+            "content",
+            "is_deleted",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
+        read_only_fields = ["id", "created_at", "updated_at"]
+
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.email
-    
+
     @extend_schema_field(serializers.EmailField)
     def get_user_email(self, obj):
         return obj.user.email
-    
+
     @extend_schema_field(serializers.URLField(allow_null=True))
     def get_user_avatar(self, obj):
         return obj.user.avatar
@@ -283,54 +357,60 @@ class DiscussionReplySerializer(serializers.ModelSerializer):
 
 class DiscussionReplyCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating discussion replies."""
-    
+
     class Meta:
         model = DiscussionReply
-        fields = [
-            'discussion', 'parent', 'content'
-        ]
+        fields = ["discussion", "parent", "content"]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        discussion = attrs.get('discussion')
+        discussion = attrs.get("discussion")
         if discussion and discussion.is_locked:
             raise serializers.ValidationError(
-                {'discussion': 'This discussion is locked and cannot receive new replies.'}
+                {
+                    "discussion": "This discussion is locked and cannot receive new replies."
+                }
             )
         return attrs
 
 
 class SessionProgressUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating session progress."""
-    
+
     class Meta:
         model = SessionProgress
-        fields = [
-            'is_completed', 'time_spent_seconds'
-        ]
+        fields = ["is_completed", "time_spent_seconds"]
 
 
 class ReportSerializer(serializers.ModelSerializer):
     """Serializer for Report model."""
-    
+
     class Meta:
         model = Report
         fields = [
-            'id', 'report_type', 'name', 'generated_by',
-            'generated_at', 'status', 'file', 'file_size', 'parameters'
+            "id",
+            "report_type",
+            "name",
+            "generated_by",
+            "generated_at",
+            "status",
+            "file",
+            "file_size",
+            "parameters",
         ]
-        read_only_fields = ['id', 'generated_by', 'generated_at', 'status']
+        read_only_fields = ["id", "generated_by", "generated_at", "status"]
 
 
 class ReportGenerateSerializer(serializers.Serializer):
     """Serializer for generating a new report."""
-    
+
     report_type = serializers.ChoiceField(choices=Report.Type.choices)
     parameters = serializers.JSONField(required=False, default=dict)
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
     """Read serializer for Submission (V1: assignment-based)."""
+
     assignment_title = serializers.SerializerMethodField()
     session_title = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
@@ -341,24 +421,46 @@ class SubmissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Submission
         fields = [
-            'id', 'enrollment', 'assignment',
-            'assignment_title', 'session_title', 'max_points',
-            'status', 'submitted_at', 'attempt_number',
-            'submitted_text', 'submitted_file_url', 'submitted_file_name',
-            'grade', 'feedback', 'internal_notes',
-            'graded_at', 'graded_by', 'graded_by_name',
-            'user_name', 'user_email',
-            'created_at', 'updated_at',
+            "id",
+            "enrollment",
+            "assignment",
+            "assignment_title",
+            "session_title",
+            "max_points",
+            "status",
+            "submitted_at",
+            "attempt_number",
+            "submitted_text",
+            "submitted_file_url",
+            "submitted_file_name",
+            "grade",
+            "feedback",
+            "internal_notes",
+            "graded_at",
+            "graded_by",
+            "graded_by_name",
+            "user_name",
+            "user_email",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = fields
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_assignment_title(self, obj):
-        return obj.assignment.session.title if obj.assignment and obj.assignment.session else None
+        return (
+            obj.assignment.session.title
+            if obj.assignment and obj.assignment.session
+            else None
+        )
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_session_title(self, obj):
-        return obj.assignment.session.title if obj.assignment and obj.assignment.session else None
+        return (
+            obj.assignment.session.title
+            if obj.assignment and obj.assignment.session
+            else None
+        )
 
     @extend_schema_field(serializers.CharField)
     def get_user_name(self, obj):
@@ -370,7 +472,11 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_graded_by_name(self, obj):
-        return (obj.graded_by.get_full_name() or obj.graded_by.email) if obj.graded_by else None
+        return (
+            (obj.graded_by.get_full_name() or obj.graded_by.email)
+            if obj.graded_by
+            else None
+        )
 
     @extend_schema_field(serializers.IntegerField(allow_null=True))
     def get_max_points(self, obj):
@@ -378,13 +484,18 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        request = self.context.get('request')
+        request = self.context.get("request")
         if request and request.user.is_authenticated:
             from django.contrib.auth import get_user_model
+
             User = get_user_model()
-            role = getattr(request.user, 'role', None)
-            if role not in (User.Role.INSTRUCTOR, User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
-                data.pop('internal_notes', None)
+            role = getattr(request.user, "role", None)
+            if role not in (
+                User.Role.INSTRUCTOR,
+                User.Role.LMS_MANAGER,
+                User.Role.TASC_ADMIN,
+            ):
+                data.pop("internal_notes", None)
         return data
 
 
@@ -393,68 +504,97 @@ class SubmissionCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Submission
-        fields = ['enrollment', 'assignment', 'status', 'submitted_text', 'submitted_file_url', 'submitted_file_name']
+        fields = [
+            "enrollment",
+            "assignment",
+            "status",
+            "submitted_text",
+            "submitted_file_url",
+            "submitted_file_name",
+        ]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        request = self.context.get('request')
+        request = self.context.get("request")
         if not request or not request.user.is_authenticated:
-            raise serializers.ValidationError('Authentication required.')
+            raise serializers.ValidationError("Authentication required.")
 
-        enrollment = attrs.get('enrollment')
-        assignment = attrs.get('assignment')
+        enrollment = attrs.get("enrollment")
+        assignment = attrs.get("assignment")
         if not enrollment or not assignment:
             return attrs
 
         if enrollment.user_id != request.user.id:
             raise serializers.ValidationError(
-                {'enrollment': 'You can only create submissions for your own enrollments.'}
+                {
+                    "enrollment": "You can only create submissions for your own enrollments."
+                }
             )
 
         if assignment.session.course_id != enrollment.course_id:
             raise serializers.ValidationError(
-                {'assignment': "Assignment does not belong to this enrollment's course."}
+                {
+                    "assignment": "Assignment does not belong to this enrollment's course."
+                }
             )
 
         # Check attempts
-        existing_attempts = Submission.objects.filter(enrollment=enrollment, assignment=assignment).count()
+        existing_attempts = Submission.objects.filter(
+            enrollment=enrollment, assignment=assignment
+        ).count()
         if assignment.max_attempts and existing_attempts >= assignment.max_attempts:
             raise serializers.ValidationError(
-                {'non_field_errors': [f'Maximum attempts ({assignment.max_attempts}) reached for this assignment.']}
+                {
+                    "non_field_errors": [
+                        f"Maximum attempts ({assignment.max_attempts}) reached for this assignment."
+                    ]
+                }
             )
-            
-        attrs['attempt_number'] = existing_attempts + 1
 
-        status_val = attrs.get('status', Submission.Status.DRAFT)
+        attrs["attempt_number"] = existing_attempts + 1
+
+        status_val = attrs.get("status", Submission.Status.DRAFT)
         if status_val == Submission.Status.GRADED:
             raise serializers.ValidationError(
-                {'status': 'Learners cannot set status to graded.'}
+                {"status": "Learners cannot set status to graded."}
             )
 
         if status_val == Submission.Status.SUBMITTED:
-            text = (attrs.get('submitted_text') or '').strip()
-            file_url = attrs.get('submitted_file_url')
-            file_name = attrs.get('submitted_file_name')
-            
+            text = (attrs.get("submitted_text") or "").strip()
+            file_url = attrs.get("submitted_file_url")
+            file_name = attrs.get("submitted_file_name")
+
             if not text and not file_url:
                 raise serializers.ValidationError(
-                    {'non_field_errors': ['Submitted text or file URL is required when submitting.']}
+                    {
+                        "non_field_errors": [
+                            "Submitted text or file URL is required when submitting."
+                        ]
+                    }
                 )
-                
+
             if file_url and file_name and assignment.allowed_file_types:
                 import os
+
                 ext = os.path.splitext(file_name)[1].lower()
-                allowed_exts = [e.lower() if e.startswith('.') else f'.{e.lower()}' for e in assignment.allowed_file_types]
+                allowed_exts = [
+                    e.lower() if e.startswith(".") else f".{e.lower()}"
+                    for e in assignment.allowed_file_types
+                ]
                 if ext not in allowed_exts:
                     raise serializers.ValidationError(
-                        {'submitted_file_name': f'File type {ext} is not allowed. Allowed types: {", ".join(allowed_exts)}'}
+                        {
+                            "submitted_file_name": f"File type {ext} is not allowed. Allowed types: {', '.join(allowed_exts)}"
+                        }
                     )
 
         return attrs
 
     def create(self, validated_data):
-        status_val = validated_data.get('status', Submission.Status.DRAFT)
-        submitted_at = timezone.now() if status_val == Submission.Status.SUBMITTED else None
+        status_val = validated_data.get("status", Submission.Status.DRAFT)
+        submitted_at = (
+            timezone.now() if status_val == Submission.Status.SUBMITTED else None
+        )
         return Submission.objects.create(submitted_at=submitted_at, **validated_data)
 
 
@@ -463,68 +603,84 @@ class SubmissionUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Submission
-        fields = ['status', 'submitted_text', 'submitted_file_url', 'submitted_file_name']
+        fields = [
+            "status",
+            "submitted_text",
+            "submitted_file_url",
+            "submitted_file_name",
+        ]
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
         instance = self.instance
         if instance.status != Submission.Status.DRAFT:
             raise serializers.ValidationError(
-                {'non_field_errors': ['Only draft submissions can be edited.']}
+                {"non_field_errors": ["Only draft submissions can be edited."]}
             )
 
-        status_val = attrs.get('status', instance.status)
+        status_val = attrs.get("status", instance.status)
         if status_val == Submission.Status.GRADED:
             raise serializers.ValidationError(
-                {'status': 'Learners cannot set status to graded.'}
+                {"status": "Learners cannot set status to graded."}
             )
 
         if status_val == Submission.Status.SUBMITTED:
-            text = (attrs.get('submitted_text', instance.submitted_text) or '').strip()
-            file_url = attrs.get('submitted_file_url', instance.submitted_file_url)
-            file_name = attrs.get('submitted_file_name', instance.submitted_file_name)
-            
+            text = (attrs.get("submitted_text", instance.submitted_text) or "").strip()
+            file_url = attrs.get("submitted_file_url", instance.submitted_file_url)
+            file_name = attrs.get("submitted_file_name", instance.submitted_file_name)
+
             if not text and not file_url:
                 raise serializers.ValidationError(
-                    {'non_field_errors': ['Submitted text or file URL is required when submitting.']}
+                    {
+                        "non_field_errors": [
+                            "Submitted text or file URL is required when submitting."
+                        ]
+                    }
                 )
-                
+
             if file_url and file_name and instance.assignment.allowed_file_types:
                 import os
+
                 ext = os.path.splitext(file_name)[1].lower()
-                allowed_exts = [e.lower() if e.startswith('.') else f'.{e.lower()}' for e in instance.assignment.allowed_file_types]
+                allowed_exts = [
+                    e.lower() if e.startswith(".") else f".{e.lower()}"
+                    for e in instance.assignment.allowed_file_types
+                ]
                 if ext not in allowed_exts:
                     raise serializers.ValidationError(
-                        {'submitted_file_name': f'File type {ext} is not allowed. Allowed types: {", ".join(allowed_exts)}'}
+                        {
+                            "submitted_file_name": f"File type {ext} is not allowed. Allowed types: {', '.join(allowed_exts)}"
+                        }
                     )
 
         return attrs
 
     def update(self, instance, validated_data):
-        status_val = validated_data.get('status', instance.status)
+        status_val = validated_data.get("status", instance.status)
         if status_val == Submission.Status.SUBMITTED:
-            validated_data['submitted_at'] = timezone.now()
+            validated_data["submitted_at"] = timezone.now()
         return super().update(instance, validated_data)
 
 
 class GradeSubmissionSerializer(serializers.Serializer):
     """Serializer for grading submissions (V1)."""
+
     grade = serializers.IntegerField(min_value=0, required=True)
-    feedback = serializers.CharField(required=False, allow_blank=True, default='')
-    internal_notes = serializers.CharField(required=False, allow_blank=True, default='')
+    feedback = serializers.CharField(required=False, allow_blank=True, default="")
+    internal_notes = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        submission = self.context.get('submission')
+        submission = self.context.get("submission")
         if submission:
             if submission.status != Submission.Status.SUBMITTED:
                 raise serializers.ValidationError(
-                    {'non_field_errors': ['Only submitted submissions can be graded.']}
+                    {"non_field_errors": ["Only submitted submissions can be graded."]}
                 )
             max_points = submission.assignment.max_points
-            if attrs['grade'] > max_points:
+            if attrs["grade"] > max_points:
                 raise serializers.ValidationError(
-                    {'grade': f'Grade must be between 0 and {max_points}.'}
+                    {"grade": f"Grade must be between 0 and {max_points}."}
                 )
         return attrs
 
@@ -534,24 +690,54 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = QuizAnswer
-        fields = ['id', 'question', 'selected_answer', 'is_correct', 'points_awarded']
-        read_only_fields = ['id', 'is_correct', 'points_awarded']
+        fields = ["id", "question", "selected_answer", "is_correct", "points_awarded"]
+        read_only_fields = ["id", "is_correct", "points_awarded"]
 
 
 class QuizSubmissionSerializer(serializers.ModelSerializer):
     """Serializer for QuizSubmission model (list/retrieve)."""
+
     answers = QuizAnswerSerializer(many=True, read_only=True)
     quiz_title = serializers.SerializerMethodField()
     course_title = serializers.SerializerMethodField()
+    attempts_info = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizSubmission
         fields = [
-            'id', 'enrollment', 'quiz', 'quiz_title', 'course_title',
-            'attempt_number', 'score', 'max_score', 'passed',
-            'time_spent_seconds', 'submitted_at', 'answers'
+            "id",
+            "enrollment",
+            "quiz",
+            "quiz_title",
+            "course_title",
+            "attempt_number",
+            "score",
+            "max_score",
+            "passed",
+            "time_spent_seconds",
+            "submitted_at",
+            "answers",
+            "attempts_info",
         ]
-        read_only_fields = ['id', 'attempt_number', 'score', 'max_score', 'passed', 'submitted_at']
+
+    def get_attempts_info(self, obj):
+        quiz_settings = obj.quiz.settings or {}
+        max_attempts = quiz_settings.get("max_attempts")
+        return {
+            "current": obj.attempt_number,
+            "max": max_attempts,
+            "remaining": max(0, max_attempts - obj.attempt_number)
+            if max_attempts
+            else None,
+        }
+        read_only_fields = [
+            "id",
+            "attempt_number",
+            "score",
+            "max_score",
+            "passed",
+            "submitted_at",
+        ]
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_quiz_title(self, obj):
@@ -559,17 +745,23 @@ class QuizSubmissionSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
-        return obj.quiz.session.course.title if obj.quiz.session and obj.quiz.session.course else None
+        return (
+            obj.quiz.session.course.title
+            if obj.quiz.session and obj.quiz.session.course
+            else None
+        )
 
 
 class QuizAnswerCreateSerializer(serializers.Serializer):
     """Serializer for a single answer in submission creation."""
+
     question = serializers.IntegerField()
     selected_answer = serializers.JSONField()
 
 
 class QuizSubmissionCreateSerializer(serializers.Serializer):
     """Serializer for creating a quiz submission with answers."""
+
     enrollment = serializers.IntegerField()
     quiz = serializers.IntegerField()
     time_spent_seconds = serializers.IntegerField(required=False, default=0)
@@ -588,8 +780,8 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Quiz not found.")
 
     def validate(self, attrs):
-        enrollment = attrs.get('enrollment')
-        quiz = attrs.get('quiz')
+        enrollment = attrs.get("enrollment")
+        quiz = attrs.get("quiz")
 
         if quiz.session.course_id != enrollment.course_id:
             raise serializers.ValidationError(
@@ -597,10 +789,19 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
             )
 
         existing_attempts = QuizSubmission.objects.filter(
-            enrollment=enrollment,
-            quiz=quiz
+            enrollment=enrollment, quiz=quiz
         ).count()
-        attrs['attempt_number'] = existing_attempts + 1
+
+        # Check max_attempts from quiz settings
+        quiz_settings = quiz.settings or {}
+        max_attempts = quiz_settings.get("max_attempts")
+
+        if max_attempts and existing_attempts >= max_attempts:
+            raise serializers.ValidationError(
+                {"quiz": f"Maximum {max_attempts} attempts reached for this quiz."}
+            )
+
+        attrs["attempt_number"] = existing_attempts + 1
 
         return attrs
 
@@ -614,33 +815,36 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
         points = question.points
 
         if question_type == QuizQuestion.QuestionType.MULTIPLE_CHOICE:
-            selected_option = selected_answer.get('selected_option')
-            options = answer_payload.get('options', [])
+            selected_option = selected_answer.get("selected_option")
+            options = answer_payload.get("options", [])
             if selected_option is not None and selected_option < len(options):
-                is_correct = options[selected_option].get('is_correct', False)
+                is_correct = options[selected_option].get("is_correct", False)
                 return is_correct, points if is_correct else 0
             return False, 0
 
         elif question_type == QuizQuestion.QuestionType.TRUE_FALSE:
-            correct_answer = answer_payload.get('correct_answer')
-            is_correct = selected_answer.get('value') == correct_answer
+            correct_answer = answer_payload.get("correct_answer")
+            is_correct = selected_answer.get("value") == correct_answer
             return is_correct, points if is_correct else 0
 
         elif question_type == QuizQuestion.QuestionType.SHORT_ANSWER:
-            sample_answer = answer_payload.get('sample_answer', '').lower().strip()
-            user_answer = selected_answer.get('text', '').lower().strip()
+            sample_answer = answer_payload.get("sample_answer", "").lower().strip()
+            user_answer = selected_answer.get("text", "").lower().strip()
             is_correct = user_answer == sample_answer or sample_answer in user_answer
             return is_correct, points if is_correct else 0
 
         elif question_type == QuizQuestion.QuestionType.FILL_BLANK:
-            blanks = answer_payload.get('blanks', [])
-            user_blanks = selected_answer.get('blanks', [])
+            blanks = answer_payload.get("blanks", [])
+            user_blanks = selected_answer.get("blanks", [])
             if len(user_blanks) != len(blanks):
                 return False, 0
             correct_count = 0
             for i, blank in enumerate(blanks):
                 if i < len(user_blanks):
-                    if user_blanks[i].lower().strip() == blank.get('answer', '').lower().strip():
+                    if (
+                        user_blanks[i].lower().strip()
+                        == blank.get("answer", "").lower().strip()
+                    ):
                         correct_count += 1
             total_blanks = len(blanks)
             if total_blanks > 0:
@@ -650,13 +854,13 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
             return False, 0
 
         elif question_type == QuizQuestion.QuestionType.MATCHING:
-            correct_pairs = answer_payload.get('pairs', [])
-            user_pairs = selected_answer.get('pairs', [])
+            correct_pairs = answer_payload.get("pairs", [])
+            user_pairs = selected_answer.get("pairs", [])
             correct_count = 0
             for pair in correct_pairs:
                 for user_pair in user_pairs:
-                    if pair.get('key') == user_pair.get('key'):
-                        if pair.get('value') == user_pair.get('value'):
+                    if pair.get("key") == user_pair.get("key"):
+                        if pair.get("value") == user_pair.get("value"):
                             correct_count += 1
             total_pairs = len(correct_pairs)
             if total_pairs > 0:
@@ -671,11 +875,11 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
         return False, 0
 
     def create(self, validated_data):
-        enrollment = validated_data['enrollment']
-        quiz = validated_data['quiz']
-        time_spent_seconds = validated_data.get('time_spent_seconds', 0)
-        answers_data = validated_data['answers']
-        attempt_number = validated_data['attempt_number']
+        enrollment = validated_data["enrollment"]
+        quiz = validated_data["quiz"]
+        time_spent_seconds = validated_data.get("time_spent_seconds", 0)
+        answers_data = validated_data["answers"]
+        attempt_number = validated_data["attempt_number"]
 
         questions = {q.id: q for q in quiz.questions.all()}
         total_points = sum(q.points for q in questions.values())
@@ -690,11 +894,11 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
         )
 
         settings = quiz.settings or {}
-        passing_score_percent = settings.get('passing_score_percent', 70)
+        passing_score_percent = settings.get("passing_score_percent", 70)
 
         for answer_data in answers_data:
-            question_id = answer_data['question']
-            selected_answer = answer_data['selected_answer']
+            question_id = answer_data["question"]
+            selected_answer = answer_data["selected_answer"]
 
             question = questions.get(question_id)
             if not question:
@@ -707,13 +911,17 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
                 question=question,
                 selected_answer=selected_answer,
                 is_correct=is_correct,
-                points_awarded=points_awarded
+                points_awarded=points_awarded,
             )
 
             total_score += points_awarded
 
         submission.score = total_score
-        submission.passed = (total_score / total_points * 100) >= passing_score_percent if total_points > 0 else False
+        submission.passed = (
+            (total_score / total_points * 100) >= passing_score_percent
+            if total_points > 0
+            else False
+        )
         submission.save()
 
         return submission
@@ -721,22 +929,33 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
 
 class SavedCourseSerializer(serializers.ModelSerializer):
     """Serializer for SavedCourse model — used in saved courses list."""
-    course_title = serializers.CharField(source='course.title', read_only=True)
-    course_thumbnail = serializers.CharField(source='course.thumbnail', read_only=True)
-    course_slug = serializers.CharField(source='course.slug', read_only=True)
-    course_price = serializers.DecimalField(source='course.price', max_digits=10, decimal_places=2, read_only=True)
-    course_level = serializers.CharField(source='course.level', read_only=True)
+
+    course_title = serializers.CharField(source="course.title", read_only=True)
+    course_thumbnail = serializers.CharField(source="course.thumbnail", read_only=True)
+    course_slug = serializers.CharField(source="course.slug", read_only=True)
+    course_price = serializers.DecimalField(
+        source="course.price", max_digits=10, decimal_places=2, read_only=True
+    )
+    course_level = serializers.CharField(source="course.level", read_only=True)
     instructor_name = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SavedCourse
         fields = [
-            'id', 'user', 'course', 'course_title', 'course_thumbnail',
-            'course_slug', 'course_price', 'course_level',
-            'instructor_name', 'category_name', 'created_at',
+            "id",
+            "user",
+            "course",
+            "course_title",
+            "course_thumbnail",
+            "course_slug",
+            "course_price",
+            "course_level",
+            "instructor_name",
+            "category_name",
+            "created_at",
         ]
-        read_only_fields = ['id', 'user', 'created_at']
+        read_only_fields = ["id", "user", "created_at"]
 
     def get_instructor_name(self, obj):
         inst = obj.course.instructor
@@ -748,21 +967,33 @@ class SavedCourseSerializer(serializers.ModelSerializer):
 
 class WorkshopSerializer(serializers.ModelSerializer):
     """Read serializer for Workshop model."""
+
     instructor_name = serializers.SerializerMethodField()
     instructor_email = serializers.SerializerMethodField()
-    participants = serializers.IntegerField(source='participants_count', read_only=True)
+    participants = serializers.IntegerField(source="participants_count", read_only=True)
 
     class Meta:
         model = Workshop
         fields = [
-            'id', 'title', 'description', 'location',
-            'start_date', 'end_date',
-            'max_participants', 'participants', 'participants_count',
-            'status', 'grading_type', 'category',
-            'instructor', 'instructor_name', 'instructor_email',
-            'created_at', 'updated_at',
+            "id",
+            "title",
+            "description",
+            "location",
+            "start_date",
+            "end_date",
+            "max_participants",
+            "participants",
+            "participants_count",
+            "status",
+            "grading_type",
+            "category",
+            "instructor",
+            "instructor_name",
+            "instructor_email",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'instructor']
+        read_only_fields = ["id", "created_at", "updated_at", "instructor"]
 
     def get_instructor_name(self, obj):
         return obj.instructor.get_full_name() or obj.instructor.email
@@ -777,15 +1008,78 @@ class WorkshopCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Workshop
         fields = [
-            'title', 'description', 'location',
-            'start_date', 'end_date',
-            'max_participants', 'participants_count',
-            'status', 'grading_type', 'category',
+            "title",
+            "description",
+            "location",
+            "start_date",
+            "end_date",
+            "max_participants",
+            "participants_count",
+            "status",
+            "grading_type",
+            "category",
         ]
 
-    def validate(self, attrs):
-        start = attrs.get('start_date')
-        end = attrs.get('end_date')
-        if start and end and end < start:
-            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
-        return attrs
+
+def validate(self, attrs):
+    start = attrs.get("start_date")
+    end = attrs.get("end_date")
+    if start and end and end < start:
+        raise serializers.ValidationError(
+            {"end_date": "End date must be on or after start date."}
+        )
+    return attrs
+
+
+class WorkshopAttendanceSerializer(serializers.ModelSerializer):
+    """Serializer for WorkshopAttendance model."""
+
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkshopAttendance
+        fields = [
+            "id",
+            "workshop",
+            "user",
+            "user_name",
+            "user_email",
+            "status",
+            "grade",
+            "notes",
+            "marked_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "marked_at", "updated_at"]
+
+    def get_user_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+
+    def get_user_email(self, obj):
+        return obj.user.email
+
+
+class WorkshopAttendanceCreateUpdateSerializer(serializers.ModelSerializer):
+    """Write serializer for creating/updating attendance."""
+
+    workshop = serializers.IntegerField(write_only=True)
+    user = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = WorkshopAttendance
+        fields = ["workshop", "user", "status", "grade", "notes"]
+
+    def create(self, validated_data):
+        from apps.accounts.models import User
+        from apps.learning.models import Workshop
+
+        workshop = Workshop.objects.get(id=validated_data["workshop"])
+        user = User.objects.get(id=validated_data["user"])
+        return WorkshopAttendance.objects.create(
+            workshop=workshop,
+            user=user,
+            status=validated_data.get("status", "present"),
+            grade=validated_data.get("grade"),
+            notes=validated_data.get("notes", ""),
+        )
