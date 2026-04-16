@@ -38,6 +38,38 @@ from .models import (
     Enrollment, SessionProgress, Certificate, Discussion, DiscussionReply, Report, Submission,
     QuizSubmission, QuizAnswer, SavedCourse, Workshop
 )
+
+
+def _analytics_enrollment_scope_qs(user):
+    """Enrollments visible for learning analytics (product scope)."""
+    role = getattr(user, 'role', None) or ''
+    if role == User.Role.INSTRUCTOR:
+        return Enrollment.objects.filter(course__instructor=user)
+    if role == User.Role.ORG_ADMIN:
+        org = get_active_membership_organization(user)
+        return Enrollment.objects.filter(organization=org) if org else Enrollment.objects.none()
+    if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+        return Enrollment.objects.all()
+    return Enrollment.objects.filter(user=user)
+
+
+def _analytics_quiz_submission_scope_qs(user):
+    """Quiz submissions visible for learning analytics; scope matches enrollments."""
+    role = getattr(user, 'role', None) or ''
+    if role == User.Role.INSTRUCTOR:
+        return QuizSubmission.objects.filter(enrollment__course__instructor=user)
+    if role == User.Role.ORG_ADMIN:
+        org = get_active_membership_organization(user)
+        return (
+            QuizSubmission.objects.filter(enrollment__organization=org)
+            if org
+            else QuizSubmission.objects.none()
+        )
+    if role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
+        return QuizSubmission.objects.all()
+    return QuizSubmission.objects.filter(enrollment__user=user)
+
+
 from .serializers import (
     EnrollmentSerializer, EnrollmentCreateSerializer, BulkEnrollmentSerializer,
     SessionProgressSerializer, SessionProgressUpdateSerializer,
@@ -896,18 +928,36 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Admin-level assessment statistics."""
+        """Aggregate assignment + quiz stats for privileged roles only."""
         from django.db.models import Avg
+
+        user = request.user
+        role = getattr(user, 'role', None)
+        allowed = (
+            User.Role.ORG_ADMIN,
+            User.Role.LMS_MANAGER,
+            User.Role.TASC_ADMIN,
+            User.Role.INSTRUCTOR,
+        )
+        if role not in allowed:
+            return Response(
+                {'detail': 'You do not have permission to access assessment statistics.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if role == User.Role.ORG_ADMIN and not get_active_membership_organization(user):
+            return Response(
+                {'detail': 'You do not have permission to access assessment statistics.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         submissions_qs = Submission.objects.all()
         quiz_qs = QuizSubmission.objects.all()
-        if getattr(request.user, 'role', None) == 'org_admin':
-            org = get_active_membership_organization(request.user)
-            if org:
-                submissions_qs = submissions_qs.filter(enrollment__organization=org)
-                quiz_qs = quiz_qs.filter(enrollment__organization=org)
-            else:
-                submissions_qs = submissions_qs.none()
-                quiz_qs = quiz_qs.none()
+        if role == User.Role.ORG_ADMIN:
+            org = get_active_membership_organization(user)
+            submissions_qs = submissions_qs.filter(enrollment__organization=org)
+            quiz_qs = quiz_qs.filter(enrollment__organization=org)
+        # instructor, lms_manager, tasc_admin: platform-wide (matches submission list visibility)
 
         total_assignments = submissions_qs.count()
         graded = submissions_qs.filter(status=Submission.Status.GRADED).count()
@@ -1075,10 +1125,7 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         start_date = timezone.now() - timedelta(days=months * 30)
 
         user = request.user
-        base_qs = Enrollment.objects.filter(enrolled_at__gte=start_date)
-
-        if user.role == 'instructor':
-            base_qs = base_qs.filter(course__instructor=user)
+        base_qs = _analytics_enrollment_scope_qs(user).filter(enrolled_at__gte=start_date)
 
         # Enrolls by month
         enrolls = base_qs.annotate(
@@ -1125,10 +1172,7 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='learning-stats')
     def learning_stats(self, request):
         user = request.user
-        base_qs = Enrollment.objects.all()
-
-        if user.role == 'instructor':
-            base_qs = base_qs.filter(course__instructor=user)
+        base_qs = _analytics_enrollment_scope_qs(user)
 
         total_learners = base_qs.values('user').distinct().count()
         
@@ -1140,10 +1184,8 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         in_progress = base_qs.filter(status=Enrollment.Status.ACTIVE).count()
         completed = base_qs.filter(status='completed').count()
 
-        quiz_qs = QuizSubmission.objects.all()
-        if user.role == 'instructor':
-            quiz_qs = quiz_qs.filter(enrollment__course__instructor=user)
-            
+        quiz_qs = _analytics_quiz_submission_scope_qs(user)
+
         avg_quiz = quiz_qs.aggregate(avg=Avg('score'))['avg'] or 0.0
 
         return Response({
@@ -1160,12 +1202,16 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
         """Per-course enrollment and completion aggregates for analytics dashboards."""
         from rest_framework.exceptions import PermissionDenied
 
-        from apps.accounts.rbac import is_admin_like, is_instructor
-
         user = request.user
-        if is_admin_like(user):
+        role = getattr(user, 'role', None) or ''
+        if role == User.Role.ORG_ADMIN:
+            org = get_active_membership_organization(user)
+            if not org:
+                raise PermissionDenied('You do not have permission to access this resource.')
+            base_qs = Enrollment.objects.filter(organization=org)
+        elif role in (User.Role.LMS_MANAGER, User.Role.TASC_ADMIN):
             base_qs = Enrollment.objects.all()
-        elif is_instructor(user):
+        elif role == User.Role.INSTRUCTOR:
             base_qs = Enrollment.objects.filter(course__instructor=user)
         else:
             raise PermissionDenied('You do not have permission to access this resource.')

@@ -713,12 +713,17 @@ class OrgAdminSubmissionScopingTests(APITestCase):
 
     def test_org_admin_stats_fail_closed_without_membership(self):
         response = self.client.get(f'{SUBMISSIONS_URL}stats/', **_auth(self.org_admin_no_membership))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_learner_submissions_stats_forbidden(self):
+        response = self.client.get(f'{SUBMISSIONS_URL}stats/', **_auth(self.learner_a))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_instructor_submissions_stats_ok_platform_wide(self):
+        response = self.client.get(f'{SUBMISSIONS_URL}stats/', **_auth(self.instructor))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['total_assignments'], 0)
-        self.assertEqual(response.data['graded'], 0)
-        self.assertEqual(response.data['pending'], 0)
-        self.assertEqual(response.data['total_quizzes'], 0)
-        self.assertEqual(response.data['quiz_pass_rate'], 0)
+        self.assertEqual(response.data['total_assignments'], 2)
+        self.assertEqual(response.data['total_quizzes'], 2)
 
     def test_learner_still_sees_own_data_only(self):
         response = self.client.get(SUBMISSIONS_URL, **_auth(self.learner_a))
@@ -1016,6 +1021,110 @@ class LmsManagerAnalyticsPlatformWideTest(APITestCase):
     def test_top_course_performance_learner_403(self):
         response = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.learner))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AnalyticsProductScopeRecoveryTest(APITestCase):
+    """Recovery Patch 1: analytics enrollment/quiz scope and org_admin top-course access."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.org_a = Organization.objects.create(name='AnScope Org A', slug='an-scope-a')
+        self.org_b = Organization.objects.create(name='AnScope Org B', slug='an-scope-b')
+
+        self.instructor = User.objects.create_user(
+            username='an_scope_inst',
+            email='an_scope_inst@example.com',
+            password='pass1234',
+            role=User.Role.INSTRUCTOR,
+            email_verified=True,
+            is_active=True,
+        )
+        self.cat = Category.objects.create(name='AnScope Cat', slug='an-scope-cat')
+        self.course = Course.objects.create(
+            title='AnScope Course',
+            slug='an-scope-course',
+            instructor=self.instructor,
+            category=self.cat,
+            status='published',
+        )
+        self.learner_a = User.objects.create_user(
+            username='an_scope_la',
+            email='an_scope_la@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        self.learner_b = User.objects.create_user(
+            username='an_scope_lb',
+            email='an_scope_lb@example.com',
+            password='pass1234',
+            role=User.Role.LEARNER,
+            email_verified=True,
+            is_active=True,
+        )
+        Enrollment.objects.create(
+            user=self.learner_a,
+            course=self.course,
+            organization=self.org_a,
+            status=Enrollment.Status.ACTIVE,
+        )
+        Enrollment.objects.create(
+            user=self.learner_b,
+            course=self.course,
+            organization=self.org_b,
+            status=Enrollment.Status.ACTIVE,
+        )
+
+        self.org_admin = User.objects.create_user(
+            username='an_scope_oa',
+            email='an_scope_oa@example.com',
+            password='pass1234',
+            role=User.Role.ORG_ADMIN,
+            email_verified=True,
+            is_active=True,
+        )
+        Membership.objects.create(
+            user=self.org_admin,
+            organization=self.org_a,
+            role=Membership.Role.ORG_ADMIN,
+            is_active=True,
+        )
+
+        self.lms_manager = User.objects.create_user(
+            username='an_scope_mgr',
+            email='an_scope_mgr@example.com',
+            password='pass1234',
+            role=User.Role.LMS_MANAGER,
+            email_verified=True,
+            is_active=True,
+        )
+
+    def test_enrollment_trends_learner_vs_manager_visibility(self):
+        la = sum(self.client.get(ENROLLMENT_TRENDS_URL, **_auth(self.learner_a)).json()['enrollments'])
+        mgr = sum(self.client.get(ENROLLMENT_TRENDS_URL, **_auth(self.lms_manager)).json()['enrollments'])
+        self.assertEqual(la, 1)
+        self.assertGreaterEqual(mgr, 2)
+
+    def test_learning_stats_learner_total_learners_is_self_only(self):
+        data = self.client.get(LEARNING_STATS_URL, **_auth(self.learner_a)).json()
+        self.assertEqual(data['total_learners'], 1)
+
+    def test_learning_stats_org_admin_scoped_to_membership_org(self):
+        data = self.client.get(LEARNING_STATS_URL, **_auth(self.org_admin)).json()
+        self.assertEqual(data['total_learners'], 1)
+
+    def test_learning_stats_lms_manager_sees_platform(self):
+        data = self.client.get(LEARNING_STATS_URL, **_auth(self.lms_manager)).json()
+        self.assertGreaterEqual(data['total_learners'], 2)
+
+    def test_top_course_performance_org_admin_org_scoped(self):
+        resp = self.client.get(TOP_COURSE_PERFORMANCE_URL, **_auth(self.org_admin))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        rows = resp.json()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['course_id'], self.course.id)
+        self.assertEqual(rows[0]['enrollments'], 1)
 
 
 class EnrollmentListScopeAndFiltersTest(APITestCase):
