@@ -286,7 +286,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description',
             'price', 'currency', 'billing_cycle',
-            'features', 'max_courses', 'max_users', 'trial_days',
+            'duration_days', 'features', 'max_courses', 'max_users', 'trial_days',
             'status', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -302,15 +302,48 @@ class PublicSubscriptionPlanSerializer(serializers.ModelSerializer):
 
 class SubscriptionCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating subscriptions."""
+
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.00'))
+    trial_days = serializers.IntegerField(min_value=0, required=False)
+    duration_days = serializers.IntegerField(min_value=1, required=False)
+    max_courses = serializers.IntegerField(min_value=1, allow_null=True, required=False)
+    max_users = serializers.IntegerField(min_value=1, allow_null=True, required=False)
     
     class Meta:
         model = Subscription
         fields = [
             'name', 'description',
             'price', 'currency', 'billing_cycle',
-            'features', 'max_courses', 'max_users', 'trial_days',
+            'duration_days', 'features', 'max_courses', 'max_users', 'trial_days',
             'status'
         ]
+
+    def validate_currency(self, value):
+        valid_currencies = {choice for choice, _label in Payment.CURRENCIES}
+        if value not in valid_currencies:
+            raise serializers.ValidationError('Unsupported currency.')
+        return value
+
+    def validate_billing_cycle(self, value):
+        valid_cycles = {choice for choice, _label in Subscription._meta.get_field('billing_cycle').choices}
+        if value not in valid_cycles:
+            raise serializers.ValidationError('Unsupported billing cycle.')
+        return value
+
+    def validate_status(self, value):
+        valid_statuses = {choice for choice, _label in Subscription.Status.choices}
+        if value not in valid_statuses:
+            raise serializers.ValidationError('Unsupported subscription status.')
+        return value
+
+    def validate_features(self, value):
+        if value in (None, ''):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError('Features must be a list of strings.')
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            raise serializers.ValidationError('Features must contain only non-empty strings.')
+        return [item.strip() for item in value]
 
 
 class UserSubscriptionSerializer(serializers.ModelSerializer):
