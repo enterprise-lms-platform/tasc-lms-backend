@@ -143,7 +143,7 @@ ACCOUNT_LOCK_MINUTES = env.int("ACCOUNT_LOCK_MINUTES", default=15)
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # admin login
-    #"allauth.account.auth_backends.AuthenticationBackend",  # allauth
+    "allauth.account.auth_backends.AuthenticationBackend",  # allauth
 ]
 
 SITE_ID = 1
