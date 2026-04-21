@@ -205,4 +205,9 @@ class HasActiveSubscription(BasePermission):
             return False
         if is_admin_like(request.user) or is_instructor(request.user):
             return True
-        return user_has_active_subscription(request.user)
+        if user_has_active_subscription(request.user):
+            return True
+        org = getattr(request.user, 'organization', None)
+        if org and organization_has_active_subscription(org):
+            return True
+        return False

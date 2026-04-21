@@ -13,6 +13,8 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
 
     users_count = serializers.IntegerField(read_only=True)
     courses_count = serializers.IntegerField(read_only=True)
+    subscription_status = serializers.SerializerMethodField()
+    subscription_end_date = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -35,6 +37,8 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "tax_id",
             "users_count",
             "courses_count",
+            "subscription_status",
+            "subscription_end_date",
             "created_at",
             "updated_at",
         ]
@@ -44,7 +48,33 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "updated_at",
             "users_count",
             "courses_count",
+            "subscription_status",
+            "subscription_end_date",
         ]
+
+    def get_subscription_status(self, obj):
+        from apps.payments.models import UserSubscription
+        sub = (
+            UserSubscription.objects.filter(
+                organization=obj,
+                status=UserSubscription.Status.ACTIVE,
+            )
+            .order_by("-end_date")
+            .first()
+        )
+        return sub.status if sub else None
+
+    def get_subscription_end_date(self, obj):
+        from apps.payments.models import UserSubscription
+        sub = (
+            UserSubscription.objects.filter(
+                organization=obj,
+                status=UserSubscription.Status.ACTIVE,
+            )
+            .order_by("-end_date")
+            .first()
+        )
+        return sub.end_date.isoformat() if sub and sub.end_date else None
 
 
 class UserSuperadminSerializer(serializers.ModelSerializer):

@@ -296,23 +296,21 @@ class FlutterwaveWebhookHandler(BaseWebhookHandler):
         """
         try:
             original_tx_id = data.get('transaction_id')
-            
+
             # Find original payment
             try:
                 payment = Payment.objects.get(provider_payment_id=original_tx_id)
                 payment.status = 'refunded'
                 payment.metadata['flutterwave_refund'] = data
-                payment.save()
-                
-                # Remove course access if needed
-                if payment.course:
-                    from learning.models import Enrollment
-                    Enrollment.objects.filter(
-                        user=payment.user,
-                        course=payment.course,
-                        status='active'
-                    ).update(status='dropped')
-                
+                payment.save(update_fields=['status', 'metadata'])
+
+                from apps.payments.views_pesapal import (
+                    _revoke_enrollment_for_refund,
+                    _cancel_subscription_for_refund,
+                )
+                _revoke_enrollment_for_refund(payment)
+                _cancel_subscription_for_refund(payment)
+
             except Payment.DoesNotExist:
                 logger.warning(f"Payment not found for refund: {data.get('id')}")
 

@@ -387,14 +387,15 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
 
 
 class SubscriptionStatusSerializer(serializers.Serializer):
-    """Lightweight serializer for GET /api/v1/payments/subscription/me/ response."""
-
     has_active_subscription = serializers.BooleanField()
     status = serializers.CharField()
     is_trial = serializers.BooleanField()
     start_date = serializers.DateTimeField(allow_null=True)
     end_date = serializers.DateTimeField(allow_null=True)
     days_remaining = serializers.IntegerField(allow_null=True)
+    in_grace_period = serializers.BooleanField(required=False, default=False)
+    grace_days_remaining = serializers.IntegerField(allow_null=True, required=False, default=None)
+    approaching_grace_period = serializers.BooleanField(required=False, default=False)
     plan = serializers.DictField(allow_null=True)
 
 

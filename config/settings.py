@@ -415,4 +415,23 @@ CELERY_CACHE_BACKEND = "default"
 # Use database-backed scheduler for development
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
+CELERY_BEAT_SCHEDULE = {
+    "check-and-notify-expiring-subscriptions-daily": {
+        "task": "apps.payments.tasks.check_and_notify_expiring_subscriptions",
+        "schedule": 86400.0,
+    },
+    "expire-overdue-subscriptions-hourly": {
+        "task": "apps.payments.tasks.expire_overdue_subscriptions",
+        "schedule": 3600.0,
+    },
+    "reconcile-stale-pesapal-payments": {
+        "task": "apps.payments.tasks.reconcile_stale_pesapal_payments",
+        "schedule": 1800.0,
+    },
+    "check-seat-capacity-daily": {
+        "task": "apps.payments.tasks.check_seat_capacity",
+        "schedule": 86400.0,
+    },
+}
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

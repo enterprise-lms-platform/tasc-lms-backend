@@ -92,6 +92,66 @@ def _release_paused_subscription_for_failed_recurring(payment):
     us.save(update_fields=["status", "cancelled_at", "auto_renew"])
 
 
+def _revoke_enrollment_for_refund(payment):
+    """
+    When a payment is reversed/refunded, revoke the learner's enrollment
+    so they no longer retain access to the course content.
+    """
+    if not payment.course_id:
+        return
+    try:
+        from apps.learning.models import Enrollment
+        enrollment = Enrollment.objects.filter(
+            user=payment.user,
+            course=payment.course,
+        ).active().first() if hasattr(Enrollment.objects, 'active') else Enrollment.objects.filter(
+            user=payment.user,
+            course=payment.course,
+            status='active',
+        ).first()
+        if enrollment:
+            enrollment.status = 'dropped'
+            enrollment.save(update_fields=['status'])
+            log_event(
+                action="updated",
+                resource="enrollment",
+                resource_id=str(enrollment.id),
+                actor=None,
+                details=f"Enrollment revoked due to payment refund (payment {payment.id})",
+            )
+    except Exception:
+        logger.exception("Failed to revoke enrollment for refunded payment %s", str(payment.id))
+
+
+def _cancel_subscription_for_refund(payment):
+    """
+    When a subscription payment is refunded, cancel the linked UserSubscription
+    so the user no longer retains subscription access.
+    """
+    meta = payment.metadata or {}
+    sub_id = meta.get("user_subscription_id")
+    if not sub_id:
+        return
+    try:
+        us = UserSubscription.objects.get(id=sub_id)
+        if us.status in [UserSubscription.Status.ACTIVE, UserSubscription.Status.PAUSED]:
+            us.status = UserSubscription.Status.CANCELLED
+            us.cancelled_at = timezone.now()
+            us.auto_renew = False
+            us.save(update_fields=["status", "cancelled_at", "auto_renew"])
+            log_event(
+                action="updated",
+                resource="user_subscription",
+                resource_id=str(us.id),
+                actor=None,
+                details=f"Subscription cancelled due to payment refund (payment {payment.id})",
+            )
+    except UserSubscription.DoesNotExist:
+        pass
+    except Exception:
+        logger.exception("Failed to cancel subscription for refunded payment %s", str(payment.id))
+
+
 def _sync_payment_from_pesapal_verify(payment, result, request=None):
     """
     Apply Pesapal verify_payment() result to a Payment. Only mutates when result["success"]
@@ -149,9 +209,11 @@ def _sync_payment_from_pesapal_verify(payment, result, request=None):
         return True
 
     if pesapal_status == "REVERSED":
-        payment.status = "cancelled"
+        payment.status = "refunded"
         payment.save(update_fields=["status"])
         _release_paused_subscription_for_failed_recurring(payment)
+        _revoke_enrollment_for_refund(payment)
+        _cancel_subscription_for_refund(payment)
         return True
 
     return False
@@ -428,9 +490,15 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
         result = service.cancel_order(payment.provider_order_id)
 
         if result["success"]:
-            payment.status = "cancelled"
+            payment.status = "cancelled" # treat refunded as cancelled locally
             payment.save(update_fields=["status"])
-            _release_paused_subscription_for_failed_recurring(payment)
+            if payment.course:
+                from apps.learning.models import Enrollment
+                Enrollment.objects.filter(
+                    user=payment.user,
+                    course=payment.course,
+                    status="active",
+                ).update(status="dropped")
             log_event(
                 action="updated",
                 resource="payment",
@@ -467,16 +535,30 @@ class PesapalPaymentViewSet(viewsets.GenericViewSet):
         )
 
         if result["success"]:
-            payment.status = "cancelled"  # treat refunded as cancelled locally
+            payment.status = "refunded"
             payment.save(update_fields=["status"])
+
+            if payment.course:
+                try:
+                    from apps.learning.models import Enrollment
+                    Enrollment.objects.filter(
+                        user=payment.user,
+                        course=payment.course,
+                        status="active",
+                    ).update(status="dropped")
+                except ImportError:
+                    pass
+
+            _cancel_subscription_for_refund(payment)
+
             log_event(
                 action="updated",
-                resource="payment",
-                resource_id=str(payment.id),
-                actor=request.user,
-                request=request,
-                details=f"Pesapal refund requested: {payment.amount} {payment.currency}",
-            )
+                    resource="payment",
+                    resource_id=str(payment.id),
+                    actor=request.user,
+                    request=request,
+                    details=f"Pesapal refund requested: {payment.amount} {payment.currency}",
+                )
 
         return Response(result, status=status.HTTP_200_OK if result["success"] else status.HTTP_400_BAD_REQUEST)
 
@@ -782,9 +864,11 @@ class PesapalWebhookView(APIView):
             _release_paused_subscription_for_failed_recurring(payment)
 
         elif pesapal_status == "REVERSED" and payment.status == "pending":
-            payment.status = "cancelled"
+            payment.status = "refunded"
             payment.save(update_fields=["status"])
             _release_paused_subscription_for_failed_recurring(payment)
+            _revoke_enrollment_for_refund(payment)
+            _cancel_subscription_for_refund(payment)
 
         return ipn_ack(status.HTTP_200_OK, "ACCEPTED")
 

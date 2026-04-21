@@ -139,6 +139,9 @@ class SessionProgress(models.Model):
     # Notes
     notes = models.TextField(blank=True)
 
+    # Video resume - stores playback position in seconds for cross-device resume
+    video_position_seconds = models.PositiveIntegerField(default=0, blank=True)
+
     class Meta:
         unique_together = ("enrollment", "session")
         ordering = ["-last_accessed_at"]

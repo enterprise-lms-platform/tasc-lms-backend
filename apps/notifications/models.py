@@ -13,6 +13,7 @@ class Notification(models.Model):
         SYSTEM = "system", "System"
         MILESTONE = "milestone", "Milestone"
         COURSE_UPDATE = "course_update", "Course Update"
+        SUBSCRIPTION_EXPIRY = "subscription_expiry", "Subscription Expiry"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications"

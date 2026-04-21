@@ -162,6 +162,7 @@ class SessionProgressSerializer(serializers.ModelSerializer):
             "time_spent_minutes",
             "last_accessed_at",
             "notes",
+            "video_position_seconds",
             "duration_minutes",
         ]
         read_only_fields = ["id", "started_at", "completed_at", "last_accessed_at"]
@@ -192,13 +193,16 @@ class SessionProgressCreateUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SessionProgress
-        fields = [
-            "session",
-            "is_started",
-            "is_completed",
-            "time_spent_seconds",
-            "notes",
-        ]
+
+
+fields = [
+    "session",
+    "is_started",
+    "is_completed",
+    "time_spent_seconds",
+    "video_position_seconds",
+    "notes",
+]
 
 
 class CertificateSerializer(serializers.ModelSerializer):
@@ -379,7 +383,7 @@ class SessionProgressUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SessionProgress
-        fields = ["is_completed", "time_spent_seconds"]
+        fields = ["is_completed", "time_spent_seconds", "video_position_seconds"]
 
 
 class ReportSerializer(serializers.ModelSerializer):

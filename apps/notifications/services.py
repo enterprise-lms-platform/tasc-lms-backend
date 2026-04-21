@@ -267,6 +267,62 @@ def check_and_notify_expiring_subscriptions():
                 send_subscription_expiry_warning(sub.organization, 7)
 
 
+def send_seat_capacity_warning(organization, percent_used):
+    """Notify Org Admins when their org reaches 80%+ seat capacity."""
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    members_url = f"{frontend_base}/org-admin/members"
+
+    from apps.accounts.models import Membership
+    admins = Membership.objects.filter(
+        organization=organization,
+        role=Membership.Role.ORG_ADMIN,
+        is_active=True,
+    ).select_related('user')
+
+    for admin in admins:
+        from apps.notifications.models import Notification
+        Notification.objects.get_or_create(
+            user=admin.user,
+            type=Notification.Type.SYSTEM,
+            title__icontains=f"{percent_used:.0f}% seat capacity",
+            defaults={
+                'title': f'Seat capacity at {percent_used:.0f}%',
+                'description': f'Your organization has used {percent_used:.0f}% of its available seats. Consider upgrading your plan.',
+                'link': members_url,
+            },
+        )
+
+
+def send_learner_org_subscription_expired(organization):
+    """Notify individual learners when their org's subscription expires."""
+    frontend_base = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    subscription_url = f"{frontend_base}/subscription"
+
+    from apps.accounts.models import Membership
+    learner_memberships = Membership.objects.filter(
+        organization=organization,
+        is_active=True,
+    ).exclude(
+        role=Membership.Role.ORG_ADMIN,
+    ).select_related('user')
+
+    notifications = []
+    for membership in learner_memberships:
+        notifications.append(
+            Notification(
+                user=membership.user,
+                type=Notification.Type.SUBSCRIPTION_EXPIRY,
+                title="Organization subscription expired",
+                description=f"Your organization's TASC LMS subscription has expired. You may lose access to enrolled courses.",
+                link=subscription_url,
+            ),
+        )
+
+    if notifications:
+        from apps.notifications.models import Notification
+        Notification.objects.bulk_create(notifications, ignore_conflicts=False)
+
+
 def send_subscription_payment_success_email(payment) -> bool:
     """
     Send learner-facing confirmation after a successful subscription payment.

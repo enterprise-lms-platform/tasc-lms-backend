@@ -157,6 +157,14 @@ class RegisterSerializer(serializers.Serializer):
     accept_terms = serializers.BooleanField()
     marketing_opt_in = serializers.BooleanField(required=False, default=False)
 
+    # Registration type
+    registration_type = serializers.ChoiceField(
+        choices=["personal", "org"], default="personal"
+    )
+    organization_name = serializers.CharField(
+        max_length=200, required=False, allow_blank=True
+    )
+
     def validate(self, attrs):
         email = (attrs.get("email") or "").strip().lower()
         attrs["email"] = email
@@ -196,6 +204,8 @@ class RegisterSerializer(serializers.Serializer):
         validated_data.pop("confirm_password", None)
         password = validated_data.pop("password")
         accept_terms = validated_data.pop("accept_terms")
+        registration_type = validated_data.pop("registration_type", "personal")
+        organization_name = validated_data.pop("organization_name", "")
 
         # IMPORTANT: remove email from validated_data so it isn't passed twice
         email = validated_data.pop("email").strip().lower()
@@ -208,18 +218,16 @@ class RegisterSerializer(serializers.Serializer):
             i += 1
             username = f"{base_username}{i}"
 
+        role = "org_admin" if registration_type == "org" else "learner"
+
         user = User(
             username=username,
             email=email,
+            role=role,
             terms_accepted_at=dj_timezone.now() if accept_terms else None,
-            **validated_data,  # now safe: email is not inside here
+            **validated_data, # now safe: email is not inside here
         )
         user.set_password(password)
-
-        # Your model already defaults role=learner, so no need to set it here.
-        # But leaving this in is harmless if role is blank for any reason:
-        if hasattr(user, "role") and not getattr(user, "role", None):
-            user.role = "learner"
 
         try:
             user.save()
@@ -227,6 +235,22 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"email": ["A user with this email already exists."]}
             )
+
+        # If org registration, create organization and membership
+        if registration_type == "org" and organization_name:
+            from .models import Organization, Membership
+            import uuid
+            org = Organization.objects.create(
+                name=organization_name,
+                slug=f"org-{uuid.uuid4().hex[:8]}",
+            )
+            Membership.objects.create(
+                user=user,
+                organization=org,
+                role=Membership.Role.ORG_ADMIN,
+                is_active=True,
+            )
+
         return user
 
 
@@ -398,9 +422,8 @@ class SetPasswordFromInviteSerializer(serializers.Serializer):
 
 
 class UserListSerializer(serializers.ModelSerializer):
-    """Serializer for admin/manager user listing with key fields."""
-
     name = serializers.SerializerMethodField()
+    membership_id = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -413,6 +436,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "email_verified",
             "date_joined",
             "last_login",
+            "membership_id",
         ]
         read_only_fields = fields
 
@@ -421,6 +445,18 @@ class UserListSerializer(serializers.ModelSerializer):
         if full:
             return full
         return getattr(obj, "username", obj.email.split("@")[0])
+
+    def get_membership_id(self, obj) -> int | None:
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        from apps.accounts.models import Membership
+        org = getattr(request, "_org", None)
+        if not org:
+            mem = Membership.objects.filter(user=obj, is_active=True).select_related("organization").first()
+        else:
+            mem = Membership.objects.filter(user=obj, organization=org, is_active=True).first()
+        return mem.id if mem else None
 
 
 class UserDetailSerializer(serializers.ModelSerializer):

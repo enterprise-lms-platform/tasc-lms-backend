@@ -15,6 +15,7 @@ class Payment(models.Model):
         ("completed", "Completed"),
         ("failed", "Failed"),
         ("cancelled", "Cancelled"),
+        ("refunded", "Refunded"),
     ]
 
     PAYMENT_METHODS = [
@@ -336,6 +337,7 @@ class Transaction(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
         CANCELLED = "cancelled", "Cancelled"
+        REFUNDED = "refunded", "Refunded"
 
     class PaymentMethod(models.TextChoices):
         CREDIT_CARD = "credit_card", "Credit Card"

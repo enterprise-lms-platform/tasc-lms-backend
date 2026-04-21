@@ -302,10 +302,17 @@ QUIZ_QUESTION_TYPES = ['multiple-choice', 'true-false', 'short-answer', 'essay',
 
 class QuizQuestionSerializer(serializers.ModelSerializer):
     """Serializer for QuizQuestion in quiz detail and write payloads."""
+    explanation = serializers.SerializerMethodField()
+
     class Meta:
         model = QuizQuestion
-        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload']
+        fields = ['id', 'order', 'question_type', 'question_text', 'points', 'answer_payload', 'explanation']
         read_only_fields = ['id']
+
+    def get_explanation(self, obj):
+        if obj.source_bank_question_id:
+            return getattr(obj.source_bank_question, 'explanation', '') or ''
+        return obj.explanation or ''
 
     def validate_question_type(self, value):
         if value not in QUIZ_QUESTION_TYPES:

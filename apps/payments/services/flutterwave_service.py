@@ -323,20 +323,27 @@ class FlutterwaveService:
         try:
             tx_ref = event_data.get('tx_ref')
             payment = Payment.objects.get(id=tx_ref)
-            
+
             payment.status = 'refunded'
             payment.metadata['flutterwave_refund'] = event_data
-            payment.save()
-            
+            payment.save(update_fields=['status', 'metadata'])
+
+            from apps.payments.views_pesapal import (
+                _revoke_enrollment_for_refund,
+                _cancel_subscription_for_refund,
+            )
+            _revoke_enrollment_for_refund(payment)
+            _cancel_subscription_for_refund(payment)
+
             webhook.processed = True
             webhook.processed_at = timezone.now()
             webhook.save()
-            
+
             return {
                 'success': True,
                 'message': 'Refund recorded'
             }
-            
+
         except Payment.DoesNotExist:
             return {
                 'success': False,

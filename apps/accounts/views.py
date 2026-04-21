@@ -801,8 +801,8 @@ TASC Team
         )
 
         writer = csv.writer(response)
-        writer.writerow(['email', 'first_name', 'last_name', 'role', 'department', 'phone_number'])
-        writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', 'Engineering', '+1234567890'])
+        writer.writerow(['email', 'first_name', 'last_name', 'role', 'phone_number'])
+        writer.writerow(['example@domain.com', 'John', 'Doe', 'learner', '+1234567890'])
 
         return response
 

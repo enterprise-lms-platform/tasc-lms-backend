@@ -29,7 +29,7 @@ from .serializers import (
     PaymentSerializer, CreatePaymentSerializer, PaymentConfirmationSerializer,
     PaymentWebhookSerializer, PaymentStatusSerializer
 )
-from .permissions import user_has_active_subscription, get_best_active_subscription
+from .permissions import user_has_active_subscription, get_best_active_subscription, get_subscription_status, GRACE_PERIOD_DAYS
 
 
 def _can_manage_subscription_plans(user):
@@ -59,25 +59,23 @@ class SubscriptionMeView(APIView):
 
     def get(self, request):
         user = request.user
-        has_active = user_has_active_subscription(user)
-        us = get_best_active_subscription(user) if has_active else None
+        sub_status = get_subscription_status(user)
 
-        if not us:
-            data = {
-                'has_active_subscription': False,
-                'status': 'none',
-                'is_trial': False,
-                'start_date': None,
-                'end_date': None,
-                'days_remaining': 0,
-                'plan': None,
-            }
-        else:
+        if sub_status["has_subscription"]:
+            us = sub_status["subscription"]
             now = timezone.now()
             days_remaining = None
+            approaching_grace = False
+            grace_days_remaining = None
             if us.end_date:
                 delta = us.end_date - now
                 days_remaining = max(0, delta.days)
+                if delta.days < 0:
+                    approaching_grace = True
+                    grace_days_remaining = GRACE_PERIOD_DAYS + delta.days
+                elif delta.days <= GRACE_PERIOD_DAYS:
+                    approaching_grace = True
+                    grace_days_remaining = GRACE_PERIOD_DAYS
 
             plan = us.subscription
             data = {
@@ -87,6 +85,9 @@ class SubscriptionMeView(APIView):
                 'start_date': us.start_date,
                 'end_date': us.end_date,
                 'days_remaining': days_remaining,
+                'in_grace_period': False,
+                'grace_days_remaining': grace_days_remaining if approaching_grace else None,
+                'approaching_grace_period': approaching_grace,
                 'plan': {
                     'id': plan.id,
                     'name': plan.name,
@@ -94,6 +95,38 @@ class SubscriptionMeView(APIView):
                     'currency': plan.currency,
                     'billing_cycle': plan.billing_cycle,
                 },
+            }
+        elif sub_status["in_grace_period"]:
+            us = sub_status["subscription"]
+            plan = us.subscription
+            data = {
+                'has_active_subscription': False,
+                'status': 'grace_period',
+                'is_trial': us.is_trial,
+                'start_date': us.start_date,
+                'end_date': us.end_date,
+                'days_remaining': 0,
+                'in_grace_period': True,
+                'grace_days_remaining': sub_status.get('grace_days_remaining', 0),
+                'plan': {
+                    'id': plan.id,
+                    'name': plan.name,
+                    'price': str(plan.price),
+                    'currency': plan.currency,
+                    'billing_cycle': plan.billing_cycle,
+                },
+            }
+        else:
+            data = {
+                'has_active_subscription': False,
+                'status': 'none',
+                'is_trial': False,
+                'start_date': None,
+                'end_date': None,
+                'days_remaining': 0,
+                'in_grace_period': False,
+                'grace_days_remaining': None,
+                'plan': None,
             }
 
         return Response(data)
@@ -259,22 +292,39 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     @extend_schema(
-        summary='Download invoice PDF',
-        description='Get URL to download invoice PDF',
-        responses={200: OpenApiResponse(description='PDF download URL')},
+        summary='Retry a failed transaction',
+        description='Reset a failed transaction so the user can re-attempt payment',
+        responses={200: OpenApiResponse(description='{ message, transaction_id, status }')},
     )
-    @action(detail=True, methods=['get'])
-    def download(self, request, pk=None):
-        invoice = self.get_object()
-        
-        if not invoice.invoice_pdf_url:
-            # Generate PDF logic would go here
-            invoice.invoice_pdf_url = f"/media/invoices/{invoice.invoice_number}.pdf"
-            invoice.save()
-        
+    @action(detail=True, methods=['post'], url_path='retry')
+    def retry(self, request, pk=None):
+        transaction = self.get_object()
+        if transaction.user != request.user and not (
+            hasattr(request.user, 'role')
+            and request.user.role in ['finance', 'tasc_admin', 'lms_manager']
+        ):
+            raise PermissionDenied("You cannot retry this transaction.")
+        if transaction.status not in [Transaction.Status.FAILED, Transaction.Status.CANCELLED]:
+            return Response(
+                {"error": "Only failed or cancelled transactions can be retried."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if transaction.invoice:
+            invoice = transaction.invoice
+            if invoice.status == 'paid':
+                return Response(
+                    {'error': 'Associated invoice is already paid'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            invoice.status = 'pending'
+            invoice.save(update_fields=['status'])
+        transaction.status = Transaction.Status.PENDING
+        transaction.error_message = ''
+        transaction.save(update_fields=['status', 'error_message'])
         return Response({
-            'pdf_url': invoice.invoice_pdf_url,
-            'invoice_number': invoice.invoice_number
+            'message': 'Transaction reset for retry.',
+            'transaction_id': transaction.transaction_id,
+            'status': transaction.status,
         })
 
     @extend_schema(
@@ -437,6 +487,42 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
             'payment_method': transaction.payment_method,
             'invoice': transaction.invoice.invoice_number if transaction.invoice else None,
             'receipt_url': f"/media/receipts/{transaction.transaction_id}.pdf"
+        })
+
+    @extend_schema(
+        summary='Retry a failed or cancelled transaction',
+        description='Reset a failed or cancelled transaction so the user can re-attempt payment',
+        responses={200: OpenApiResponse(description='{ message, transaction_id, status }')},
+    )
+    @action(detail=True, methods=['post'], url_path='retry')
+    def retry(self, request, pk=None):
+        transaction = self.get_object()
+        if transaction.user != request.user and not (
+            hasattr(request.user, 'role')
+            and request.user.role in ['finance', 'tasc_admin', 'lms_manager']
+        ):
+            raise PermissionDenied("You cannot retry this transaction.")
+        if transaction.status not in [Transaction.Status.FAILED, Transaction.Status.CANCELLED]:
+            return Response(
+                {"error": "Only failed or cancelled transactions can be retried."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if transaction.invoice:
+            invoice = transaction.invoice
+            if invoice.status == 'paid':
+                return Response(
+                    {'error': 'Associated invoice is already paid'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            invoice.status = 'pending'
+            invoice.save(update_fields=['status'])
+        transaction.status = Transaction.Status.PENDING
+        transaction.error_message = ''
+        transaction.save(update_fields=['status', 'error_message'])
+        return Response({
+            'message': 'Transaction reset for retry.',
+            'transaction_id': transaction.transaction_id,
+            'status': transaction.status,
         })
 
     @extend_schema(
@@ -1254,3 +1340,49 @@ class WebhookView(viewsets.GenericViewSet):
                 {'error': result.get('message', 'Webhook processing failed')},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+@extend_schema(
+    tags=['Payments - Organization Subscriptions'],
+    summary='List all organization subscriptions (LMS Manager)',
+    description='Returns subscription status for all organizations. Accessible by LMS Manager and TASC Admin.',
+)
+class OrganizationSubscriptionListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (
+            getattr(request.user, 'role', '') in ('lms_manager', 'tasc_admin')
+            or request.user.is_superuser
+        ):
+            raise PermissionDenied("Only LMS Manager or TASC Admin can view this.")
+
+        from apps.accounts.models import Organization, Membership
+
+        orgs = Organization.objects.filter(is_active=True)
+        results = []
+        for org in orgs:
+            sub = (
+                UserSubscription.objects.filter(
+                    organization=org,
+                    status=UserSubscription.Status.ACTIVE,
+                )
+                .select_related('subscription')
+                .order_by('-end_date')
+                .first()
+            )
+            member_count = Membership.objects.filter(
+                organization=org, is_active=True
+            ).count()
+            results.append({
+                'organization_id': org.id,
+                'organization_name': org.name,
+                'max_seats': org.max_seats,
+                'used_seats': member_count,
+                'subscription_status': sub.status if sub else None,
+                'subscription_plan': sub.subscription.name if sub and sub.subscription else None,
+                'subscription_end_date': sub.end_date.isoformat() if sub and sub.end_date else None,
+                'days_remaining': (sub.end_date - timezone.now()).days if sub and sub.end_date else None,
+            })
+
+        return Response(results)

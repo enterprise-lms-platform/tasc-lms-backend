@@ -19,15 +19,22 @@ def auto_create_certificate(sender, instance, **kwargs):
         # Check if a certificate already exists to avoid duplicates
         if not hasattr(instance, 'certificate'):
             expiry_date = timezone.now() + timedelta(days=365) # 1 year validity
-            
+
             certificate = Certificate.objects.create(
                 enrollment=instance,
                 expiry_date=expiry_date
             )
-            
+
             # Set the verification URL based on the generated certificate number
             certificate.verification_url = f"{settings.FRONTEND_URL}/certificate/verify?number={certificate.certificate_number}"
             certificate.save(update_fields=['verification_url'])
+
+        # Mark enrollment as certificate issued
+        if not instance.certificate_issued:
+            Enrollment.objects.filter(pk=instance.pk).update(
+                certificate_issued=True,
+                certificate_issued_at=timezone.now(),
+            )
 
 
 # ── Badge auto-award signals ──────────────────────────────────
@@ -83,6 +90,21 @@ def award_badges_on_submission_graded(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=User)
-def award_badges_on_profile_update(sender, instance, **kwargs):  # noqa: ARG001
+def award_badges_on_profile_update(sender, instance, **kwargs): # noqa: ARG001
     """Award profile_complete badge when user saves their profile."""
     _award_badges_safe(instance, ['profile_complete'])
+
+
+@receiver(post_save, sender='catalogue.CourseReview')
+def award_badges_on_review(sender, instance, created, **kwargs):
+    """Award review badges when a course review is created."""
+    if created:
+        _award_badges_safe(instance.user, ['reviews_count'])
+
+
+@receiver(post_save, sender='payments.UserSubscription')
+def award_badges_on_subscription(sender, instance, created, **kwargs):
+    """Award subscription badges when a user subscription is created."""
+    if created:
+        user = instance.user
+        _award_badges_safe(user, ['subscriptions_count'])

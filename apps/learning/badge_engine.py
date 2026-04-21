@@ -82,6 +82,35 @@ def _get_user_stat(user, criteria_type):
         except (ImportError, Exception):
             return 0
 
+    elif criteria_type == 'login_streak':
+        try:
+            from apps.accounts.models import UserSession
+            from django.utils import timezone
+            from datetime import timedelta
+
+            dates = list(
+                UserSession.objects.filter(
+                    user=user, is_active=True,
+                )
+                .values_list('created_at__date', flat=True)
+                .distinct()
+                .order_by('-created_at__date')[:30]
+            )
+            if not dates:
+                return 0
+            today = timezone.now().date()
+            streak = 0
+            expected = today
+            for d in dates:
+                if d == expected:
+                    streak += 1
+                    expected -= timedelta(days=1)
+                else:
+                    break
+            return streak
+        except (ImportError, Exception):
+            return 0
+
     return 0
 
 
@@ -134,6 +163,27 @@ def check_and_award_badges(user, criteria_types=None):
             f"Awarded {len(created)} badge(s) to user {user.id}: "
             f"{[ub.badge.slug for ub in newly_earned]}"
         )
+
+        # Create in-app notifications for each earned badge
+        try:
+            from apps.notifications.models import Notification
+            notifications = []
+            for ub in newly_earned:
+                badge = ub.badge
+                notifications.append(
+                    Notification(
+                        user=user,
+                        type=Notification.Type.MILESTONE,
+                        title=f"Badge Unlocked: {badge.name}",
+                        description=badge.description,
+                        link="/learner/badges",
+                    )
+                )
+            if notifications:
+                Notification.objects.bulk_create(notifications, ignore_conflicts=True)
+        except Exception as e:
+            logger.warning(f"Failed to create badge notifications for user {user.id}: {e}")
+
         return newly_earned
 
     return []

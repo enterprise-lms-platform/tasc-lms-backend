@@ -21,7 +21,8 @@ from .serializers import (
     PublicCourseDetailSerializer,
     CourseReviewSerializer,
 )
-from apps.accounts.models import DemoRequest
+from apps.accounts.models import DemoRequest, BusinessTestimonial
+from apps.accounts.serializers import BusinessTestimonialSerializer
 from apps.accounts.serializers_superadmin import DemoRequestCreateSerializer
 
 
@@ -350,19 +351,19 @@ class TrustedClientsViewSet(viewsets.ViewSet):
 class PublicTestimonialsViewSet(viewsets.ViewSet):
     """
     GET /api/v1/public/testimonials/
-    Returns superadmin-featured reviews for landing page testimonial sections.
+    Returns featured business testimonials for the /for-business landing page.
     No authentication required.
     """
     permission_classes = [AllowAny]
 
     def list(self, request):
-        reviews = (
-            CourseReview.objects
-            .filter(is_featured=True, is_approved=True)
-            .select_related('user', 'course')
+        testimonials = (
+            BusinessTestimonial.objects
+            .filter(status='featured')
+            .select_related('user')
             .order_by('-updated_at')[:20]
         )
-        return Response(CourseReviewSerializer(reviews, many=True).data)
+        return Response(BusinessTestimonialSerializer(testimonials, many=True).data)
 
 
 @extend_schema(tags=['Public - Demo Requests'])

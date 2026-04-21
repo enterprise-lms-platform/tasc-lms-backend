@@ -452,7 +452,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = Certificate.objects.all()
     serializer_class = CertificateSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
     pagination_class = CertificatePageNumberPagination
 
     _CERT_STATS_ROLES = frozenset(
@@ -582,12 +582,58 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
 
         try:
             certificate = Certificate.objects.get(certificate_number=certificate_number)
-            serializer = CertificateSerializer(certificate)
+            serializer = self.get_serializer(certificate)
             return Response(serializer.data)
         except Certificate.DoesNotExist:
             return Response(
                 {"error": "Certificate not found"}, status=status.HTTP_404_NOT_FOUND
             )
+
+    @extend_schema(
+        summary="Regenerate certificate",
+        description=(
+            "Invalidate the existing certificate for an enrollment and create a new one. "
+            "Only the enrollment owner (or admin/instructor) may regenerate."
+        ),
+        responses={201: CertificateSerializer, 403: OpenApiResponse(description="Forbidden"), 404: OpenApiResponse(description="Not found")},
+    )
+    @action(detail=True, methods=["post"], url_path="regenerate")
+    def regenerate(self, request, pk=None):
+        certificate = self.get_object()
+        enrollment = certificate.enrollment
+        user = request.user
+
+        is_owner = enrollment.user_id == user.id
+        is_admin = hasattr(user, "role") and user.role in [
+            "tasc_admin", "lms_manager", "instructor",
+        ]
+        if not is_owner and not is_admin:
+            return Response(
+                {"detail": "You do not have permission to regenerate this certificate."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not certificate.is_valid:
+            return Response(
+                {"detail": "Certificate is already invalidated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        certificate.is_valid = False
+        certificate.save(update_fields=["is_valid"])
+
+        new_cert = Certificate.objects.create(
+            enrollment=enrollment,
+            expiry_date=timezone.now() + __import__("datetime").timedelta(days=365),
+        )
+        from django.conf import settings as _settings
+        new_cert.verification_url = (
+            f"{_settings.FRONTEND_URL}/certificate/verify?number={new_cert.certificate_number}"
+        )
+        new_cert.save(update_fields=["verification_url"])
+
+        serializer = self.get_serializer(new_cert)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         summary="Certificate statistics",
@@ -977,7 +1023,7 @@ class SubmissionViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Submission.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -1274,7 +1320,7 @@ class QuizSubmissionViewSet(
     """
 
     queryset = QuizSubmission.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     def get_serializer_class(self):
         if self.action == "create":
