@@ -35,3 +35,6 @@ venv/
 
 .agents/
 .github/
+
+# Graphify cache
+graphify-out/

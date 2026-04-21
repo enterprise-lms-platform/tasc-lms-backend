@@ -73,8 +73,12 @@ class UploadPresignApiTest(APITestCase):
         self.assertEqual(call_kwargs["Params"]["ContentType"], "image/png")
         self.assertIn("ACL", call_kwargs["Params"])
 
-    def test_presign_rejects_invalid_prefix_and_content_type(self):
-        bad_prefix = self.client.post(
+    @patch("apps.common.views.create_boto3_client")
+    def test_presign_accepts_avatars_prefix(self, mock_factory):
+        mock_client = mock_factory.return_value
+        mock_client.generate_presigned_url.return_value = "https://signed.example/upload"
+
+        response = self.client.post(
             PRESIGN_URL,
             {
                 "prefix": "avatars",
@@ -84,9 +88,14 @@ class UploadPresignApiTest(APITestCase):
             format="json",
             **self.auth,
         )
-        self.assertEqual(bad_prefix.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("prefix", bad_prefix.data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("upload_url", response.data)
+        self.assertIn("public_url", response.data)
+        self.assertTrue(response.data["public_url"].startswith("https://tasc-public.lon1.cdn.digitaloceanspaces.com/avatars/"))
+        self.assertEqual(response.data["headers"]["Content-Type"], "image/png")
+        self.assertIn("x-amz-acl", response.data["headers"])
 
+    def test_presign_rejects_invalid_content_type(self):
         bad_content_type = self.client.post(
             PRESIGN_URL,
             {
@@ -99,6 +108,20 @@ class UploadPresignApiTest(APITestCase):
         )
         self.assertEqual(bad_content_type.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("content_type", bad_content_type.data)
+
+    def test_presign_rejects_invalid_prefix(self):
+        bad_prefix = self.client.post(
+            PRESIGN_URL,
+            {
+                "prefix": "malicious-path",
+                "filename": "test.png",
+                "content_type": "image/png",
+            },
+            format="json",
+            **self.auth,
+        )
+        self.assertEqual(bad_prefix.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("prefix", bad_prefix.data)
 
     def test_session_assets_rejects_image_content_type(self):
         """session-assets only allows video, PDF, zip - not images."""

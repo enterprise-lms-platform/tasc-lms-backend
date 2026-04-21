@@ -21,7 +21,7 @@ from apps.catalogue.models import Course, Session, Assignment
 from apps.learning.models import Enrollment
 
 
-ALLOWED_UPLOAD_PREFIXES = {"course-thumbnails", "course-banners", "session-assets", "submission-files"}
+ALLOWED_UPLOAD_PREFIXES = {"course-thumbnails", "course-banners", "session-assets", "submission-files", "avatars"}
 ALLOWED_CONTENT_TYPES_PUBLIC = {"image/png", "image/jpeg", "image/webp"}
 ALLOWED_CONTENT_TYPES_SESSION_ASSETS = {
     "video/mp4",
