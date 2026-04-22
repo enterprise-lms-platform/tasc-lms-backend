@@ -11,6 +11,7 @@ from .views import (
     UserSubscriptionViewSet,
     PaymentAnalyticsViewSet,
     OrganizationSubscriptionListView,
+    FinanceDashboardOverviewAPIView,
 )
 
 from .views_pesapal import (
@@ -39,6 +40,7 @@ router.register(r'pesapal/ipn-admin', PesapalIPNViewSet, basename='pesapal-ipn')
 urlpatterns = [
     path('subscription/me/', SubscriptionMeView.as_view(), name='subscription-me'),
     path('org-subscriptions/', OrganizationSubscriptionListView.as_view(), name='org-subscriptions'),
+    path('finance/dashboard-overview/', FinanceDashboardOverviewAPIView.as_view(), name='finance-dashboard-overview'),
     # Backward-compatible alias (older clients used this path; router uses ipn-admin/).
     path(
         'pesapal/ipn/register/',
