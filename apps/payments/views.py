@@ -582,6 +582,64 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 @extend_schema(
+    tags=['Payments - Finance'],
+    description='Finance payment attempts and outcomes ledger',
+)
+class FinancePaymentViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Payment.objects.all()
+    serializer_class = PaymentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not _is_finance_dashboard_user(self.request.user):
+            raise PermissionDenied('Finance-facing access required.')
+        return Payment.objects.select_related('user').order_by('-created_at')
+
+    @extend_schema(
+        summary='List finance payments',
+        parameters=[
+            OpenApiParameter(name='status', type=str, description='Filter by payment status'),
+            OpenApiParameter(name='payment_method', type=str, description='Filter by payment method'),
+            OpenApiParameter(name='search', type=str, description='Search by email, provider IDs, description, or payment ID'),
+            OpenApiParameter(name='ordering', type=str, description='Ordering field, default -created_at'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        method_filter = request.query_params.get('payment_method')
+        if method_filter:
+            queryset = queryset.filter(payment_method=method_filter)
+
+        search = request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(user__email__icontains=search)
+                | Q(provider_order_id__icontains=search)
+                | Q(provider_payment_id__icontains=search)
+                | Q(description__icontains=search)
+                | Q(id__icontains=search)
+            )
+
+        ordering = request.query_params.get('ordering') or '-created_at'
+        allowed_ordering = {'created_at', '-created_at', 'completed_at', '-completed_at', 'updated_at', '-updated_at'}
+        if ordering in allowed_ordering:
+            queryset = queryset.order_by(ordering)
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+@extend_schema(
     tags=['Payments - Payment Methods'],
     description='Manage saved payment methods',
 )

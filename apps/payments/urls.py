@@ -12,6 +12,7 @@ from .views import (
     PaymentAnalyticsViewSet,
     OrganizationSubscriptionListView,
     FinanceDashboardOverviewAPIView,
+    FinancePaymentViewSet,
 )
 
 from .views_pesapal import (
@@ -27,6 +28,7 @@ router = DefaultRouter()
 router.register(r'analytics', PaymentAnalyticsViewSet, basename='payment-analytics')
 router.register(r'invoices', InvoiceViewSet, basename='invoice')
 router.register(r'transactions', TransactionViewSet, basename='transaction')
+router.register(r'finance/payments', FinancePaymentViewSet, basename='finance-payment')
 router.register(r'payment-methods', PaymentMethodViewSet, basename='payment-method')
 router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 router.register(r'user-subscriptions', UserSubscriptionViewSet, basename='user-subscription')
