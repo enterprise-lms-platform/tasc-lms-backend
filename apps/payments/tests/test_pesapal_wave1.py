@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.catalogue.models import Course
-from apps.payments.models import Payment, Subscription, UserSubscription
+from apps.payments.models import Invoice, InvoiceItem, Payment, Subscription, UserSubscription
 from apps.learning.models import Enrollment
 from apps.payments.services.pesapal_services import PesapalService
 
@@ -562,6 +562,18 @@ class PesapalFlowWave1Test(APITestCase):
         expected_seconds = self.plan.duration_days * 24 * 60 * 60
         actual_seconds = (user_subscription.end_date - before).total_seconds()
         self.assertLess(abs(actual_seconds - expected_seconds), 120)
+        invoice = Invoice.objects.get(payment=payment)
+        self.assertEqual(invoice.status, Invoice.Status.PAID)
+        self.assertEqual(invoice.invoice_type, Invoice.InvoiceType.SUBSCRIPTION)
+        self.assertEqual(invoice.total_amount, payment.amount)
+        self.assertEqual(invoice.paid_amount, payment.amount)
+        self.assertEqual(invoice.currency, payment.currency)
+        self.assertEqual(invoice.items.count(), 1)
+        invoice_item = invoice.items.first()
+        self.assertEqual(invoice_item.item_type, "subscription")
+        self.assertEqual(invoice_item.item_id, self.plan.id)
+        self.assertEqual(invoice_item.quantity, 1)
+        self.assertEqual(invoice_item.unit_price, payment.amount)
 
     @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
     @patch("apps.payments.views_pesapal.PesapalService.initialize_payment")
@@ -737,6 +749,69 @@ class PesapalFlowWave1Test(APITestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.status, "completed")
         self.assertEqual(mock_send_email.call_count, 1)
+        self.assertEqual(Invoice.objects.filter(payment=payment).count(), 1)
+        self.assertEqual(InvoiceItem.objects.filter(invoice__payment=payment).count(), 1)
+
+    @patch("apps.payments.views_pesapal.PesapalService.verify_payment")
+    def test_status_completion_preserves_existing_linked_invoice(self, mock_verify):
+        user_subscription = UserSubscription.objects.create(
+            user=self.user,
+            subscription=self.plan,
+            status=UserSubscription.Status.PAUSED,
+            price=self.plan.price,
+            currency=self.plan.currency,
+            end_date=timezone.now() + timedelta(days=180),
+        )
+        payment = Payment.objects.create(
+            user=self.user,
+            amount=self.plan.price,
+            currency="UGX",
+            payment_method="pesapal",
+            status="pending",
+            provider_order_id="TRACK-STATUS-INVOICE-EXISTING",
+            metadata={"user_subscription_id": user_subscription.id},
+            description="Recurring",
+        )
+        invoice = Invoice.objects.create(
+            user=self.user,
+            payment=payment,
+            invoice_type=Invoice.InvoiceType.SUBSCRIPTION,
+            customer_name="Existing Customer",
+            customer_email=self.user.email,
+            subtotal=payment.amount,
+            total_amount=payment.amount,
+            paid_amount=payment.amount,
+            currency=payment.currency,
+            status=Invoice.Status.PAID,
+            paid_at=timezone.now(),
+        )
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            item_type="subscription",
+            item_id=self.plan.id,
+            description="Existing subscription line item",
+            quantity=1,
+            unit_price=payment.amount,
+        )
+
+        mock_verify.return_value = {
+            "success": True,
+            "status": "COMPLETED",
+            "payment_method": "MOBILE",
+            "amount": float(self.plan.price),
+            "currency": "UGX",
+            "confirmation_code": "CONF-STATUS-EXISTING",
+            "message": "OK",
+            "raw": {},
+        }
+
+        response = self.client.get(f"/api/v1/payments/pesapal/{payment.id}/status/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(Invoice.objects.filter(payment=payment).count(), 1)
+        self.assertEqual(InvoiceItem.objects.filter(invoice=invoice).count(), 1)
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.customer_name, "Existing Customer")
 
     @patch("apps.notifications.services.send_subscription_payment_success_email")
     @patch("apps.payments.views_pesapal.PesapalService.handle_webhook")
@@ -791,6 +866,8 @@ class PesapalFlowWave1Test(APITestCase):
         payment.refresh_from_db()
         self.assertEqual(payment.status, "completed")
         self.assertEqual(mock_send_email.call_count, 1)
+        self.assertEqual(Invoice.objects.filter(payment=payment).count(), 1)
+        self.assertEqual(InvoiceItem.objects.filter(invoice__payment=payment).count(), 1)
 
     @patch("apps.notifications.services.send_subscription_payment_success_email")
     def test_non_subscription_payment_does_not_send_subscription_success_email(
