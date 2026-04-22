@@ -17,6 +17,7 @@ import logging
 
 from datetime import timedelta
 from django.utils import timezone
+from django.db import IntegrityError, transaction
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -152,6 +153,73 @@ def _cancel_subscription_for_refund(payment):
         logger.exception("Failed to cancel subscription for refunded payment %s", str(payment.id))
 
 
+def ensure_invoice_for_completed_subscription_payment(payment, source=None):
+    """
+    Idempotently ensure one paid invoice exists for a completed Pesapal subscription payment.
+    Returns (invoice, created) when applicable, otherwise (None, False).
+    """
+    if not payment or payment.status != "completed":
+        return None, False
+    if payment.payment_method != "pesapal":
+        return None, False
+
+    metadata = payment.metadata or {}
+    subscription_id = metadata.get("user_subscription_id")
+    if not subscription_id:
+        return None, False
+
+    user = payment.user
+    if not user:
+        return None, False
+
+    customer_email = getattr(user, "email", "") or ""
+    customer_name = (user.get_full_name() or "").strip() or customer_email or "Subscription customer"
+    paid_at = payment.completed_at or timezone.now()
+    defaults = {
+        "user": user,
+        "invoice_type": Invoice.InvoiceType.SUBSCRIPTION,
+        "customer_name": customer_name,
+        "customer_email": customer_email,
+        "subtotal": payment.amount,
+        "total_amount": payment.amount,
+        "paid_amount": payment.amount,
+        "currency": payment.currency,
+        "status": Invoice.Status.PAID,
+        "paid_at": paid_at,
+    }
+    if source:
+        defaults["internal_notes"] = f"Auto-created from Pesapal completion ({source})"
+
+    with transaction.atomic():
+        try:
+            invoice, created = Invoice.objects.get_or_create(payment=payment, defaults=defaults)
+        except IntegrityError:
+            invoice = Invoice.objects.select_for_update().get(payment=payment)
+            created = False
+
+        if not invoice.items.exists():
+            plan_id = None
+            try:
+                user_subscription = UserSubscription.objects.filter(id=subscription_id).select_related("subscription").first()
+                plan_id = user_subscription.subscription_id if user_subscription else None
+            except Exception:
+                logger.exception(
+                    "Failed to resolve subscription plan for invoice item on payment %s",
+                    str(payment.id),
+                )
+
+            InvoiceItem.objects.create(
+                invoice=invoice,
+                item_type="subscription",
+                item_id=plan_id,
+                description=payment.description or "Subscription payment",
+                quantity=1,
+                unit_price=payment.amount,
+            )
+
+        return invoice, created
+
+
 def _sync_payment_from_pesapal_verify(payment, result, request=None):
     """
     Apply Pesapal verify_payment() result to a Payment. Only mutates when result["success"]
@@ -186,6 +254,13 @@ def _sync_payment_from_pesapal_verify(payment, result, request=None):
                         us.save(update_fields=["status"])
             except UserSubscription.DoesNotExist:
                 pass
+        try:
+            ensure_invoice_for_completed_subscription_payment(payment, source="status_verify")
+        except Exception:
+            logger.exception(
+                "Failed to ensure invoice for completed Pesapal payment %s",
+                str(payment.id),
+            )
         log_event(
             action="updated",
             resource="payment",
@@ -843,6 +918,13 @@ class PesapalWebhookView(APIView):
                     self._activate_user_subscription(us)
                 except UserSubscription.DoesNotExist:
                     pass
+            try:
+                ensure_invoice_for_completed_subscription_payment(payment, source="ipn")
+            except Exception:
+                logger.exception(
+                    "Failed to ensure invoice for completed Pesapal payment %s",
+                    str(payment.id),
+                )
 
             log_event(
                 action="updated",
