@@ -1,6 +1,7 @@
 from django.shortcuts import render
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
 from datetime import timedelta
+from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.views import APIView
 from rest_framework.decorators import action
@@ -11,7 +12,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 import uuid
 import csv
-from django.db.models import Q
+from django.db.models import Q, Sum
 
 from .services.flutterwave_service import FlutterwaveService
 
@@ -27,9 +28,22 @@ from .serializers import (
     UserSubscriptionSerializer, UserSubscriptionCreateSerializer,
     SubscriptionStatusSerializer,
     PaymentSerializer, CreatePaymentSerializer, PaymentConfirmationSerializer,
-    PaymentWebhookSerializer, PaymentStatusSerializer
+    PaymentWebhookSerializer, PaymentStatusSerializer,
+    FinanceDashboardOverviewSerializer,
 )
 from .permissions import user_has_active_subscription, get_best_active_subscription, get_subscription_status, GRACE_PERIOD_DAYS
+
+
+def _is_finance_dashboard_user(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, 'is_superuser', False)
+            or getattr(user, 'is_staff', False)
+            or getattr(user, 'role', None) in ['finance', 'tasc_admin', 'lms_manager']
+        )
+    )
 
 
 def _can_manage_subscription_plans(user):
@@ -1263,7 +1277,103 @@ class PaymentViewSet(viewsets.ModelViewSet):
             )
 
 
-from django.db.models import Sum, Count
+@extend_schema(
+    tags=['Payments - Finance'],
+    summary='Finance dashboard overview',
+    description='Read-only dashboard summary for finance-facing roles.',
+    responses={200: FinanceDashboardOverviewSerializer},
+)
+class FinanceDashboardOverviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_finance_dashboard_user(request.user):
+            raise PermissionDenied('Finance-facing access required.')
+
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        completed_payments = Payment.objects.filter(status='completed')
+        total_collected = completed_payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        month_collected = completed_payments.filter(
+            completed_at__gte=month_start
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+        pending_invoices = Invoice.objects.filter(status='pending')
+        pending_invoices_count = pending_invoices.count()
+        pending_invoices_amount = pending_invoices.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+
+        active_subscribers = UserSubscription.objects.filter(status='active').count()
+
+        trend_start = (month_start - timedelta(days=31 * 5)).replace(day=1)
+        trend_rows = (
+            completed_payments
+            .filter(completed_at__isnull=False, completed_at__gte=trend_start)
+            .annotate(month=TruncMonth('completed_at'))
+            .values('month')
+            .annotate(collected_revenue=Sum('amount'))
+            .order_by('month')
+        )
+        trend_map = {
+            row['month'].strftime('%Y-%m'): row['collected_revenue'] or Decimal('0.00')
+            for row in trend_rows
+            if row.get('month')
+        }
+        def _money_str(value):
+            return format(value or Decimal('0.00'), '.2f')
+
+        revenue_trend = []
+        for i in range(5, -1, -1):
+            month_point = (month_start - timedelta(days=31 * i)).replace(day=1)
+            key = month_point.strftime('%Y-%m')
+            revenue_trend.append({
+                'month': key,
+                'collected_revenue': _money_str(trend_map.get(key, Decimal('0.00'))),
+            })
+
+        recent_payment_events = []
+        recent_payments = (
+            Payment.objects.select_related('user')
+            .order_by('-created_at')[:8]
+        )
+        for payment in recent_payments:
+            recent_payment_events.append({
+                'payment_id': payment.id,
+                'created_at': payment.created_at,
+                'completed_at': payment.completed_at,
+                'status': payment.status,
+                'amount': _money_str(payment.amount),
+                'currency': payment.currency,
+                'payment_method': payment.payment_method,
+                'provider_order_id': payment.provider_order_id,
+                'provider_payment_id': payment.provider_payment_id,
+                'user_email': payment.user.email if payment.user else None,
+                'description': payment.description or '',
+            })
+
+        default_currency = (
+            completed_payments.exclude(currency='')
+            .values_list('currency', flat=True)
+            .first()
+            or 'UGX'
+        )
+        payload = {
+            'currency': default_currency,
+            'kpis': {
+                'total_collected_revenue': _money_str(total_collected),
+                'collected_revenue_this_month': _money_str(month_collected),
+                'pending_invoices_count': pending_invoices_count,
+                'pending_invoices_amount': _money_str(pending_invoices_amount),
+                'active_subscribers': active_subscribers,
+            },
+            'revenue_trend': revenue_trend,
+            'recent_payment_events': recent_payment_events,
+        }
+        serializer = FinanceDashboardOverviewSerializer(payload)
+        return Response(serializer.data)
+
+
+from django.db.models import Count
 from django.db.models.functions import TruncMonth
 
 @extend_schema(tags=['Payments - Analytics'])

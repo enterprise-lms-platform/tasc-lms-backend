@@ -545,3 +545,37 @@ class PesapalOrderStatusSerializer(serializers.Serializer):
     currency = serializers.CharField(allow_blank=True)
     confirmation_code = serializers.CharField(allow_blank=True)
     message = serializers.CharField(allow_blank=True)
+
+
+class FinanceDashboardKpisSerializer(serializers.Serializer):
+    total_collected_revenue = serializers.CharField()
+    collected_revenue_this_month = serializers.CharField()
+    pending_invoices_count = serializers.IntegerField()
+    pending_invoices_amount = serializers.CharField()
+    active_subscribers = serializers.IntegerField()
+
+
+class FinanceDashboardRevenueTrendPointSerializer(serializers.Serializer):
+    month = serializers.CharField()
+    collected_revenue = serializers.CharField()
+
+
+class FinanceDashboardRecentPaymentEventSerializer(serializers.Serializer):
+    payment_id = serializers.UUIDField()
+    created_at = serializers.DateTimeField()
+    completed_at = serializers.DateTimeField(allow_null=True)
+    status = serializers.CharField()
+    amount = serializers.CharField()
+    currency = serializers.CharField()
+    payment_method = serializers.CharField()
+    provider_order_id = serializers.CharField(allow_null=True, allow_blank=True)
+    provider_payment_id = serializers.CharField(allow_null=True, allow_blank=True)
+    user_email = serializers.EmailField(allow_null=True)
+    description = serializers.CharField(allow_blank=True)
+
+
+class FinanceDashboardOverviewSerializer(serializers.Serializer):
+    currency = serializers.CharField()
+    kpis = FinanceDashboardKpisSerializer()
+    revenue_trend = FinanceDashboardRevenueTrendPointSerializer(many=True)
+    recent_payment_events = FinanceDashboardRecentPaymentEventSerializer(many=True)
