@@ -579,3 +579,53 @@ class FinanceDashboardOverviewSerializer(serializers.Serializer):
     kpis = FinanceDashboardKpisSerializer()
     revenue_trend = FinanceDashboardRevenueTrendPointSerializer(many=True)
     recent_payment_events = FinanceDashboardRecentPaymentEventSerializer(many=True)
+
+
+class FinanceAnalyticsWindowSerializer(serializers.Serializer):
+    months = serializers.IntegerField()
+    from_month = serializers.CharField()
+    to_month = serializers.CharField()
+
+
+class FinanceAnalyticsPaymentKpisSerializer(serializers.Serializer):
+    total_collected_revenue = serializers.CharField()
+    collected_revenue_this_month = serializers.CharField()
+    payment_completion_rate_pct = serializers.FloatField()
+    failed_payments_count = serializers.IntegerField()
+
+
+class FinanceAnalyticsRevenueTrendPointSerializer(serializers.Serializer):
+    month = serializers.CharField()
+    collected_revenue = serializers.CharField()
+
+
+class FinanceAnalyticsPaymentOutcomesSerializer(serializers.Serializer):
+    completed = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    failed = serializers.IntegerField()
+    cancelled = serializers.IntegerField()
+    refunded = serializers.IntegerField()
+    total = serializers.IntegerField()
+
+
+class FinanceAnalyticsInvoiceInsightsSerializer(serializers.Serializer):
+    pending_invoices_count = serializers.IntegerField()
+    pending_invoices_amount = serializers.CharField()
+    overdue_invoices_count = serializers.IntegerField()
+
+
+class FinanceAnalyticsSubscriptionInsightsSerializer(serializers.Serializer):
+    active = serializers.IntegerField()
+    cancelled = serializers.IntegerField()
+    expired = serializers.IntegerField()
+
+
+class FinanceAnalyticsOverviewSerializer(serializers.Serializer):
+    as_of = serializers.DateTimeField()
+    currency = serializers.CharField()
+    window = FinanceAnalyticsWindowSerializer()
+    payment_kpis = FinanceAnalyticsPaymentKpisSerializer()
+    revenue_trend = FinanceAnalyticsRevenueTrendPointSerializer(many=True)
+    payment_outcomes = FinanceAnalyticsPaymentOutcomesSerializer()
+    invoice_insights = FinanceAnalyticsInvoiceInsightsSerializer()
+    subscription_insights = FinanceAnalyticsSubscriptionInsightsSerializer()
