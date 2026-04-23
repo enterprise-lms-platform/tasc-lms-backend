@@ -12,7 +12,8 @@ from django.utils import timezone
 from django.http import HttpResponse
 import uuid
 import csv
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, Count
+from django.db.models.functions import TruncMonth
 
 from .services.flutterwave_service import FlutterwaveService
 
@@ -30,6 +31,7 @@ from .serializers import (
     PaymentSerializer, CreatePaymentSerializer, PaymentConfirmationSerializer,
     PaymentWebhookSerializer, PaymentStatusSerializer,
     FinanceDashboardOverviewSerializer,
+    FinanceAnalyticsOverviewSerializer,
 )
 from .permissions import user_has_active_subscription, get_best_active_subscription, get_subscription_status, GRACE_PERIOD_DAYS
 
@@ -1431,8 +1433,153 @@ class FinanceDashboardOverviewAPIView(APIView):
         return Response(serializer.data)
 
 
-from django.db.models import Count
-from django.db.models.functions import TruncMonth
+def _month_start(dt):
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _shift_month(dt, months_delta):
+    year = dt.year
+    month = dt.month + months_delta
+    while month <= 0:
+        month += 12
+        year -= 1
+    while month > 12:
+        month -= 12
+        year += 1
+    return dt.replace(year=year, month=month, day=1)
+
+
+@extend_schema(
+    tags=['Payments - Finance'],
+    summary='Finance analytics overview',
+    description='Aggregated finance analytics summary for analytics page.',
+    parameters=[
+        OpenApiParameter(
+            name='months',
+            type=int,
+            description='Trend window in months. Allowed values: 6 or 12.',
+            required=False,
+        ),
+    ],
+    responses={200: FinanceAnalyticsOverviewSerializer},
+)
+class FinanceAnalyticsOverviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_finance_dashboard_user(request.user):
+            raise PermissionDenied('Finance-facing access required.')
+
+        try:
+            months = int(request.query_params.get('months', 6))
+        except (TypeError, ValueError):
+            months = 6
+        if months not in (6, 12):
+            months = 6
+
+        now = timezone.now()
+        month_start = _month_start(now)
+        window_start = _shift_month(month_start, -(months - 1))
+        today = timezone.localdate()
+
+        completed_payments_all_time = Payment.objects.filter(status='completed')
+        total_collected = completed_payments_all_time.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        month_collected = completed_payments_all_time.filter(
+            completed_at__gte=month_start
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+        window_payments = Payment.objects.filter(created_at__gte=window_start)
+        outcomes_rows = window_payments.values('status').annotate(count=Count('id'))
+        outcome_map = {row['status']: row['count'] for row in outcomes_rows}
+        completed_count = outcome_map.get('completed', 0)
+        total_attempts = sum(outcome_map.values())
+        completion_rate = round((completed_count / total_attempts) * 100, 1) if total_attempts else 0.0
+
+        trend_rows = (
+            Payment.objects.filter(
+                status='completed',
+                completed_at__isnull=False,
+                completed_at__gte=window_start,
+            )
+            .annotate(month=TruncMonth('completed_at'))
+            .values('month')
+            .annotate(collected_revenue=Sum('amount'))
+            .order_by('month')
+        )
+        trend_map = {
+            row['month'].strftime('%Y-%m'): row['collected_revenue'] or Decimal('0.00')
+            for row in trend_rows
+            if row.get('month')
+        }
+
+        pending_invoices_qs = Invoice.objects.filter(status='pending')
+        pending_invoices_count = pending_invoices_qs.count()
+        pending_invoices_amount = pending_invoices_qs.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+        overdue_invoices_count = pending_invoices_qs.filter(due_date__lt=today).count()
+
+        subscription_rows = (
+            UserSubscription.objects.filter(status__in=['active', 'cancelled', 'expired'])
+            .values('status')
+            .annotate(count=Count('id'))
+        )
+        subscription_map = {row['status']: row['count'] for row in subscription_rows}
+
+        def _money_str(value):
+            return format(value or Decimal('0.00'), '.2f')
+
+        revenue_trend = []
+        for i in range(months):
+            month_point = _shift_month(window_start, i)
+            key = month_point.strftime('%Y-%m')
+            revenue_trend.append({
+                'month': key,
+                'collected_revenue': _money_str(trend_map.get(key, Decimal('0.00'))),
+            })
+
+        default_currency = (
+            completed_payments_all_time.exclude(currency='')
+            .values_list('currency', flat=True)
+            .first()
+            or 'UGX'
+        )
+
+        payload = {
+            'as_of': now,
+            'currency': default_currency,
+            'window': {
+                'months': months,
+                'from_month': window_start.strftime('%Y-%m'),
+                'to_month': month_start.strftime('%Y-%m'),
+            },
+            'payment_kpis': {
+                'total_collected_revenue': _money_str(total_collected),
+                'collected_revenue_this_month': _money_str(month_collected),
+                'payment_completion_rate_pct': completion_rate,
+                'failed_payments_count': outcome_map.get('failed', 0),
+            },
+            'revenue_trend': revenue_trend,
+            'payment_outcomes': {
+                'completed': outcome_map.get('completed', 0),
+                'pending': outcome_map.get('pending', 0),
+                'failed': outcome_map.get('failed', 0),
+                'cancelled': outcome_map.get('cancelled', 0),
+                'refunded': outcome_map.get('refunded', 0),
+                'total': total_attempts,
+            },
+            'invoice_insights': {
+                'pending_invoices_count': pending_invoices_count,
+                'pending_invoices_amount': _money_str(pending_invoices_amount),
+                'overdue_invoices_count': overdue_invoices_count,
+            },
+            'subscription_insights': {
+                'active': subscription_map.get('active', 0),
+                'cancelled': subscription_map.get('cancelled', 0),
+                'expired': subscription_map.get('expired', 0),
+            },
+        }
+
+        serializer = FinanceAnalyticsOverviewSerializer(payload)
+        return Response(serializer.data)
 
 @extend_schema(tags=['Payments - Analytics'])
 class PaymentAnalyticsViewSet(viewsets.ViewSet):
