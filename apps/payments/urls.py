@@ -13,6 +13,7 @@ from .views import (
     OrganizationSubscriptionListView,
     FinanceDashboardOverviewAPIView,
     FinanceAnalyticsOverviewAPIView,
+    FinanceAlertsAPIView,
     FinancePaymentViewSet,
 )
 
@@ -45,6 +46,7 @@ urlpatterns = [
     path('org-subscriptions/', OrganizationSubscriptionListView.as_view(), name='org-subscriptions'),
     path('finance/dashboard-overview/', FinanceDashboardOverviewAPIView.as_view(), name='finance-dashboard-overview'),
     path('finance/analytics-overview/', FinanceAnalyticsOverviewAPIView.as_view(), name='finance-analytics-overview'),
+    path('finance/alerts/', FinanceAlertsAPIView.as_view(), name='finance-alerts'),
     # Backward-compatible alias (older clients used this path; router uses ipn-admin/).
     path(
         'pesapal/ipn/register/',

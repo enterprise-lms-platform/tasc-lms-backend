@@ -32,6 +32,7 @@ from .serializers import (
     PaymentWebhookSerializer, PaymentStatusSerializer,
     FinanceDashboardOverviewSerializer,
     FinanceAnalyticsOverviewSerializer,
+    FinanceAlertsResponseSerializer,
 )
 from .permissions import user_has_active_subscription, get_best_active_subscription, get_subscription_status, GRACE_PERIOD_DAYS
 
@@ -1447,6 +1448,192 @@ def _shift_month(dt, months_delta):
         month -= 12
         year += 1
     return dt.replace(year=year, month=month, day=1)
+
+
+def _money_str(value):
+    return format(value or Decimal('0.00'), '.2f')
+
+
+ALERT_THRESHOLD_INVOICE_OVERDUE_COUNT = 3
+ALERT_THRESHOLD_FAILED_24H_COUNT = 5
+ALERT_THRESHOLD_FAILED_24H_MIN_VOLUME = 20
+ALERT_THRESHOLD_PENDING_OLD_COUNT = 8
+ALERT_PENDING_OLD_HOURS = 2
+ALERT_SUBSCRIPTION_EXPIRY_DAYS = 14
+ALERT_THRESHOLD_SUBSCRIPTION_EXPIRY_COUNT = 10
+ALERT_INVOICE_DUE_SOON_DAYS = 7
+
+
+@extend_schema(
+    tags=['Payments - Finance'],
+    summary='Finance alerts',
+    description='Read-only aggregate finance alerts for dashboard operations.',
+    responses={200: FinanceAlertsResponseSerializer},
+)
+class FinanceAlertsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_finance_dashboard_user(request.user):
+            raise PermissionDenied('Finance-facing access required.')
+
+        now = timezone.now()
+        today = timezone.localdate()
+        alerts = []
+
+        # Critical: overdue pending invoice backlog
+        overdue_qs = Invoice.objects.filter(status='pending', due_date__lt=today)
+        overdue_count = overdue_qs.count()
+        if overdue_count >= ALERT_THRESHOLD_INVOICE_OVERDUE_COUNT:
+            overdue_amount = overdue_qs.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+            alerts.append({
+                'id': f'invoice-overdue-{today.isoformat()}',
+                'severity': 'critical',
+                'category': 'invoice',
+                'code': 'INVOICE_OVERDUE_BACKLOG',
+                'title': 'Overdue invoices require action',
+                'message': f'{overdue_count} overdue invoices totaling UGX {int(overdue_amount)}.',
+                'metric_value': overdue_count,
+                'metric_unit': 'count',
+                'amount': _money_str(overdue_amount),
+                'currency': 'UGX',
+                'action': {'label': 'Review invoices', 'route': '/finance/invoices'},
+                'created_at': now,
+            })
+
+        # Critical: payment failure spike in last 24h with minimum volume.
+        failures_window_start = now - timedelta(hours=24)
+        payments_24h = Payment.objects.filter(created_at__gte=failures_window_start)
+        outcomes_24h = payments_24h.values('status').annotate(count=Count('id'))
+        outcomes_map = {row['status']: row['count'] for row in outcomes_24h}
+        failed_24h = outcomes_map.get('failed', 0)
+        total_24h = sum(outcomes_map.values())
+        if failed_24h >= ALERT_THRESHOLD_FAILED_24H_COUNT and total_24h >= ALERT_THRESHOLD_FAILED_24H_MIN_VOLUME:
+            alerts.append({
+                'id': f'payment-failure-spike-{today.isoformat()}',
+                'severity': 'critical',
+                'category': 'payment',
+                'code': 'PAYMENT_FAILURE_SPIKE',
+                'title': 'Payment failures spiked in the last 24 hours',
+                'message': f'{failed_24h} failed payments out of {total_24h} attempts in the last 24 hours.',
+                'metric_value': failed_24h,
+                'metric_unit': 'count',
+                'amount': None,
+                'currency': '',
+                'action': {'label': 'Review payments', 'route': '/finance/payments'},
+                'created_at': now,
+            })
+
+        # Warning: pending payments older than expected processing window.
+        pending_before = now - timedelta(hours=ALERT_PENDING_OLD_HOURS)
+        pending_old_count = Payment.objects.filter(status='pending', created_at__lt=pending_before).count()
+        if pending_old_count >= ALERT_THRESHOLD_PENDING_OLD_COUNT:
+            alerts.append({
+                'id': f'payment-pending-buildup-{today.isoformat()}',
+                'severity': 'warning',
+                'category': 'payment',
+                'code': 'PAYMENT_PENDING_BUILDUP',
+                'title': 'Pending payments are building up',
+                'message': (
+                    f'{pending_old_count} payments have been pending for more than '
+                    f'{ALERT_PENDING_OLD_HOURS} hours.'
+                ),
+                'metric_value': pending_old_count,
+                'metric_unit': 'count',
+                'amount': None,
+                'currency': '',
+                'action': {'label': 'Inspect payments', 'route': '/finance/payments'},
+                'created_at': now,
+            })
+
+        # Warning: active subscriptions nearing expiry.
+        expiry_cutoff = now + timedelta(days=ALERT_SUBSCRIPTION_EXPIRY_DAYS)
+        expiring_count = UserSubscription.objects.filter(
+            status='active',
+            end_date__isnull=False,
+            end_date__gte=now,
+            end_date__lte=expiry_cutoff,
+        ).count()
+        if expiring_count >= ALERT_THRESHOLD_SUBSCRIPTION_EXPIRY_COUNT:
+            alerts.append({
+                'id': f'subscription-expiry-wave-{today.isoformat()}',
+                'severity': 'warning',
+                'category': 'subscription',
+                'code': 'SUBSCRIPTION_EXPIRY_WAVE',
+                'title': 'Active subscriptions nearing expiry',
+                'message': (
+                    f'{expiring_count} active subscriptions are due to expire '
+                    f'within {ALERT_SUBSCRIPTION_EXPIRY_DAYS} days.'
+                ),
+                'metric_value': expiring_count,
+                'metric_unit': 'count',
+                'amount': None,
+                'currency': '',
+                'action': {'label': 'Review subscriptions', 'route': '/finance/subscriptions'},
+                'created_at': now,
+            })
+
+        # Info: pending invoices due soon.
+        due_soon_cutoff = today + timedelta(days=ALERT_INVOICE_DUE_SOON_DAYS)
+        due_soon_count = Invoice.objects.filter(
+            status='pending',
+            due_date__gte=today,
+            due_date__lte=due_soon_cutoff,
+        ).count()
+        if due_soon_count > 0:
+            alerts.append({
+                'id': f'invoice-due-soon-{today.isoformat()}',
+                'severity': 'info',
+                'category': 'invoice',
+                'code': 'INVOICE_DUE_SOON',
+                'title': 'Pending invoices due soon',
+                'message': f'{due_soon_count} pending invoices are due within {ALERT_INVOICE_DUE_SOON_DAYS} days.',
+                'metric_value': due_soon_count,
+                'metric_unit': 'count',
+                'amount': None,
+                'currency': '',
+                'action': {'label': 'Open invoices', 'route': '/finance/invoices'},
+                'created_at': now,
+            })
+
+        # Info: subscription cancellations today.
+        cancelled_today_count = UserSubscription.objects.filter(
+            status='cancelled',
+            cancelled_at__date=today,
+        ).count()
+        if cancelled_today_count > 0:
+            alerts.append({
+                'id': f'subscription-cancelled-today-{today.isoformat()}',
+                'severity': 'info',
+                'category': 'subscription',
+                'code': 'SUBSCRIPTION_CANCELLATIONS_TODAY',
+                'title': 'Subscription cancellations recorded today',
+                'message': f'{cancelled_today_count} subscription cancellations were recorded today.',
+                'metric_value': cancelled_today_count,
+                'metric_unit': 'count',
+                'amount': None,
+                'currency': '',
+                'action': {'label': 'View subscriptions', 'route': '/finance/subscriptions'},
+                'created_at': now,
+            })
+
+        severity_order = {'critical': 0, 'warning': 1, 'info': 2, 'success': 3}
+        alerts.sort(key=lambda item: (severity_order.get(item['severity'], 99), -item['created_at'].timestamp()))
+
+        summary = {
+            'total': len(alerts),
+            'critical': sum(1 for a in alerts if a['severity'] == 'critical'),
+            'warning': sum(1 for a in alerts if a['severity'] == 'warning'),
+            'info': sum(1 for a in alerts if a['severity'] == 'info'),
+            'success': 0,
+        }
+        payload = {
+            'as_of': now,
+            'summary': summary,
+            'alerts': alerts,
+        }
+        serializer = FinanceAlertsResponseSerializer(payload)
+        return Response(serializer.data)
 
 
 @extend_schema(

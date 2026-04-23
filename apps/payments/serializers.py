@@ -629,3 +629,37 @@ class FinanceAnalyticsOverviewSerializer(serializers.Serializer):
     payment_outcomes = FinanceAnalyticsPaymentOutcomesSerializer()
     invoice_insights = FinanceAnalyticsInvoiceInsightsSerializer()
     subscription_insights = FinanceAnalyticsSubscriptionInsightsSerializer()
+
+
+class FinanceAlertActionSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    route = serializers.CharField()
+
+
+class FinanceAlertItemSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    severity = serializers.ChoiceField(choices=['critical', 'warning', 'info', 'success'])
+    category = serializers.ChoiceField(choices=['payment', 'invoice', 'subscription'])
+    code = serializers.CharField()
+    title = serializers.CharField()
+    message = serializers.CharField()
+    metric_value = serializers.IntegerField()
+    metric_unit = serializers.CharField()
+    amount = serializers.CharField(allow_null=True, required=False)
+    currency = serializers.CharField(allow_blank=True, required=False)
+    action = FinanceAlertActionSerializer(required=False)
+    created_at = serializers.DateTimeField()
+
+
+class FinanceAlertsSummarySerializer(serializers.Serializer):
+    total = serializers.IntegerField()
+    critical = serializers.IntegerField()
+    warning = serializers.IntegerField()
+    info = serializers.IntegerField()
+    success = serializers.IntegerField()
+
+
+class FinanceAlertsResponseSerializer(serializers.Serializer):
+    as_of = serializers.DateTimeField()
+    summary = FinanceAlertsSummarySerializer()
+    alerts = FinanceAlertItemSerializer(many=True)
