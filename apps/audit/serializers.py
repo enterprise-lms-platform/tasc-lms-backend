@@ -17,9 +17,6 @@ class AuditLogListSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Format timestamp as ISO string
-        data["timestamp"] = instance.created_at.isoformat()
-        # Title case for action and resource
         data["action"] = instance.action.title()
         data["resource"] = instance.resource.title()
         return data
