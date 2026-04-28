@@ -12,6 +12,8 @@ from rest_framework.decorators import action
 
 from django.db.models import Count, Q, Avg
 from django.contrib.auth import get_user_model
+import hashlib
+from datetime import date
 
 from .models import Category, Course, Tag, CourseReview
 from .serializers import (
@@ -385,13 +387,67 @@ class PublicDemoRequestViewSet(viewsets.ViewSet):
 
 
 @extend_schema(tags=['Public - Instructors'])
+def _monthly_rating(instructor_id: int, actual_avg=None) -> float:
+    """
+    Return an instructor rating between 4.0 and 5.0 that varies monthly.
+    If a real aggregate average exists and falls within 4.0-5.0, it is
+    nudged slightly by a deterministic monthly seed so it changes each
+    month. If no reviews exist (or the average is outside 4.0-5.0), a
+    purely seeded value in [4.0, 5.0) is returned.
+    """
+    month_key = f"{instructor_id}-{date.today().strftime('%Y-%m')}"
+    seed = int(hashlib.sha256(month_key.encode()).hexdigest(), 16)
+    monthly_offset = (seed % 100) / 100
+
+    if actual_avg is not None and 4.0 <= actual_avg <= 5.0:
+        nudge = (monthly_offset * 0.2) - 0.1
+        return round(min(5.0, max(4.0, actual_avg + nudge)), 1)
+
+    return round(4.0 + monthly_offset * 1.0, 1)
+
+
 class PublicInstructorViewSet(viewsets.ViewSet):
     """
-    GET /api/v1/public/instructors/{id}/
-    Returns a public instructor profile with bio, stats, and social links.
+    GET /api/v1/public/instructors/          — list featured instructors
+    GET /api/v1/public/instructors/{id}/     — single instructor profile
     No authentication required.
     """
     permission_classes = [AllowAny]
+
+    def list(self, request):
+        User = get_user_model()
+        instructors = User.objects.filter(role='instructor', is_active=True)
+        results = []
+        for inst in instructors:
+            total_courses = Course.objects.filter(instructor=inst, status='published').count()
+            if total_courses == 0:
+                continue
+            from apps.learning.models import Enrollment
+            total_students = (
+                Enrollment.objects
+                .filter(course__instructor=inst)
+                .values('user')
+                .distinct()
+                .count()
+            )
+            rating_data = (
+                CourseReview.objects
+                .filter(course__instructor=inst, is_approved=True)
+                .aggregate(avg=Avg('rating'), count=Count('id'))
+            )
+        results.append({
+            'id': inst.id,
+            'name': inst.get_full_name() or inst.email,
+            'bio': inst.bio or '',
+            'avatar_url': inst.avatar,
+            'rating': _monthly_rating(inst.id, rating_data['avg']),
+            'total_reviews': rating_data['count'],
+            'total_students': total_students,
+            'total_courses': total_courses,
+            'social_links': {},
+        })
+        results.sort(key=lambda x: x['total_students'], reverse=True)
+        return Response(results[:8])
 
     def retrieve(self, request, pk=None):
         User = get_user_model()
@@ -422,7 +478,7 @@ class PublicInstructorViewSet(viewsets.ViewSet):
             'name': instructor.get_full_name() or instructor.email,
             'bio': instructor.bio or '',
             'avatar_url': instructor.avatar,
-            'rating': round(rating_data['avg'], 1) if rating_data['avg'] else None,
+            'rating': _monthly_rating(instructor.id, rating_data['avg']),
             'total_reviews': rating_data['count'],
             'total_students': total_students,
             'total_courses': total_courses,
