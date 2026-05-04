@@ -216,18 +216,10 @@ class CertificateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Certificate
         fields = [
-            "id",
-            "enrollment",
-            "user_name",
-            "user_email",
-            "course_title",
-            "certificate_number",
-            "issued_at",
-            "expiry_date",
-            "is_valid",
-            "is_expired",
-            "pdf_url",
-            "verification_url",
+            "id", "enrollment", "user_name", "user_email", "course_title",
+            "certificate_number", "issued_at", "expiry_date", "is_valid",
+            "is_expired", "pdf_url", "verification_url", "status",
+            "denial_reason",
         ]
         read_only_fields = ["id", "certificate_number", "issued_at"]
 

@@ -679,6 +679,77 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
             }
         )
 
+    @extend_schema(
+        summary="Request certificate for enrollment",
+        description="Learner requests a certificate for a completed enrollment. Creates a PENDING certificate awaiting approval.",
+        request=None,
+        responses={201: CertificateSerializer, 400: OpenApiResponse(description="Bad request")},
+    )
+    @action(detail=False, methods=["post"], url_path="request")
+    def request_certificate(self, request):
+        enrollment_id = request.data.get("enrollment")
+        if not enrollment_id:
+            return Response({"error": "enrollment ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            enrollment = Enrollment.objects.get(pk=enrollment_id, user=request.user)
+        except Enrollment.DoesNotExist:
+            return Response({"error": "Enrollment not found"}, status=status.HTTP_404_NOT_FOUND)
+        if enrollment.progress_percentage < 100:
+            return Response({"error": "Course must be completed to request a certificate"}, status=status.HTTP_400_BAD_REQUEST)
+        existing = Certificate.objects.filter(enrollment=enrollment).first()
+        if existing and existing.status in [Certificate.Status.APPROVED, Certificate.Status.PENDING]:
+            return Response({"error": "Certificate already exists for this enrollment"}, status=status.HTTP_400_BAD_REQUEST)
+        if existing and existing.status == Certificate.Status.DENIED:
+            return Response({"error": "Certificate was denied. Use resubmit instead."}, status=status.HTTP_400_BAD_REQUEST)
+        cert = Certificate.objects.create(
+            enrollment=enrollment,
+            status=Certificate.Status.PENDING,
+        )
+        from django.conf import settings as _settings
+        cert.verification_url = f"{_settings.FRONTEND_URL}/verify-certificate?number={cert.certificate_number}"
+        cert.save(update_fields=["verification_url"])
+        serializer = self.get_serializer(cert)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        summary="Deny a pending certificate",
+        description="Admin/manager denies a pending certificate request with a reason.",
+        request=None,
+        responses={200: CertificateSerializer, 400: OpenApiResponse(description="Bad request"), 403: OpenApiResponse(description="Forbidden")},
+    )
+    @action(detail=True, methods=["post"], url_path="deny")
+    def deny(self, request, pk=None):
+        certificate = self.get_object()
+        if not (hasattr(request.user, "role") and request.user.role in ["tasc_admin", "lms_manager", "instructor"]):
+            return Response({"detail": "Only admins or instructors can deny certificates."}, status=status.HTTP_403_FORBIDDEN)
+        if certificate.status != Certificate.Status.PENDING:
+            return Response({"error": "Only pending certificates can be denied."}, status=status.HTTP_400_BAD_REQUEST)
+        reason = request.data.get("reason", "")
+        certificate.status = Certificate.Status.DENIED
+        certificate.denial_reason = reason
+        certificate.save(update_fields=["status", "denial_reason"])
+        serializer = self.get_serializer(certificate)
+        return Response(serializer.data)
+
+    @extend_schema(
+        summary="Resubmit a denied certificate",
+        description="Learner resubmits a denied certificate for re-review.",
+        request=None,
+        responses={200: CertificateSerializer, 400: OpenApiResponse(description="Bad request")},
+    )
+    @action(detail=True, methods=["post"], url_path="resubmit")
+    def resubmit(self, request, pk=None):
+        certificate = self.get_object()
+        if certificate.enrollment.user_id != request.user.id:
+            return Response({"detail": "You can only resubmit your own certificates."}, status=status.HTTP_403_FORBIDDEN)
+        if certificate.status != Certificate.Status.DENIED:
+            return Response({"error": "Only denied certificates can be resubmitted."}, status=status.HTTP_400_BAD_REQUEST)
+        certificate.status = Certificate.Status.PENDING
+        certificate.denial_reason = ""
+        certificate.save(update_fields=["status", "denial_reason"])
+        serializer = self.get_serializer(certificate)
+        return Response(serializer.data)
+
 
 @extend_schema(
     tags=["Learning - Discussions"],

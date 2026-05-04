@@ -59,3 +59,10 @@ def create_user_session(sender, request, user, **kwargs):
         import logging
 
         logging.warning(f"Failed to create user session for {user.email}: {e}")
+
+    try:
+        from apps.learning.badge_engine import check_and_award_badges
+        check_and_award_badges(user, criteria_types=['login_streak'])
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to check login streak badge for {user.email}: {e}")

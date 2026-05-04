@@ -13,11 +13,12 @@ from .models import Payment, PesapalIPN  # Import PesapalIPN model for IPN seria
 class PaymentSerializer(serializers.ModelSerializer):
     user_email = serializers.CharField(source='user.email', read_only=True)
     course_title = serializers.SerializerMethodField()
-    
+    organization_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Payment
         fields = [
-            'id', 'user', 'user_email', 'course', 'course_title',
+            'id', 'user', 'user_email', 'course', 'course_title', 'organization_name',
             'amount', 'currency', 'payment_method', 'status',
             'provider_payment_id', 'provider_order_id',
             'metadata', 'description',
@@ -26,12 +27,17 @@ class PaymentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'created_at', 'completed_at', 'updated_at',
-            'metadata', 'user', 'course_title'
+            'metadata', 'user', 'course_title', 'organization_name'
         ]
-    
+
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_course_title(self, obj):
         return obj.course.title if obj.course else None
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_organization_name(self, obj):
+        org = getattr(obj.user, 'organization', None)
+        return org.name if org else None
 
 
 class CreatePaymentSerializer(serializers.Serializer):
@@ -351,36 +357,46 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     organization_name = serializers.SerializerMethodField()
     subscription_name = serializers.SerializerMethodField()
+    billing_cycle = serializers.SerializerMethodField()
+    max_users = serializers.SerializerMethodField()
     is_trial = serializers.SerializerMethodField()
     is_active = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = UserSubscription
         fields = [
             'id', 'user', 'user_email', 'organization', 'organization_name',
-            'subscription', 'subscription_name',
-        'status', 'start_date', 'end_date', 'trial_end_date',
-        'auto_renew', 'cancelled_at', 'cancellation_reason', 'price', 'currency',
-        'is_trial', 'is_active', 'created_at', 'updated_at'
+            'subscription', 'subscription_name', 'billing_cycle', 'max_users',
+            'status', 'start_date', 'end_date', 'trial_end_date',
+            'auto_renew', 'cancelled_at', 'cancellation_reason', 'price', 'currency',
+            'is_trial', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
-    
+
     @extend_schema_field(serializers.EmailField(allow_null=True))
     def get_user_email(self, obj):
         return obj.user.email if obj.user else None
-    
+
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_organization_name(self, obj):
         return obj.organization.name if obj.organization else None
-    
+
     @extend_schema_field(serializers.CharField)
     def get_subscription_name(self, obj):
         return obj.subscription.name
-    
+
+    @extend_schema_field(serializers.CharField)
+    def get_billing_cycle(self, obj):
+        return obj.subscription.get_billing_cycle_display()
+
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
+    def get_max_users(self, obj):
+        return obj.subscription.max_users
+
     @extend_schema_field(serializers.BooleanField)
     def get_is_trial(self, obj):
         return obj.is_trial
-    
+
     @extend_schema_field(serializers.BooleanField)
     def get_is_active(self, obj):
         return obj.is_active
@@ -597,6 +613,7 @@ class FinanceAnalyticsPaymentKpisSerializer(serializers.Serializer):
 class FinanceAnalyticsRevenueTrendPointSerializer(serializers.Serializer):
     month = serializers.CharField()
     collected_revenue = serializers.CharField()
+    growth_percent = serializers.FloatField(allow_null=True, required=False)
 
 
 class FinanceAnalyticsPaymentOutcomesSerializer(serializers.Serializer):

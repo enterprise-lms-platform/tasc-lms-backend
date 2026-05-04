@@ -32,11 +32,11 @@
         </div>
     </div>
     
-    <div style="margin-bottom: 30px;">
-        <strong>Bill To:</strong><br>
-        {{ invoice.organization_name }}<br>
-        {{ invoice.organization_email }}
-    </div>
+<div style="margin-bottom: 30px;">
+<strong>Bill To:</strong><br>
+{{ invoice.customer_name }}<br>
+{{ invoice.customer_email }}
+</div>
     
     <table>
         <thead>
@@ -48,14 +48,14 @@
             </tr>
         </thead>
         <tbody>
-            {% for item in invoice.items %}
-            <tr>
-                <td>{{ item.description }}</td>
-                <td style="text-align: right;">{{ item.quantity }}</td>
-                <td style="text-align: right;">${{ item.unit_price|floatformat:2 }}</td>
-                <td style="text-align: right;">${{ item.amount|floatformat:2 }}</td>
-            </tr>
-            {% endfor %}
+{% for item in invoice_items %}
+<tr>
+<td>{{ item.description }}</td>
+<td style="text-align: right;">{{ item.quantity }}</td>
+<td style="text-align: right;">${{ item.unit_price|floatformat:2 }}</td>
+<td style="text-align: right;">${{ item.total|floatformat:2 }}</td>
+</tr>
+{% endfor %}
         </tbody>
     </table>
     

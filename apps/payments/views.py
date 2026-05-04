@@ -35,6 +35,7 @@ from .serializers import (
     FinanceAlertsResponseSerializer,
 )
 from .permissions import user_has_active_subscription, get_best_active_subscription, get_subscription_status, GRACE_PERIOD_DAYS
+from apps.accounts.permissions import IsFinanceDashboardUser
 
 
 def _is_finance_dashboard_user(user):
@@ -346,17 +347,26 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary='Download invoice PDF',
-        description='Get invoice data for PDF generation',
+        description='Generate and download invoice as PDF',
     )
     @action(detail=True, methods=['get'], url_path='download-pdf')
     def download_pdf(self, request, pk=None):
         """GET /api/v1/payments/invoices/{id}/download-pdf/"""
+        import weasyprint
+        from django.template.loader import render_to_string
+
         invoice = self.get_object()
-        # Option 1: Return invoice data for frontend CSS-based printing
-        # Option 2: Use WeasyPrint (if installed)
-        serializer = self.get_serializer(invoice)
-        return Response(serializer.data)
-        # TODO: For real PDF, add weasyprint to requirements and render template
+        items = invoice.items.all()
+        context = {
+            'invoice': invoice,
+            'invoice_items': items,
+        }
+        html_string = render_to_string('emails/payments/invoice_pdf.html', context)
+        pdf_bytes = weasyprint.HTML(string=html_string).write_pdf()
+        filename = f"invoice_{invoice.invoice_number}.pdf"
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
 
     @extend_schema(
         summary='Email receipt',
@@ -639,12 +649,10 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
 class FinancePaymentViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFinanceDashboardUser]
 
     def get_queryset(self):
-        if not _is_finance_dashboard_user(self.request.user):
-            raise PermissionDenied('Finance-facing access required.')
-        return Payment.objects.select_related('user').order_by('-created_at')
+        return Payment.objects.select_related('user', 'user__organization').order_by('-created_at')
 
     @extend_schema(
         summary='List finance payments',
@@ -1412,12 +1420,9 @@ class PaymentViewSet(viewsets.ModelViewSet):
     responses={200: FinanceDashboardOverviewSerializer},
 )
 class FinanceDashboardOverviewAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFinanceDashboardUser]
 
     def get(self, request):
-        if not _is_finance_dashboard_user(request.user):
-            raise PermissionDenied('Finance-facing access required.')
-
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -1538,12 +1543,9 @@ ALERT_INVOICE_DUE_SOON_DAYS = 7
     responses={200: FinanceAlertsResponseSerializer},
 )
 class FinanceAlertsAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFinanceDashboardUser]
 
     def get(self, request):
-        if not _is_finance_dashboard_user(request.user):
-            raise PermissionDenied('Finance-facing access required.')
-
         now = timezone.now()
         today = timezone.localdate()
         alerts = []
@@ -1718,12 +1720,9 @@ class FinanceAlertsAPIView(APIView):
     responses={200: FinanceAnalyticsOverviewSerializer},
 )
 class FinanceAnalyticsOverviewAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsFinanceDashboardUser]
 
     def get(self, request):
-        if not _is_finance_dashboard_user(request.user):
-            raise PermissionDenied('Finance-facing access required.')
-
         try:
             months = int(request.query_params.get('months', 6))
         except (TypeError, ValueError):
@@ -1819,13 +1818,20 @@ class FinanceAnalyticsOverviewAPIView(APIView):
         ]
 
         revenue_trend = []
+        prev_revenue = None
         for i in range(months):
             month_point = _shift_month(window_start, i)
             key = month_point.strftime('%Y-%m')
+            revenue = float(trend_map.get(key, Decimal('0.00')))
+            growth = None
+            if prev_revenue is not None and prev_revenue > 0:
+                growth = round(((revenue - prev_revenue) / prev_revenue) * 100, 1)
             revenue_trend.append({
                 'month': key,
                 'collected_revenue': _money_str(trend_map.get(key, Decimal('0.00'))),
+                'growth_percent': growth,
             })
+            prev_revenue = revenue
 
         default_currency = (
             completed_payments_all_time.exclude(currency='')

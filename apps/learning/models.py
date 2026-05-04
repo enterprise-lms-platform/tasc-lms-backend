@@ -186,19 +186,27 @@ class SessionProgress(models.Model):
 
 
 class Certificate(models.Model):
-    """
-    Certificate represents completion certificates for courses.
-    """
+    """Certificate represents completion certificates for courses."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        DENIED = "denied", "Denied"
 
     enrollment = models.OneToOneField(
         Enrollment, on_delete=models.CASCADE, related_name="certificate"
     )
 
-    # Certificate details
     certificate_number = models.CharField(max_length=100, unique=True)
     issued_at = models.DateTimeField(auto_now_add=True)
     expiry_date = models.DateTimeField(null=True, blank=True)
     is_valid = models.BooleanField(default=True)
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.APPROVED,
+    )
+    denial_reason = models.TextField(blank=True, default="")
 
     # PDF
     pdf_url = models.URLField(blank=True, null=True)

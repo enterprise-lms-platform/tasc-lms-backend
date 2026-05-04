@@ -58,16 +58,42 @@ def generate_report(self, report_id):
 def _generate_csv_data(report_type, parameters):
     """
     Generate CSV data based on report type.
+    If parameters contains 'field_names', only include those columns.
     """
     from apps.learning.models import Enrollment, SessionProgress, Certificate
     from apps.payments.models import Transaction, Invoice
     from django.db.models import Count, Avg, F
-    
+
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     date_from = parameters.get('date_from')
     date_to = parameters.get('date_to')
+    field_names = parameters.get('field_names')
+
+    FIELD_MAPS = {
+        'transactions': {
+            'transaction_id': 0, 'user_email': 1, 'amount': 2, 'currency': 3,
+            'status': 4, 'payment_method': 5, 'provider_order_id': 6,
+            'created_at': 7, 'completed_at': 8,
+        },
+        'invoices': {
+            'invoice_number': 0, 'user_email': 1, 'total_amount': 2,
+            'currency': 3, 'status': 4, 'due_date': 5, 'issued_at': 6,
+        },
+        'subscriptions': {
+            'user_email': 0, 'plan': 1, 'status': 2, 'price': 3,
+            'currency': 4, 'start_date': 5, 'end_date': 6, 'cancelled_at': 7,
+        },
+        'revenue': {
+            'transaction_id': 0, 'learner': 1, 'course': 2, 'amount': 3,
+            'currency': 4, 'payment_method': 5, 'date': 6, 'status': 7,
+        },
+        'churn': {
+            'user_email': 0, 'plan': 1, 'price': 2, 'start_date': 3,
+            'cancelled_at': 4, 'duration_days': 5,
+        },
+    }
     
     if report_type == Report.Type.USER_ACTIVITY:
         writer.writerow(['User Name', 'Email', 'Course', 'Session', 'Time Spent (min)', 'Last Accessed', 'Completion %'])
@@ -249,5 +275,20 @@ def _generate_csv_data(report_type, parameters):
 
     else:
         writer.writerow(['Error', f'Unknown report type: {report_type}'])
+
+    if field_names and report_type in FIELD_MAPS:
+        col_map = FIELD_MAPS[report_type]
+        allowed_indices = sorted([col_map[f] for f in field_names if f in col_map])
+        if allowed_indices:
+            output.seek(0)
+            reader = csv.reader(output)
+            filtered_rows = []
+            for row in reader:
+                filtered_rows.append([row[i] for i in allowed_indices if i < len(row)])
+            filtered_output = io.StringIO()
+            filtered_writer = csv.writer(filtered_output)
+            for row in filtered_rows:
+                filtered_writer.writerow(row)
+            return filtered_output.getvalue()
 
     return output.getvalue()
