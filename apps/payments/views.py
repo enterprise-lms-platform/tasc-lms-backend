@@ -424,10 +424,18 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @extend_schema(summary='Export invoices as CSV')
     @action(detail=False, methods=['get'], url_path='export-csv')
     def export_csv(self, request):
-        """GET /api/v1/payments/invoices/export-csv/"""
+        """GET /api/v1/payments/invoices/export-csv/ — respects status, search filters"""
         import csv as csv_module
         from django.http import HttpResponse
         qs = self.get_queryset()
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        search = request.query_params.get('search')
+        if search:
+            from django.db.models import Q as DQ
+            qs = qs.filter(DQ(invoice_number__icontains=search) | DQ(user__email__icontains=search))
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="invoices.csv"'
         writer = csv_module.writer(response)

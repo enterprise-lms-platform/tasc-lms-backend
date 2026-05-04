@@ -70,11 +70,20 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="export-csv")
     def export_csv(self, request):
-        """GET /api/v1/superadmin/organizations/export-csv/"""
+        """GET /api/v1/superadmin/organizations/export-csv/ — respects is_active, search filters"""
         import csv as csv_module
         from django.http import HttpResponse
 
         qs = self.get_queryset()
+
+        # Apply the same filters as the list view
+        is_active = request.query_params.get("is_active")
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() in ("true", "1", "yes"))
+        search = request.query_params.get("search")
+        if search:
+            from django.db.models import Q as DQ
+            qs = qs.filter(DQ(name__icontains=search) | DQ(contact_email__icontains=search))
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="organizations.csv"'
         writer = csv_module.writer(response)
@@ -367,11 +376,26 @@ class UserSuperadminViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="export-csv")
     def export_csv(self, request):
-        """GET /api/v1/superadmin/users/export-csv/"""
+        """GET /api/v1/superadmin/users/export-csv/ — respects role, is_active, search filters"""
         import csv as csv_module
         from django.http import HttpResponse
 
         qs = self.get_queryset()
+
+        # Apply the same filters as the list view
+        role = request.query_params.get("role")
+        if role:
+            qs = qs.filter(role=role)
+        is_active = request.query_params.get("is_active")
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() in ("true", "1", "yes"))
+        search = request.query_params.get("search")
+        if search:
+            from django.db.models import Q as DQ
+            qs = qs.filter(
+                DQ(email__icontains=search) | DQ(first_name__icontains=search) |
+                DQ(last_name__icontains=search)
+            )
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="users.csv"'
         writer = csv_module.writer(response)
