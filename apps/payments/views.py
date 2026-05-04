@@ -365,9 +365,33 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='email-receipt')
     def email_receipt(self, request, pk=None):
         """POST /api/v1/payments/invoices/{id}/email-receipt/"""
+        from apps.notifications.services import send_tasc_email
         invoice = self.get_object()
-        # TODO: Send email via SendGrid with invoice data
-        return Response({'status': 'Receipt email queued'})
+
+        recipient_email = (
+            invoice.user.email if invoice.user else request.data.get('email')
+        )
+        if not recipient_email:
+            return Response({'error': 'No recipient email found.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        context = {
+            'invoice_number': invoice.invoice_number,
+            'total_amount': str(invoice.total_amount),
+            'currency': invoice.currency,
+            'status': invoice.status,
+            'due_date': invoice.due_date.strftime('%d %b %Y') if invoice.due_date else 'N/A',
+            'issued_at': invoice.issued_at.strftime('%d %b %Y') if invoice.issued_at else 'N/A',
+            'user_name': invoice.user.get_full_name() if invoice.user else 'Customer',
+        }
+
+        send_tasc_email(
+            subject=f'Your Invoice #{invoice.invoice_number}',
+            to=[recipient_email],
+            template='emails/payments/invoice_receipt.html',
+            context=context,
+        )
+
+        return Response({'status': 'Receipt emailed successfully.'})
 
     @extend_schema(
         summary='Invoice statistics (superadmin)',
@@ -480,6 +504,22 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
     
+    @extend_schema(
+        summary='Transaction revenue summary',
+        description='Returns total completed revenue — superadmin KPI use',
+    )
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        from django.db.models import Sum
+        from apps.accounts.rbac import is_tasc_admin, is_admin_like
+        if not is_admin_like(request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only admins can view revenue summary.")
+        total = Transaction.objects.filter(status='completed').aggregate(
+            total=Sum('amount')
+        )['total'] or 0
+        return Response({'total_revenue': str(total)})
+
     @extend_schema(
         summary='Get transaction details',
         description='Returns detailed transaction information',
@@ -640,6 +680,22 @@ class FinancePaymentViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @extend_schema(
+        summary='Retry a failed payment',
+        description='Reset a failed payment to pending so the user can attempt again',
+    )
+    @action(detail=True, methods=['post'], url_path='retry')
+    def retry(self, request, pk=None):
+        payment = self.get_object()
+        if payment.status != 'failed':
+            return Response(
+                {'error': 'Only failed payments can be retried.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        payment.status = 'pending'
+        payment.save(update_fields=['status'])
+        return Response({'message': 'Payment reset for retry.', 'id': str(payment.id), 'status': payment.status})
 
 
 @extend_schema(
@@ -932,24 +988,27 @@ class UserSubscriptionViewSet(viewsets.ModelViewSet):
     
     @extend_schema(
         summary='Cancel subscription',
-        description='Cancel an active subscription',
+        description='Cancel an active subscription with an optional reason',
+        request={'type': 'object', 'properties': {'reason': {'type': 'string', 'description': 'Cancellation reason'}}},
         responses={200: UserSubscriptionSerializer},
     )
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         subscription = self.get_object()
-        
+
         if subscription.status != 'active':
             return Response(
                 {'error': 'Only active subscriptions can be cancelled'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        reason = request.data.get('reason', '')
         subscription.status = 'cancelled'
         subscription.auto_renew = False
         subscription.cancelled_at = timezone.now()
+        subscription.cancellation_reason = reason
         subscription.save()
-        
+
         serializer = UserSubscriptionSerializer(subscription)
         return Response(serializer.data)
     
@@ -1711,8 +1770,45 @@ class FinanceAnalyticsOverviewAPIView(APIView):
         )
         subscription_map = {row['status']: row['count'] for row in subscription_rows}
 
+        # New subscriptions trend (monthly count in window)
+        new_sub_rows = (
+            UserSubscription.objects.filter(created_at__gte=window_start)
+            .annotate(month=TruncMonth('created_at'))
+            .values('month')
+            .annotate(count=Count('id'))
+            .order_by('month')
+        )
+        new_sub_map = {
+            row['month'].strftime('%Y-%m'): row['count']
+            for row in new_sub_rows if row.get('month')
+        }
+
         def _money_str(value):
             return format(value or Decimal('0.00'), '.2f')
+
+        # Revenue by payment method
+        revenue_by_method_rows = (
+            Payment.objects.filter(status='completed', completed_at__gte=window_start)
+            .values('payment_method')
+            .annotate(total=Sum('amount'), count=Count('id'))
+            .order_by('-total')
+        )
+        revenue_by_method = [
+            {'method': r['payment_method'] or 'unknown', 'total': _money_str(r['total']), 'count': r['count']}
+            for r in revenue_by_method_rows
+        ]
+
+        # Revenue by plan (aggregate subscription prices per plan)
+        revenue_by_plan_rows = (
+            UserSubscription.objects.filter(created_at__gte=window_start)
+            .values('subscription__name')
+            .annotate(total=Sum('price'), count=Count('id'))
+            .order_by('-total')
+        )
+        revenue_by_plan = [
+            {'plan': r['subscription__name'] or 'Unknown', 'total': _money_str(r['total']), 'count': r['count']}
+            for r in revenue_by_plan_rows
+        ]
 
         revenue_trend = []
         for i in range(months):
@@ -1763,6 +1859,13 @@ class FinanceAnalyticsOverviewAPIView(APIView):
                 'cancelled': subscription_map.get('cancelled', 0),
                 'expired': subscription_map.get('expired', 0),
             },
+            'new_subscriptions_trend': [
+                {'month': _shift_month(window_start, i).strftime('%Y-%m'),
+                 'count': new_sub_map.get(_shift_month(window_start, i).strftime('%Y-%m'), 0)}
+                for i in range(months)
+            ],
+            'revenue_by_method': revenue_by_method,
+            'revenue_by_plan': revenue_by_plan,
         }
 
         serializer = FinanceAnalyticsOverviewSerializer(payload)
@@ -1888,3 +1991,158 @@ class OrganizationSubscriptionListView(APIView):
             })
 
         return Response(results)
+
+
+class ChurnReasonsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (
+            getattr(request.user, 'role', '') in ('lms_manager', 'tasc_admin', 'finance')
+            or request.user.is_superuser
+        ):
+            raise PermissionDenied("Only finance, LMS Manager or TASC Admin can view this.")
+
+        cancelled = UserSubscription.objects.filter(
+            status=UserSubscription.Status.CANCELLED
+        ).exclude(cancellation_reason='')
+
+        from collections import Counter
+        reason_counts = Counter()
+        for sub in cancelled:
+            reason = sub.cancellation_reason.strip()
+            if reason:
+                reason_counts[reason] += 1
+
+        reasons = [
+            {'reason': reason, 'count': count}
+            for reason, count in reason_counts.most_common()
+        ]
+
+        by_plan = (
+            cancelled
+            .values('subscription__name')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        churn_by_plan = [
+            {'plan': entry['subscription__name'] or 'Unknown', 'count': entry['count']}
+            for entry in by_plan
+        ]
+
+        churned_orgs = []
+        if getattr(request.user, 'role', '') in ('lms_manager', 'tasc_admin') or request.user.is_superuser:
+            from apps.accounts.models import Organization
+            for org in Organization.objects.filter(is_active=False):
+                last_sub = (
+                    UserSubscription.objects.filter(organization=org)
+                    .order_by('-cancelled_at')
+                    .first()
+                )
+                churned_orgs.append({
+                    'organization_id': org.id,
+                    'organization_name': org.name,
+                    'cancelled_at': last_sub.cancelled_at.isoformat() if last_sub and last_sub.cancelled_at else None,
+                    'reason': last_sub.cancellation_reason if last_sub else '',
+                    'plan': last_sub.subscription.name if last_sub and last_sub.subscription else '',
+                })
+
+        total_cancelled = UserSubscription.objects.filter(status=UserSubscription.Status.CANCELLED).count()
+        total_all = UserSubscription.objects.count()
+        churn_rate = round((total_cancelled / total_all * 100), 1) if total_all > 0 else 0.0
+
+        return Response({
+            'churn_rate': churn_rate,
+            'total_cancelled': total_cancelled,
+            'reasons': reasons,
+            'churn_by_plan': churn_by_plan,
+            'churned_organizations': churned_orgs,
+        })
+
+
+class FinancialStatementsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (
+            getattr(request.user, 'role', '') in ('lms_manager', 'tasc_admin', 'finance')
+            or request.user.is_superuser
+        ):
+            raise PermissionDenied("Only finance, LMS Manager or TASC Admin can view this.")
+
+        from_date = request.query_params.get('from_date')
+        to_date = request.query_params.get('to_date')
+
+        tx_qs = Transaction.objects.all()
+        inv_qs = Invoice.objects.all()
+
+        if from_date:
+            tx_qs = tx_qs.filter(created_at__gte=from_date)
+            inv_qs = inv_qs.filter(created_at__gte=from_date)
+        if to_date:
+            tx_qs = tx_qs.filter(created_at__lte=to_date)
+            inv_qs = inv_qs.filter(created_at__lte=to_date)
+
+        total_income = tx_qs.filter(
+            status='completed'
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        total_refunds = tx_qs.filter(
+            status='refunded'
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        pending_amount = inv_qs.filter(
+            status='pending'
+        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+
+        overdue_amount = inv_qs.filter(
+            status='overdue'
+        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+
+        paid_amount = inv_qs.filter(
+            status='paid'
+        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
+
+        net_income = total_income - total_refunds
+        collection_rate = round(
+            (paid_amount / (paid_amount + pending_amount + overdue_amount) * 100), 1
+        ) if (paid_amount + pending_amount + overdue_amount) > 0 else 0.0
+
+        active_subs = UserSubscription.objects.filter(status='active').count()
+        cancelled_subs = UserSubscription.objects.filter(status='cancelled').count()
+        expired_subs = UserSubscription.objects.filter(status='expired').count()
+
+        income_by_month = (
+            tx_qs.filter(status='completed')
+            .annotate(month=TruncMonth('created_at'))
+            .values('month')
+            .annotate(total=Sum('amount'))
+            .order_by('month')
+        )
+        monthly_income = [
+            {'month': entry['month'].strftime('%Y-%m'), 'amount': str(entry['total'] or 0)}
+            for entry in income_by_month
+        ]
+
+        return Response({
+            'period': {
+                'from': from_date or 'all',
+                'to': to_date or 'all',
+            },
+            'income_statement': {
+                'total_revenue': str(total_income),
+                'total_refunds': str(total_refunds),
+                'net_income': str(net_income),
+                'pending_invoices': str(pending_amount),
+                'overdue_invoices': str(overdue_amount),
+                'collected_invoices': str(paid_amount),
+                'collection_rate_pct': collection_rate,
+            },
+            'balance_sheet': {
+                'accounts_receivable': str(pending_amount + overdue_amount),
+                'active_subscriptions': active_subs,
+                'cancelled_subscriptions': cancelled_subs,
+                'expired_subscriptions': expired_subs,
+            },
+            'monthly_income': monthly_income,
+        })

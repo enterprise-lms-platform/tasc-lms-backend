@@ -197,7 +197,57 @@ def _generate_csv_data(report_type, parameters):
                 t.status
             ])
     
+    elif report_type == 'transactions':
+        writer.writerow(['Transaction ID', 'User Email', 'Amount', 'Currency', 'Status', 'Payment Method', 'Provider Order ID', 'Created At', 'Completed At'])
+        from apps.payments.models import Payment
+        for t in Payment.objects.select_related('user').order_by('-created_at')[:2000]:
+            writer.writerow([
+                t.id, t.user.email if t.user else 'N/A', t.amount, t.currency,
+                t.status, t.payment_method or 'N/A', t.provider_order_id or '',
+                t.created_at.strftime('%Y-%m-%d %H:%M'), t.completed_at.strftime('%Y-%m-%d %H:%M') if t.completed_at else '',
+            ])
+
+    elif report_type == 'invoices':
+        writer.writerow(['Invoice #', 'User', 'Total Amount', 'Currency', 'Status', 'Due Date', 'Issued At'])
+        from apps.payments.models import Invoice
+        for inv in Invoice.objects.select_related('user').order_by('-issued_at')[:2000]:
+            writer.writerow([
+                inv.invoice_number, inv.user.email if inv.user else 'N/A',
+                inv.total_amount, inv.currency, inv.status,
+                inv.due_date.strftime('%Y-%m-%d') if inv.due_date else '',
+                inv.issued_at.strftime('%Y-%m-%d') if inv.issued_at else '',
+            ])
+
+    elif report_type == 'subscriptions':
+        writer.writerow(['User', 'Plan', 'Status', 'Price', 'Currency', 'Start Date', 'End Date', 'Cancelled At'])
+        from apps.payments.models import UserSubscription
+        for sub in UserSubscription.objects.select_related('user', 'subscription').order_by('-created_at')[:2000]:
+            writer.writerow([
+                sub.user.email, sub.subscription.name if sub.subscription else 'N/A',
+                sub.status, sub.price, sub.currency,
+                sub.start_date.strftime('%Y-%m-%d') if sub.start_date else '',
+                sub.end_date.strftime('%Y-%m-%d') if sub.end_date else '',
+                sub.cancelled_at.strftime('%Y-%m-%d') if sub.cancelled_at else '',
+            ])
+
+    elif report_type == 'churn':
+        writer.writerow(['User', 'Plan', 'Price', 'Start Date', 'Cancelled At', 'Duration (days)'])
+        from apps.payments.models import UserSubscription
+        from datetime import timedelta
+        for sub in UserSubscription.objects.filter(status='cancelled').select_related('user', 'subscription').order_by('-cancelled_at')[:2000]:
+            if sub.start_date and sub.cancelled_at:
+                duration = (sub.cancelled_at.date() - sub.start_date).days
+            else:
+                duration = ''
+            writer.writerow([
+                sub.user.email, sub.subscription.name if sub.subscription else 'N/A',
+                sub.price,
+                sub.start_date.strftime('%Y-%m-%d') if sub.start_date else '',
+                sub.cancelled_at.strftime('%Y-%m-%d') if sub.cancelled_at else '',
+                duration,
+            ])
+
     else:
         writer.writerow(['Error', f'Unknown report type: {report_type}'])
-    
+
     return output.getvalue()

@@ -807,6 +807,27 @@ class QuizSubmissionCreateSerializer(serializers.Serializer):
 
         attrs["attempt_number"] = existing_attempts + 1
 
+        # Server-side time limit enforcement
+        time_limit_minutes = quiz_settings.get("time_limit_minutes")
+        if time_limit_minutes:
+            from django.core.cache import cache
+            from django.utils import timezone as tz
+            request = self.context.get("request")
+            user_id = request.user.id if request else None
+            if user_id:
+                key = f"quiz_start:{enrollment.id}:{quiz.id}:{user_id}"
+                started_at_str = cache.get(key)
+                if started_at_str:
+                    from datetime import datetime, timezone as dt_tz
+                    started_at = datetime.fromisoformat(started_at_str)
+                    elapsed = (tz.now() - started_at).total_seconds()
+                    grace_seconds = 30
+                    if elapsed > (time_limit_minutes * 60 + grace_seconds):
+                        raise serializers.ValidationError(
+                            {"quiz": "Time limit exceeded. Your submission was not accepted."}
+                        )
+                    cache.delete(key)
+
         return attrs
 
     def _grade_answer(self, question, selected_answer):

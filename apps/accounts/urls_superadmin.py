@@ -15,6 +15,7 @@ from .views_superadmin import (
     TerminateAllSessionsView,
     SuperadminAssessmentsViewSet,
     UserSessionViewSet,
+    GatewaySettingsView,
 )
 
 router = DefaultRouter()
@@ -52,4 +53,6 @@ urlpatterns = [
     path("system/settings/", SystemSettingsView.as_view(), name="system-settings"),
     path("system/smtp/", SMTPSettingsView.as_view(), name="smtp-settings"),
     path("system/smtp/test/", SMTPSettingsView.as_view(), name="smtp-test"),
+    path("system/gateway/", GatewaySettingsView.as_view(), name="gateway-settings"),
+    path("system/gateway/test/", GatewaySettingsView.as_view(), name="gateway-test"),
 ]

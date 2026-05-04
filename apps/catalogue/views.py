@@ -707,6 +707,32 @@ class CourseViewSet(viewsets.ModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
+        summary="Request course deletion",
+        description="Instructor submits a deletion request for a published course. Creates a pending DELETE approval request for manager review.",
+        responses={200: CourseDetailSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="request-deletion")
+    def request_deletion(self, request, pk=None):
+        course = self.get_object()
+        role = getattr(request.user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin"):
+            raise PermissionDenied("Only instructors can request course deletion.")
+        if role == "instructor" and course.instructor != request.user:
+            raise PermissionDenied("You can only request deletion of your own courses.")
+        if CourseApprovalRequest.objects.filter(
+            course=course, status=CourseApprovalRequest.Status.PENDING
+        ).exists():
+            raise ValidationError({"detail": "This course already has a pending approval request."})
+        CourseApprovalRequest.objects.create(
+            course=course,
+            request_type=CourseApprovalRequest.RequestType.DELETE,
+            requested_by=request.user,
+            status=CourseApprovalRequest.Status.PENDING,
+        )
+        serializer = CourseDetailSerializer(course, context=self.get_serializer_context())
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
         summary="Submit course for approval",
         description="Submit a draft or rejected course for manager review. Creates an approval request and sets course status to pending_approval. Only the course owner (instructor) or manager/admin can submit.",
         responses={200: CourseDetailSerializer},
@@ -881,29 +907,37 @@ class CourseApprovalRequestViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
             course = approval.course
-            course.status = Course.Status.PUBLISHED
-            if course.published_at is None:
-                course.published_at = timezone.now()
-            course.rejection_reason = ""
-            course.save(
-                update_fields=[
-                    "status",
-                    "published_at",
-                    "rejection_reason",
-                    "updated_at",
-                ]
-            )
+            if approval.request_type == CourseApprovalRequest.RequestType.DELETE:
+                # Delete request approved — actually delete the course
+                course.delete()
+            else:
+                course.status = Course.Status.PUBLISHED
+                if course.published_at is None:
+                    course.published_at = timezone.now()
+                course.rejection_reason = ""
+                course.save(
+                    update_fields=[
+                        "status",
+                        "published_at",
+                        "rejection_reason",
+                        "updated_at",
+                    ]
+                )
 
         from apps.audit.services import log_event
 
+        action_label = "deleted" if approval.request_type == CourseApprovalRequest.RequestType.DELETE else "approved"
         log_event(
-            action="updated",
+            action=action_label,
             resource="course",
-            resource_id=str(course.id),
+            resource_id=str(approval.course_id),
             actor=request.user,
             request=request,
-            details=f"Course approved: {course.title} (approval #{approval.id})",
+            details=f"Course {action_label}: approval #{approval.id}",
         )
+
+        if approval.request_type == CourseApprovalRequest.RequestType.DELETE:
+            return Response({"detail": "Course deleted successfully."}, status=status.HTTP_200_OK)
 
         out_serializer = CourseApprovalRequestSerializer(approval)
         return Response(out_serializer.data, status=status.HTTP_200_OK)
@@ -1436,11 +1470,12 @@ class SessionViewSet(viewsets.ModelViewSet):
         settings = quiz.settings or {}
         questions = list(quiz.questions.all().order_by("order", "id"))
     
+        # Only shuffle for actual learners — admins/managers/instructors see canonical order
         is_learner = (
             request
             and request.user
             and request.user.is_authenticated
-            and not is_admin_like(request.user)
+            and getattr(request.user, "role", None) == "learner"
         )
         should_shuffle_questions = is_learner and settings.get("shuffle_questions")
         should_shuffle_answers = is_learner and settings.get("shuffle_answers")

@@ -131,8 +131,28 @@ class LoginView(TokenObtainPairView):
             ),
         ],
     )
+    def _get_client_ip(self, request):
+        xff = request.META.get("HTTP_X_FORWARDED_FOR")
+        if xff:
+            return xff.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "unknown")
+
     def post(self, request, *args, **kwargs):
+        from django.core.cache import cache
+
         email = (request.data.get("email") or "").strip().lower()
+        client_ip = self._get_client_ip(request)
+
+        # IP-based rate limit: block IPs that hammer the login endpoint
+        ip_key = f"login_fail_ip:{client_ip}"
+        ip_failures = cache.get(ip_key, 0)
+        ip_limit = getattr(settings, "MAX_LOGIN_ATTEMPTS_PER_IP", 20)
+        if ip_failures >= ip_limit:
+            return Response(
+                {"detail": "Too many login attempts from this IP. Try again later."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         user_by_email = User.objects.filter(email__iexact=email).first() if email else None
 
         # B) If user exists and is locked, return 403 (avoid revealing valid email)
@@ -147,12 +167,18 @@ class LoginView(TokenObtainPairView):
             serializer = self.get_serializer(data=request.data)
             serializer.is_valid(raise_exception=True)
         except serializers.ValidationError:
+            # Load security policy for configurable thresholds
+            policy = cache.get('system:security_policy', {})
+            lock_minutes = policy.get('lockout_duration_minutes') or getattr(settings, "ACCOUNT_LOCK_MINUTES", 15)
+            max_attempts = policy.get('max_failed_attempts') or getattr(settings, "MAX_LOGIN_ATTEMPTS", 5)
+
+            # Increment IP failure counter (expires after lock window)
+            cache.set(ip_key, ip_failures + 1, timeout=lock_minutes * 60)
+
             # C) Invalid credentials: increment and possibly lock (only if we have a user)
             if user_by_email:
                 user_by_email.failed_login_attempts = (getattr(user_by_email, "failed_login_attempts", 0) or 0) + 1
-                max_attempts = getattr(settings, "MAX_LOGIN_ATTEMPTS", 5)
                 if user_by_email.failed_login_attempts >= max_attempts:
-                    lock_minutes = getattr(settings, "ACCOUNT_LOCK_MINUTES", 15)
                     user_by_email.account_locked_until = timezone.now() + timedelta(minutes=lock_minutes)
                     user_by_email.failed_login_attempts = 0
                     user_by_email.save(update_fields=["failed_login_attempts", "account_locked_until"])
@@ -166,21 +192,24 @@ class LoginView(TokenObtainPairView):
 
         user = serializer.user
 
-        # Block login until email verified / activated
-        if not getattr(user, "email_verified", False) or not getattr(
-            user, "is_active", False
-        ):
+        # Block login — give distinct messages for deactivated vs unverified
+        if not getattr(user, "is_active", False):
             return Response(
-                {
-                    "detail": "Email not verified. Please verify your email before logging in."
-                },
+                {"detail": "Account is deactivated. Please contact your administrator."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not getattr(user, "email_verified", False):
+            return Response(
+                {"detail": "Email not verified. Please check your inbox for the verification link."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # D) Successful password validation: clear lockout fields
+        # D) Successful password validation: clear lockout fields and IP counter
         user.failed_login_attempts = 0
         user.account_locked_until = None
         user.save(update_fields=["failed_login_attempts", "account_locked_until"])
+        from django.core.cache import cache
+        cache.delete(f"login_fail_ip:{client_ip}")
 
         # E) Create OTP challenge instead of issuing tokens
         ttl_seconds = getattr(settings, "LOGIN_OTP_TTL_SECONDS", 300)

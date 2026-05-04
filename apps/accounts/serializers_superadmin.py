@@ -52,6 +52,14 @@ class OrganizationSuperadminSerializer(serializers.ModelSerializer):
             "subscription_end_date",
         ]
 
+    def validate_slug(self, value):
+        qs = Organization.objects.filter(slug=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("An organization with this slug already exists.")
+        return value
+
     def get_subscription_status(self, obj):
         from apps.payments.models import UserSubscription
         sub = (

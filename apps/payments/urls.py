@@ -15,6 +15,8 @@ from .views import (
     FinanceAnalyticsOverviewAPIView,
     FinanceAlertsAPIView,
     FinancePaymentViewSet,
+    ChurnReasonsAPIView,
+    FinancialStatementsAPIView,
 )
 
 from .views_pesapal import (
@@ -47,6 +49,8 @@ urlpatterns = [
     path('finance/dashboard-overview/', FinanceDashboardOverviewAPIView.as_view(), name='finance-dashboard-overview'),
     path('finance/analytics-overview/', FinanceAnalyticsOverviewAPIView.as_view(), name='finance-analytics-overview'),
     path('finance/alerts/', FinanceAlertsAPIView.as_view(), name='finance-alerts'),
+    path('finance/churn-reasons/', ChurnReasonsAPIView.as_view(), name='finance-churn-reasons'),
+    path('finance/statements/', FinancialStatementsAPIView.as_view(), name='finance-statements'),
     # Backward-compatible alias (older clients used this path; router uses ipn-admin/).
     path(
         'pesapal/ipn/register/',

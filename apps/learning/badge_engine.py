@@ -28,19 +28,20 @@ def _get_user_stat(user, criteria_type):
         return Enrollment.objects.filter(user=user).count()
 
     elif criteria_type == 'quiz_submissions_count':
-        return QuizSubmission.objects.filter(student=user).count()
+        return QuizSubmission.objects.filter(enrollment__user=user).count()
 
     elif criteria_type == 'quiz_perfect_score':
-        # Check if any quiz submission scored 100%
+        # Check if any quiz submission scored full marks (score == max_score)
+        from django.db.models import F
         perfect = QuizSubmission.objects.filter(
-            student=user, score=100
-        ).exists()
+            enrollment__user=user
+        ).filter(score=F('max_score'), max_score__gt=0).exists()
         return 1 if perfect else 0
 
     elif criteria_type == 'quiz_pass_streak':
         # Count consecutive passed quizzes (most recent first)
         submissions = QuizSubmission.objects.filter(
-            student=user
+            enrollment__user=user
         ).order_by('-submitted_at').values_list('passed', flat=True)
         streak = 0
         for passed in submissions:

@@ -623,6 +623,7 @@ class UserSubscription(models.Model):
     # Auto-renewal
     auto_renew = models.BooleanField(default=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancellation_reason = models.CharField(max_length=255, blank=True, default="")
 
     # Pricing snapshot
     price = models.DecimalField(max_digits=10, decimal_places=2)

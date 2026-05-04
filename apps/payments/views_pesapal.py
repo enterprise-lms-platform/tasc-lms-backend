@@ -771,12 +771,13 @@ class PesapalRecurringViewSet(viewsets.GenericViewSet):
 
         if payment and payment.provider_order_id:
             service = PesapalService()
-            pesapal_result = service.cancel_order(payment.provider_order_id)
+        pesapal_result = service.cancel_order(payment.provider_order_id)
 
         # Always cancel locally regardless of Pesapal response
         user_subscription.status = "cancelled"
         user_subscription.cancelled_at = timezone.now()
         user_subscription.auto_renew = False
+        user_subscription.cancellation_reason = request.data.get("reason", "")
         user_subscription.save()
 
         log_event(
@@ -1043,8 +1044,8 @@ class PesapalIPNViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = PesapalIPN.objects.all()
 
     def get_permissions(self):
-        from rest_framework.permissions import IsAdminUser
-        return [IsAdminUser()]
+        from apps.accounts.permissions import IsTascAdminUser
+        return [IsTascAdminUser()]
 
     @extend_schema(
         summary="Register IPN URL",

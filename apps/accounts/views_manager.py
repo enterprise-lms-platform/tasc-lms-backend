@@ -57,7 +57,7 @@ class ManagerOrganizationSettingsView(APIView):
         if not organization:
             return Response(
                 {"detail": "No organization found or you do not have manager permissions."},
-                status=status.HTTP_404_NOT_FOUND
+                status=status.HTTP_403_FORBIDDEN
             )
         serializer = ManagerOrganizationSerializer(organization)
         return Response(serializer.data)
@@ -73,7 +73,7 @@ class ManagerOrganizationSettingsView(APIView):
         if not organization:
             return Response(
                 {"detail": "No organization found or you do not have manager permissions."},
-                status=status.HTTP_404_NOT_FOUND
+                status=status.HTTP_403_FORBIDDEN
             )
         serializer = ManagerOrganizationSerializer(organization, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -109,7 +109,7 @@ class ManagerBillingPlanView(APIView):
         if not org:
             return Response(
                 {'detail': 'No organization found or insufficient permissions.'},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         sub = UserSubscription.objects.filter(
@@ -155,7 +155,7 @@ class ManagerBillingUsageView(APIView):
         if not org:
             return Response(
                 {'detail': 'No organization found or insufficient permissions.'},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         active_users = Membership.objects.filter(
@@ -192,7 +192,7 @@ class ManagerActivityView(APIView):
         if not org:
             return Response(
                 {'detail': 'No organization found or insufficient permissions.'},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         range_param = request.query_params.get('range', '7days')
@@ -334,7 +334,7 @@ class ManagerMembersView(ListAPIView):
         if not org:
             return Response(
                 {"detail": "No organization found or insufficient permissions."},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
         self._org = org
         return super().list(request, *args, **kwargs)
@@ -388,7 +388,7 @@ class ManagerBulkImportMembersView(APIView):
         if not org:
             return Response(
                 {"detail": "No organization found or insufficient permissions."},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if "file" not in request.FILES:

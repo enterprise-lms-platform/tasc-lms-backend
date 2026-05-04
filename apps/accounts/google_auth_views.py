@@ -147,10 +147,13 @@ def google_oauth_login(request):
                     try:
                         user = User.objects.get(email__iexact=email)
                         # Link Google account to existing user
+                        # Google has verified this email, so mark it verified regardless
                         user.google_id = google_id
                         user.google_picture = picture
                         if not user.avatar:
                             user.avatar = picture
+                        user.email_verified = True
+                        user.is_active = True
                         user.save()
                     except User.DoesNotExist:
                         # Create new user

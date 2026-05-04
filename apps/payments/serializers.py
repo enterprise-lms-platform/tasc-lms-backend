@@ -189,9 +189,9 @@ class TransactionSerializer(serializers.ModelSerializer):
             'user', 'user_name', 'organization', 'organization_name',
             'course', 'course_title',
             'transaction_id', 'amount', 'currency',
-            'status', 'payment_method', 'payment_provider',
-            'gateway_transaction_id', 'gateway_response',
-            'created_at', 'updated_at', 'completed_at',
+        'status', 'payment_method', 'payment_provider',
+        'gateway_transaction_id',
+        'created_at', 'updated_at', 'completed_at',
             'card_last4', 'card_brand', 'webhook_received'
         ]
         read_only_fields = [
@@ -359,9 +359,9 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'user_email', 'organization', 'organization_name',
             'subscription', 'subscription_name',
-            'status', 'start_date', 'end_date', 'trial_end_date',
-            'auto_renew', 'cancelled_at', 'price', 'currency',
-            'is_trial', 'is_active', 'created_at', 'updated_at'
+        'status', 'start_date', 'end_date', 'trial_end_date',
+        'auto_renew', 'cancelled_at', 'cancellation_reason', 'price', 'currency',
+        'is_trial', 'is_active', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     

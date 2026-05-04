@@ -36,6 +36,17 @@ class OrganizationSuperadminViewSet(viewsets.ModelViewSet):
     serializer_class = OrganizationSuperadminSerializer
     permission_classes = [IsTascAdminUser]
 
+    def perform_update(self, serializer):
+        old_active = serializer.instance.is_active
+        instance = serializer.save()
+        new_active = instance.is_active
+        if old_active and not new_active:
+            user_ids = instance.memberships.filter(is_active=True).values_list('user_id', flat=True)
+            User.objects.filter(id__in=user_ids).update(is_active=False)
+        elif not old_active and new_active:
+            user_ids = instance.memberships.values_list('user_id', flat=True)
+            User.objects.filter(id__in=user_ids).update(is_active=True)
+
     @action(detail=False, methods=["get"])
     def stats(self, request):
         """
@@ -685,6 +696,7 @@ class SystemSettingsView(APIView):
 
     def _get_config(self):
         from django.conf import settings as django_settings
+        from django.core.cache import cache
 
         return {
             "platform_name": getattr(django_settings, "PLATFORM_NAME", "TASC LMS"),
@@ -692,22 +704,31 @@ class SystemSettingsView(APIView):
             "support_email": getattr(django_settings, "SUPPORT_EMAIL", ""),
             "default_timezone": getattr(django_settings, "TIME_ZONE", "UTC"),
             "max_upload_mb": getattr(django_settings, "MAX_UPLOAD_MB", 500),
+            "maintenance_mode": cache.get("system:maintenance_mode", False),
+            "maintenance_message": cache.get(
+                "system:maintenance_message",
+                "We are performing scheduled maintenance. Please check back shortly.",
+            ),
         }
 
     def get(self, request):
         return Response(self._get_config())
 
     def patch(self, request):
-        # Persist to a SystemConfig model if one exists, otherwise acknowledge only.
-        # Future: store in a key-value config table.
+        from django.core.cache import cache
+
         allowed = {
-            "platform_name",
-            "platform_url",
-            "support_email",
-            "default_timezone",
-            "max_upload_mb",
+            "platform_name", "platform_url", "support_email",
+            "default_timezone", "max_upload_mb",
         }
         updates = {k: v for k, v in request.data.items() if k in allowed}
+
+        # Persist maintenance_mode and message to cache (no expiry — survives restarts via DB cache)
+        if "maintenance_mode" in request.data:
+            cache.set("system:maintenance_mode", bool(request.data["maintenance_mode"]), timeout=None)
+        if "maintenance_message" in request.data:
+            cache.set("system:maintenance_message", str(request.data["maintenance_message"]), timeout=None)
+
         return Response({**self._get_config(), **updates})
 
 
@@ -779,13 +800,22 @@ class SecurityPolicyView(APIView):
         "force_single_session": False,
     }
 
+    def _get_policy(self):
+        from django.core.cache import cache
+        saved = cache.get('system:security_policy', {})
+        return {**self._DEFAULTS, **saved}
+
     def get(self, request):
-        return Response(self._DEFAULTS)
+        return Response(self._get_policy())
 
     def patch(self, request):
+        from django.core.cache import cache
         allowed = set(self._DEFAULTS.keys())
         updates = {k: v for k, v in request.data.items() if k in allowed}
-        return Response({**self._DEFAULTS, **updates})
+        current = cache.get('system:security_policy', {})
+        merged = {**current, **updates}
+        cache.set('system:security_policy', merged, timeout=None)
+        return Response({**self._DEFAULTS, **merged})
 
 
 class TerminateAllSessionsView(APIView):
@@ -901,3 +931,39 @@ class SuperadminAssessmentsViewSet(viewsets.ViewSet):
                 "total_attempts": total_attempts,
             }
         )
+
+
+class GatewaySettingsView(APIView):
+    """
+    GET  /api/v1/superadmin/system/gateway/  — returns Pesapal gateway status
+    POST /api/v1/superadmin/system/gateway/test/  — tests Pesapal connection
+    """
+
+    permission_classes = [IsTascAdminUser]
+
+    def get(self, request):
+        from django.conf import settings as django_settings
+
+        consumer_key = getattr(django_settings, "PESAPAL_CONSUMER_KEY", "")
+        configured = bool(consumer_key)
+        environment = getattr(django_settings, "PESAPAL_ENV", "demo")
+        ipn_url = getattr(django_settings, "PESAPAL_IPN_URL", "")
+
+        return Response({
+            "configured": configured,
+            "environment": environment,
+            "ipn_url": ipn_url,
+        })
+
+    def post(self, request):
+        from apps.payments.services.pesapal_services import PesapalService
+
+        try:
+            service = PesapalService()
+            service._get_token()
+            return Response({"detail": "Pesapal connection test successful."})
+        except Exception as exc:
+            return Response(
+                {"detail": f"Pesapal connection test failed: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )

@@ -105,13 +105,36 @@ class Enrollment(models.Model):
             progress = (completed_sessions / total_sessions) * 100
             self.progress_percentage = min(progress, 100)
 
-        # Check if course is completed
+        # Check if course is completed — all sessions done AND all graded assignments passed
         if self.progress_percentage >= 100 and self.status != self.Status.COMPLETED:
-            self.status = self.Status.COMPLETED
-            self.completed_at = timezone.now()
+            all_passed = self._all_graded_assignments_passed()
+            if all_passed:
+                self.status = self.Status.COMPLETED
+                self.completed_at = timezone.now()
 
         self.save()
         return self.progress_percentage
+
+    def _all_graded_assignments_passed(self):
+        """Return True if every assignment session with a passing_score set has a passing submission."""
+        from apps.catalogue.models import Session as CourseSession
+        graded_assignment_sessions = CourseSession.objects.filter(
+            course=self.course,
+            session_type='assignment',
+            assignment__isnull=False,
+            assignment__passing_score__isnull=False,
+        ).values_list('id', flat=True)
+
+        if not graded_assignment_sessions:
+            return True
+
+        passed_count = Submission.objects.filter(
+            enrollment=self,
+            assignment__session_id__in=graded_assignment_sessions,
+            is_passed=True,
+        ).values('assignment__session_id').distinct().count()
+
+        return passed_count >= len(graded_assignment_sessions)
 
 
 class SessionProgress(models.Model):
@@ -364,6 +387,8 @@ class Discussion(models.Model):
     is_pinned = models.BooleanField(default=False)
     is_locked = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    is_hidden = models.BooleanField(default=False, help_text="Hidden pending moderator review")
+    report_count = models.PositiveIntegerField(default=0)
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -406,6 +431,8 @@ class DiscussionReply(models.Model):
 
     # Moderation
     is_deleted = models.BooleanField(default=False)
+    is_hidden = models.BooleanField(default=False, help_text="Hidden pending moderator review")
+    report_count = models.PositiveIntegerField(default=0)
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -416,6 +443,40 @@ class DiscussionReply(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.discussion.title}"
+
+
+class DiscussionReport(models.Model):
+    """Tracks individual reports against discussions or replies."""
+
+    REASON_CHOICES = [
+        ('spam', 'Spam'),
+        ('abusive', 'Abusive or Offensive Language'),
+        ('off_topic', 'Off-Topic'),
+        ('misinformation', 'Misinformation'),
+        ('other', 'Other'),
+    ]
+
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='discussion_reports'
+    )
+    discussion = models.ForeignKey(
+        Discussion, on_delete=models.CASCADE, null=True, blank=True, related_name='reports'
+    )
+    reply = models.ForeignKey(
+        DiscussionReply, on_delete=models.CASCADE, null=True, blank=True, related_name='reports'
+    )
+    reason = models.CharField(max_length=30, choices=REASON_CHOICES)
+    detail = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_resolved = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [('reporter', 'discussion'), ('reporter', 'reply')]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        target = f"discussion #{self.discussion_id}" if self.discussion_id else f"reply #{self.reply_id}"
+        return f"Report by {self.reporter.email} on {target} ({self.reason})"
 
 
 class Report(models.Model):

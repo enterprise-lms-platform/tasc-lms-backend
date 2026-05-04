@@ -48,6 +48,7 @@ from .models import (
     Certificate,
     Discussion,
     DiscussionReply,
+    DiscussionReport,
     Report,
     Submission,
     QuizSubmission,
@@ -310,9 +311,10 @@ class EnrollmentViewSet(
         from django.contrib.auth import get_user_model
 
         user = request.user
-        if not is_lms_manager(user):
+        role = getattr(user, "role", "")
+        if not is_lms_manager(user) and role != "org_admin":
             return Response(
-                {"error": "Only LMS Managers can bulk enroll users."},
+                {"error": "Only LMS Managers and Org Admins can bulk enroll users."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -628,7 +630,7 @@ class CertificateViewSet(viewsets.ReadOnlyModelViewSet):
         )
         from django.conf import settings as _settings
         new_cert.verification_url = (
-            f"{_settings.FRONTEND_URL}/certificate/verify?number={new_cert.certificate_number}"
+            f"{_settings.FRONTEND_URL}/verify-certificate?number={new_cert.certificate_number}"
         )
         new_cert.save(update_fields=["verification_url"])
 
@@ -694,7 +696,20 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         return DiscussionSerializer
 
     def get_queryset(self):
+        user = self.request.user
+        role = getattr(user, "role", "")
         qs = Discussion.objects.select_related("user", "course", "session")
+
+        # Scope to accessible courses only
+        if role not in ("tasc_admin", "lms_manager", "org_admin"):
+            if role == "instructor":
+                from apps.catalogue.models import Course as CatalogCourse
+                qs = qs.filter(course__instructor=user)
+            else:
+                enrolled_course_ids = Enrollment.objects.filter(
+                    user=user, status__in=["active", "completed"]
+                ).values_list("course_id", flat=True)
+                qs = qs.filter(course_id__in=enrolled_course_ids)
 
         course_id = self.request.query_params.get("course")
         if course_id:
@@ -706,8 +721,6 @@ class DiscussionViewSet(viewsets.ModelViewSet):
 
         search = self.request.query_params.get("search", "").strip()
         if search:
-            from django.db.models import Q
-
             qs = qs.filter(Q(title__icontains=search) | Q(content__icontains=search))
 
         return qs
@@ -811,6 +824,51 @@ class DiscussionViewSet(viewsets.ModelViewSet):
         discussion.save()
         return Response({"is_locked": discussion.is_locked})
 
+    @extend_schema(summary="Report discussion", description="Report a discussion as abusive, spam, etc.")
+    @action(detail=True, methods=["post"])
+    def report(self, request, pk=None):
+        discussion = self.get_object()
+        reason = request.data.get("reason", "other")
+        detail = request.data.get("detail", "")
+        _, created = DiscussionReport.objects.get_or_create(
+            reporter=request.user, discussion=discussion,
+            defaults={"reason": reason, "detail": detail},
+        )
+        if not created:
+            return Response({"detail": "You have already reported this discussion."}, status=status.HTTP_400_BAD_REQUEST)
+        discussion.report_count = discussion.reports.filter(is_resolved=False).count()
+        # Auto-hide after 3 reports
+        if discussion.report_count >= 3:
+            discussion.is_hidden = True
+        discussion.save(update_fields=["report_count", "is_hidden"])
+        return Response({"detail": "Report submitted. A moderator will review it."})
+
+    @extend_schema(summary="Moderate discussion", description="Delete or restore a discussion (Instructor/Manager/Admin only)")
+    @action(detail=True, methods=["post"])
+    def moderate(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin", "org_admin"):
+            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+        discussion = self.get_object()
+        action_type = request.data.get("action")  # 'delete' | 'restore' | 'dismiss_reports'
+        if action_type == "delete":
+            discussion.is_deleted = True
+            discussion.is_hidden = True
+            DiscussionReport.objects.filter(discussion=discussion).update(is_resolved=True)
+        elif action_type == "restore":
+            discussion.is_deleted = False
+            discussion.is_hidden = False
+            discussion.report_count = 0
+            DiscussionReport.objects.filter(discussion=discussion).update(is_resolved=True)
+        elif action_type == "dismiss_reports":
+            discussion.is_hidden = False
+            discussion.report_count = 0
+            DiscussionReport.objects.filter(discussion=discussion).update(is_resolved=True)
+        else:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+        discussion.save()
+        return Response({"detail": f"Discussion {action_type}d."})
+
 
 @extend_schema(
     tags=["Learning - Discussion Replies"],
@@ -828,7 +886,24 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
         return DiscussionReplySerializer
 
     def get_queryset(self):
-        return DiscussionReply.objects.select_related("user", "discussion")
+        user = self.request.user
+        role = getattr(user, "role", "")
+        qs = DiscussionReply.objects.select_related("user", "discussion__course")
+
+        if role not in ("tasc_admin", "lms_manager", "org_admin"):
+            if role == "instructor":
+                qs = qs.filter(discussion__course__instructor=user)
+            else:
+                enrolled_course_ids = Enrollment.objects.filter(
+                    user=user, status__in=["active", "completed"]
+                ).values_list("course_id", flat=True)
+                qs = qs.filter(discussion__course_id__in=enrolled_course_ids)
+
+        discussion_id = self.request.query_params.get("discussion")
+        if discussion_id:
+            qs = qs.filter(discussion_id=discussion_id)
+
+        return qs
 
     @extend_schema(
         summary="List replies",
@@ -849,6 +924,94 @@ class DiscussionReplyViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
+
+    @extend_schema(summary="Report reply", description="Report a reply as abusive, spam, etc.")
+    @action(detail=True, methods=["post"])
+    def report(self, request, pk=None):
+        reply = self.get_object()
+        reason = request.data.get("reason", "other")
+        detail = request.data.get("detail", "")
+        _, created = DiscussionReport.objects.get_or_create(
+            reporter=request.user, reply=reply,
+            defaults={"reason": reason, "detail": detail},
+        )
+        if not created:
+            return Response({"detail": "You have already reported this reply."}, status=status.HTTP_400_BAD_REQUEST)
+        reply.report_count = reply.reports.filter(is_resolved=False).count()
+        if reply.report_count >= 3:
+            reply.is_hidden = True
+        reply.save(update_fields=["report_count", "is_hidden"])
+        return Response({"detail": "Report submitted. A moderator will review it."})
+
+    @extend_schema(summary="Moderate reply", description="Delete or restore a reply (Instructor/Manager/Admin only)")
+    @action(detail=True, methods=["post"])
+    def moderate(self, request, pk=None):
+        role = getattr(request.user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin", "org_admin"):
+            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+        reply = self.get_object()
+        action_type = request.data.get("action")
+        if action_type == "delete":
+            reply.is_deleted = True
+            reply.is_hidden = True
+            DiscussionReport.objects.filter(reply=reply).update(is_resolved=True)
+        elif action_type == "restore":
+            reply.is_deleted = False
+            reply.is_hidden = False
+            reply.report_count = 0
+            DiscussionReport.objects.filter(reply=reply).update(is_resolved=True)
+        elif action_type == "dismiss_reports":
+            reply.is_hidden = False
+            reply.report_count = 0
+            DiscussionReport.objects.filter(reply=reply).update(is_resolved=True)
+        else:
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+        reply.save()
+        return Response({"detail": f"Reply {action_type}d."})
+
+
+@extend_schema(tags=["Learning - Discussions"], summary="Moderation queue")
+class DiscussionModerationQueueView(APIView):
+    """Returns flagged discussions and replies for moderator review."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        role = getattr(request.user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin", "org_admin"):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only instructors and managers can view the moderation queue.")
+
+        discussions_qs = Discussion.objects.filter(report_count__gt=0, is_deleted=False)
+        replies_qs = DiscussionReply.objects.filter(report_count__gt=0, is_deleted=False)
+
+        if role == "instructor":
+            discussions_qs = discussions_qs.filter(course__instructor=request.user)
+            replies_qs = replies_qs.filter(discussion__course__instructor=request.user)
+        elif role == "org_admin":
+            org = get_active_membership_organization(request.user)
+            if org:
+                discussions_qs = discussions_qs.filter(course__organization=org)
+                replies_qs = replies_qs.filter(discussion__course__organization=org)
+
+        discussions = [
+            {
+                "id": d.id, "type": "discussion", "title": d.title, "content": d.content,
+                "author": d.user.email, "report_count": d.report_count, "is_hidden": d.is_hidden,
+                "course_id": d.course_id, "created_at": d.created_at,
+                "reasons": list(d.reports.filter(is_resolved=False).values_list("reason", flat=True)),
+            }
+            for d in discussions_qs.select_related("user", "course").order_by("-report_count")[:50]
+        ]
+        replies = [
+            {
+                "id": r.id, "type": "reply", "content": r.content,
+                "author": r.user.email, "report_count": r.report_count, "is_hidden": r.is_hidden,
+                "discussion_id": r.discussion_id, "created_at": r.created_at,
+                "reasons": list(r.reports.filter(is_resolved=False).values_list("reason", flat=True)),
+            }
+            for r in replies_qs.select_related("user", "discussion").order_by("-report_count")[:50]
+        ]
+        return Response({"discussions": discussions, "replies": replies, "total": len(discussions) + len(replies)})
 
 
 # REPORTS
@@ -889,8 +1052,16 @@ class ReportViewSet(
         return ReportSerializer
 
     def get_queryset(self):
-        # Users can only see their own reports or all reports if admin/manager
-        return Report.objects.filter(generated_by=self.request.user)
+        user = self.request.user
+        role = getattr(user, "role", "")
+        if role in ("tasc_admin", "lms_manager"):
+            return Report.objects.all()
+        if role == "org_admin":
+            from apps.accounts.rbac import get_active_membership_organization
+            org = get_active_membership_organization(user)
+            if org:
+                return Report.objects.filter(generated_by__memberships__organization=org).distinct()
+        return Report.objects.filter(generated_by=user)
 
     @extend_schema(
         summary="List report types",
@@ -898,41 +1069,24 @@ class ReportViewSet(
     )
     @action(detail=False, methods=["get"])
     def types(self, request):
-        """Get available report types"""
-        return Response(
-            [
-                {
-                    "id": "user_activity",
-                    "name": "User Activity Report",
-                    "description": "User login patterns, session durations, platform engagement",
-                },
-                {
-                    "id": "course_performance",
-                    "name": "Course Performance Report",
-                    "description": "Course completion rates, learner satisfaction scores",
-                },
-                {
-                    "id": "enrollment",
-                    "name": "Enrollment Summary",
-                    "description": "Enrollment trends, new registrations, drop-off rates",
-                },
-                {
-                    "id": "completion",
-                    "name": "Completion Analytics",
-                    "description": "Course and module completion, time-to-complete",
-                },
-                {
-                    "id": "assessment",
-                    "name": "Assessment Results",
-                    "description": "Quiz and assignment scores, pass/fail distributions",
-                },
-                {
-                    "id": "revenue",
-                    "name": "Revenue Report",
-                    "description": "Financial summary, subscription income, revenue per learner",
-                },
-            ]
-        )
+        """Get available report types — finance types shown for finance role"""
+        role = getattr(request.user, "role", "")
+        if role in ("finance", "tasc_admin"):
+            return Response([
+                {"id": "transactions", "name": "All Transactions", "description": "Complete transaction ledger — amounts, statuses, payment methods, dates"},
+                {"id": "invoices", "name": "All Invoices", "description": "Invoice records with totals, due dates, payment status, and org"},
+                {"id": "subscriptions", "name": "Subscription List", "description": "Active and historical subscriptions — plan, price, start/end dates, status"},
+                {"id": "revenue", "name": "Revenue Report", "description": "Revenue breakdown by period, payment method, and plan"},
+                {"id": "churn", "name": "Churn Report", "description": "Cancelled subscriptions — dates, plans, and duration"},
+            ])
+        return Response([
+            {"id": "user_activity", "name": "User Activity Report", "description": "User login patterns, session durations, platform engagement"},
+            {"id": "course_performance", "name": "Course Performance Report", "description": "Course completion rates, learner satisfaction scores"},
+            {"id": "enrollment", "name": "Enrollment Summary", "description": "Enrollment trends, new registrations, drop-off rates"},
+            {"id": "completion", "name": "Completion Analytics", "description": "Course and module completion, time-to-complete"},
+            {"id": "assessment", "name": "Assessment Results", "description": "Quiz and assignment scores, pass/fail distributions"},
+            {"id": "revenue", "name": "Revenue Report", "description": "Financial summary, subscription income, revenue per learner"},
+        ])
 
     @extend_schema(
         summary="Generate report",
@@ -942,6 +1096,11 @@ class ReportViewSet(
     def create(self, request, *args, **kwargs):
         """Generate a new report"""
         from .tasks import generate_report
+        from rest_framework.exceptions import PermissionDenied
+
+        role = getattr(request.user, "role", "")
+        if role not in ("tasc_admin", "lms_manager", "org_admin", "instructor"):
+            raise PermissionDenied("You do not have permission to generate reports.")
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1357,6 +1516,18 @@ class QuizSubmissionViewSet(
 
         return queryset.filter(enrollment__user=user)
 
+    @action(detail=False, methods=["post"])
+    def start(self, request):
+        """Record server-side start time for a quiz attempt. Call before beginning the quiz."""
+        from django.core.cache import cache
+        enrollment_id = request.data.get("enrollment")
+        quiz_id = request.data.get("quiz")
+        if not enrollment_id or not quiz_id:
+            return Response({"error": "enrollment and quiz are required."}, status=status.HTTP_400_BAD_REQUEST)
+        key = f"quiz_start:{enrollment_id}:{quiz_id}:{request.user.id}"
+        cache.set(key, timezone.now().isoformat(), timeout=7200)  # 2 hour max
+        return Response({"started_at": cache.get(key)})
+
     def create(self, request, *args, **kwargs):
         serializer = QuizSubmissionCreateSerializer(
             data=request.data, context={"request": request}
@@ -1552,11 +1723,11 @@ class LearningAnalyticsViewSet(viewsets.ViewSet):
             else:
                 base_qs = base_qs.none()
         
-        # At-risk criteria: progress < 25% OR no activity in 14 days
+        # At-risk criteria: progress < 30% OR no activity in 14 days
         fourteen_days_ago = timezone.now() - timedelta(days=14)
-        
+
         at_risk = base_qs.filter(
-            Q(progress_percentage__lt=25) |
+            Q(progress_percentage__lt=30) |
             Q(last_accessed_at__lt=fourteen_days_ago)
         ).select_related('user', 'course').order_by('last_accessed_at')[:50]
         
@@ -1795,7 +1966,12 @@ class WorkshopViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(instructor=self.request.user)
+        user = self.request.user
+        role = getattr(user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin"):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only instructors can create workshops.")
+        serializer.save(instructor=user)
 
     @extend_schema(
         summary="List workshops",
@@ -1894,20 +2070,33 @@ class WorkshopParticipantSearchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from rest_framework.exceptions import PermissionDenied
+        role = getattr(request.user, "role", "")
+        if role not in ("instructor", "lms_manager", "tasc_admin", "org_admin"):
+            raise PermissionDenied("Only instructors and managers can search participants.")
+
         search = request.query_params.get('search', '').strip()
         workshop_id = request.query_params.get('workshop')
-        
+
         if not search or len(search) < 2:
             return Response({'results': []})
-        
+
         from django.contrib.auth import get_user_model
         User = get_user_model()
-        
+
         qs = User.objects.filter(
             models.Q(email__icontains=search) |
             models.Q(first_name__icontains=search) |
             models.Q(last_name__icontains=search)
-        ).filter(is_active=True)[:20]
+        ).filter(is_active=True)
+
+        # Scope lms_manager and org_admin to their own org's users
+        if role in ("lms_manager", "org_admin"):
+            org = getattr(request.user, "organization", None)
+            if org:
+                qs = qs.filter(memberships__organization=org, memberships__is_active=True)
+
+        qs = qs.distinct()[:20]
         
         results = [
             {

@@ -7,6 +7,7 @@ from .views import (
     CertificateViewSet,
     DiscussionViewSet,
     DiscussionReplyViewSet,
+    DiscussionModerationQueueView,
     ReportViewSet,
     SubmissionViewSet,
     QuizSubmissionViewSet,
@@ -45,5 +46,10 @@ urlpatterns = [
         "workshops/search-participants/",
         WorkshopParticipantSearchView.as_view(),
         name="workshop-search-participants",
+    ),
+    path(
+        "discussions/moderation-queue/",
+        DiscussionModerationQueueView.as_view(),
+        name="discussion-moderation-queue",
     ),
 ]

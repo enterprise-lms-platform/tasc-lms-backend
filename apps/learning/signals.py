@@ -17,7 +17,7 @@ def auto_create_certificate(sender, instance, **kwargs):
     """
     if instance.status == Enrollment.Status.COMPLETED:
         # Check if a certificate already exists to avoid duplicates
-        if not hasattr(instance, 'certificate'):
+        if not Certificate.objects.filter(enrollment=instance).exists():
             expiry_date = timezone.now() + timedelta(days=365) # 1 year validity
 
             certificate = Certificate.objects.create(
@@ -26,7 +26,7 @@ def auto_create_certificate(sender, instance, **kwargs):
             )
 
             # Set the verification URL based on the generated certificate number
-            certificate.verification_url = f"{settings.FRONTEND_URL}/certificate/verify?number={certificate.certificate_number}"
+            certificate.verification_url = f"{settings.FRONTEND_URL}/verify-certificate?number={certificate.certificate_number}"
             certificate.save(update_fields=['verification_url'])
 
         # Mark enrollment as certificate issued
